@@ -1,0 +1,9 @@
+﻿datasets/
+logs/
+runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+__pycache__/
+*.pyc
