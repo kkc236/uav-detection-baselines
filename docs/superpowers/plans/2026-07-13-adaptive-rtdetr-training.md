@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and deploy a self-healing RT-DETR supervisor that trains primarily at batch 18, falls back safely, promotes automatically, preserves true resume state, uploads verified artifacts, and shuts down only after success.
+**Goal:** Build and deploy a self-healing RT-DETR supervisor that starts at batch 16, moves between batch levels in steps of two, preserves true resume state, uploads verified artifacts, and shuts down only after success.
 
 **Architecture:** Pure policy logic in `src/adaptive_batch.py` decides the next batch from OOM and epoch telemetry. `scripts/train_rtdetr_adaptive.py` runs Ultralytics as a child, records epoch-level CUDA peaks through callbacks, exits at safe checkpoint boundaries for batch changes, and supervises retries. Packaging and GitHub publication remain separate completion steps so training cannot be marked complete by an upload failure.
 
@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Write failing policy tests**
 
-Test that batch 18 OOM selects 14, batch 14 OOM selects 10, stable 14 promotes to 16, stable 16 promotes to 18, cooldown grows 5/10/20, and a 29 GiB batch-18 epoch requests proactive demotion.
+Test that the default starts at 16, every OOM reduces batch by two down to 10, stable epochs promote by two up to 18, cooldown grows 5/10/20, and a 29 GiB batch-18 epoch requests proactive demotion.
 
 - [ ] **Step 2: Verify the tests fail**
 
@@ -104,7 +104,7 @@ Expected: all tests pass.
 
 Run: `python scripts/train_rtdetr_adaptive.py --dry-run --simulate-oom-at 4 --target-epoch 8`
 
-Expected: state transitions 18 to 14, then 16 and 18, and completion without a stopped supervisor.
+Expected: state transitions from 16 through lower and higher adjacent levels and completes without a stopped supervisor.
 
 - [ ] **Step 3: Deploy files to the RTX 5090 server**
 

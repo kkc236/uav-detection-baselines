@@ -10,15 +10,14 @@ Resume from the original batch-24 scratch checkpoint after epoch 3. This checkpo
 
 ## Adaptive Batch Policy
 
-- Primary batch: 18.
-- On OOM at batch 18 or 16: resume from the last completed epoch at batch 14.
-- On OOM at batch 14: resume at batch 10.
-- After batch 14 completes the cooldown and three qualifying stable epochs, promote to batch 16.
-- After batch 16 completes three qualifying stable epochs, promote to batch 18.
-- Batch 10 promotes to batch 14 after its cooldown and three stable epochs.
+- Starting batch: 16.
+- Available levels: 10, 12, 14, 16, and 18.
+- On OOM: resume from the last completed epoch one level lower.
+- After the cooldown and three qualifying stable epochs: promote one level higher.
+- Batch 18 is reached only after batch 16 proves stable; it is never the untested starting point.
 - A stable epoch has no OOM and peak allocated CUDA memory below the batch-specific promotion threshold.
-- Promotion thresholds are 26 GiB at batch 14 and 28 GiB at batch 16.
-- Batch 18 proactively drops to batch 14 after an epoch whose peak allocated memory reaches 29 GiB.
+- Promotion thresholds are 22, 24, 26, and 28 GiB at batches 10, 12, 14, and 16 respectively.
+- Batch 18 proactively drops to batch 16 after an epoch whose peak allocated memory reaches 29 GiB.
 - Cooldown after repeated OOM events grows through 5, 10, and 20 completed epochs. It remains capped at 20 so recovery is still attempted automatically.
 
 The child trainer may exit on an unrecoverable batch, but the supervisor remains alive. It restarts with `resume=True`, so model weights, EMA, optimizer, scaler, scheduler position, and epoch count remain continuous. At most the unfinished current epoch is replayed.
@@ -45,4 +44,4 @@ Shutdown is allowed only after the Git push and Release uploads are verified rem
 
 ## Verification
 
-Unit tests cover demotion, cooldown growth, stable-epoch promotion, proactive peak-memory demotion, emergency batch 10, completion detection, and state persistence. A dry-run supervisor test uses a fake child process before the real GPU process is started.
+Unit tests cover two-step demotion and promotion, cooldown growth, proactive peak-memory demotion, emergency batch 10, completion detection, and state persistence. A dry-run supervisor test uses a fake child process before the real GPU process is started.
