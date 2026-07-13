@@ -16,7 +16,7 @@ Baselines:
 Adaptive RTX 5090 resume:
 
 - Start from a scratch `last.pt` with optimizer state: `python scripts/train_rtdetr_adaptive.py --checkpoint /absolute/path/to/last.pt --batch 16`
-- Batch levels are `10, 12, 14, 16, 18`. Stable epochs promote by two; OOM events demote by two and true-resume from the last completed epoch.
+- Batch levels are `10, 12, 14, 16, 18, 20`. Stable epochs promote by two; OOM events demote by two and true-resume from the last completed epoch.
 - Live state: `cat logs/adaptive_rtdetr_status.json`
 - Training log: `tail -f logs/adaptive_rtdetr.log`
 - The server launcher publishes metrics plus `best.pt` and `last.pt`, verifies the GitHub release, and only then powers off.

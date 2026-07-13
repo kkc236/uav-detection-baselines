@@ -11,13 +11,13 @@ Resume from the original batch-24 scratch checkpoint after epoch 3. This checkpo
 ## Adaptive Batch Policy
 
 - Starting batch: 16.
-- Available levels: 10, 12, 14, 16, and 18.
+- Available levels: 10, 12, 14, 16, 18, and 20.
 - On OOM: resume from the last completed epoch one level lower.
 - After the cooldown and three qualifying stable epochs: promote one level higher.
-- Batch 18 is reached only after batch 16 proves stable; it is never the untested starting point.
+- Batch 20 is reached only after batch 18 proves stable; it is never the untested starting point.
 - A stable epoch has no OOM and peak allocated CUDA memory below the batch-specific promotion threshold.
-- Promotion thresholds are 22, 24, 26, and 28 GiB at batches 10, 12, 14, and 16 respectively.
-- Batch 18 proactively drops to batch 16 after an epoch whose peak allocated memory reaches 29 GiB.
+- Promotion thresholds are 22, 24, 26, 28, and 27.5 GiB at batches 10, 12, 14, 16, and 18 respectively.
+- Batches 18 and 20 proactively drop one level after an epoch whose peak allocated memory reaches 29 GiB.
 - Cooldown after repeated OOM events grows through 5, 10, and 20 completed epochs. It remains capped at 20 so recovery is still attempted automatically.
 
 The child trainer may exit on an unrecoverable batch, but the supervisor remains alive. It restarts with `resume=True`, so model weights, EMA, optimizer, scaler, scheduler position, and epoch count remain continuous. At most the unfinished current epoch is replayed.
