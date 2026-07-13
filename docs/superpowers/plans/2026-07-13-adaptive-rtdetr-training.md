@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and deploy a self-healing RT-DETR supervisor that starts at batch 16, moves between batch levels in steps of two, preserves true resume state, uploads verified artifacts, and shuts down only after success.
+**Goal:** Build and deploy a self-healing RT-DETR supervisor that starts at batch 16, moves between batch levels from 10 through 20 in steps of two, preserves true resume state, uploads verified artifacts, and shuts down only after success.
 
 **Architecture:** Pure policy logic in `src/adaptive_batch.py` decides the next batch from OOM and epoch telemetry. `scripts/train_rtdetr_adaptive.py` runs Ultralytics as a child, records epoch-level CUDA peaks through callbacks, exits at safe checkpoint boundaries for batch changes, and supervises retries. Packaging and GitHub publication remain separate completion steps so training cannot be marked complete by an upload failure.
 

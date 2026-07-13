@@ -6,8 +6,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-BATCH_LEVELS = (10, 12, 14, 16, 18)
-PROMOTION_PEAK_GIB = {10: 22.0, 12: 24.0, 14: 26.0, 16: 28.0}
+BATCH_LEVELS = (10, 12, 14, 16, 18, 20)
+PROMOTION_PEAK_GIB = {10: 22.0, 12: 24.0, 14: 26.0, 16: 28.0, 18: 27.5}
+PEAK_DEMOTION_GIB = {18: 29.0, 20: 29.0}
 OOM_COOLDOWNS = (5, 10, 20)
 
 
@@ -46,7 +47,8 @@ class AdaptiveBatchState:
             self.completed_epoch = max(self.completed_epoch, completed_epoch)
         self.last_peak_gib = peak_gib
 
-        if self.current_batch == 18 and peak_gib >= 29.0:
+        demotion_threshold = PEAK_DEMOTION_GIB.get(self.current_batch)
+        if demotion_threshold is not None and peak_gib >= demotion_threshold:
             self.current_batch = self._lower_batch()
             self.cooldown_remaining = max(self.cooldown_remaining, OOM_COOLDOWNS[0])
             self.stable_epochs = 0

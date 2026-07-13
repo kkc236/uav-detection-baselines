@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.adaptive_batch import AdaptiveBatchState, load_state, save_state
+from src.adaptive_batch import BATCH_LEVELS, AdaptiveBatchState, load_state, save_state
 
 
 def complete_stable_epochs(state: AdaptiveBatchState, count: int, peak_gib: float) -> None:
@@ -10,6 +10,7 @@ def complete_stable_epochs(state: AdaptiveBatchState, count: int, peak_gib: floa
 
 def test_default_batch_starts_at_16():
     assert AdaptiveBatchState().current_batch == 16
+    assert BATCH_LEVELS == (10, 12, 14, 16, 18, 20)
 
 
 def test_oom_from_batch_18_falls_back_to_16():
@@ -62,6 +63,20 @@ def test_batch_16_promotes_to_18_after_three_stable_epochs():
     assert state.current_batch == 18
 
 
+def test_batch_18_promotes_to_20_after_three_low_peak_epochs():
+    state = AdaptiveBatchState(current_batch=18)
+
+    complete_stable_epochs(state, 3, peak_gib=27.0)
+
+    assert state.current_batch == 20
+
+
+def test_oom_from_batch_20_falls_back_to_18():
+    state = AdaptiveBatchState(current_batch=20)
+
+    assert state.record_oom() == 18
+
+
 def test_batch_10_recovers_to_12_after_three_stable_epochs():
     state = AdaptiveBatchState(current_batch=10)
 
@@ -76,6 +91,16 @@ def test_high_peak_at_batch_18_proactively_demotes():
     transition = state.record_epoch(peak_gib=29.0)
 
     assert transition == 16
+    assert state.cooldown_remaining == 5
+    assert state.last_event == "peak_demote"
+
+
+def test_high_peak_at_batch_20_proactively_demotes_to_18():
+    state = AdaptiveBatchState(current_batch=20)
+
+    transition = state.record_epoch(peak_gib=29.0)
+
+    assert transition == 18
     assert state.cooldown_remaining == 5
     assert state.last_event == "peak_demote"
 
