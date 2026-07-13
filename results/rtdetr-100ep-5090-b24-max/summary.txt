@@ -1,0 +1,16 @@
+RT-DETR baseline result
+created_at: 2026-07-13 13:39:46
+model: rtdetr-l.yaml
+pretrained: false
+dataset: VisDrone
+epochs: 100
+imgsz: 640
+batch: 24
+device: RTX 5090
+run_dir: /root/autodl-tmp/uav-detection-baselines/runs/detect/runs/baselines/scratch-rtdetr-100ep-5090-b24-max
+last_metrics_csv_row:
+3,1764.61,2.15108,0.17107,0.67285,0.01757,0.05985,0.00719,0.00249,1.77514,0.30106,0.45148,0.0293697,0.0097899,0.0293697,0.0097899,0.0293697,0.0097899,0.0293697,0.0097899
+weights_not_uploaded_to_github: best.pt/last.pt may exceed GitHub single-file limit
+total 377M
+-rw-r--r-- 1 root root 189M Jul 13 13:35 best.pt
+-rw-r--r-- 1 root root 189M Jul 13 13:35 last.pt
