@@ -1,0 +1,18 @@
+RT-DETR baseline resumed result
+created_at: 2026-07-13 15:00:03
+dataset: VisDrone
+model: RT-DETR-L
+pretrained: false
+initial_run: batch=24 stopped after 3 epochs due CUDA OOM at epoch 4
+resume_run: loaded initial last.pt, batch=20, epochs=97
+effective_total_epochs: 100
+old_run_dir: /root/autodl-tmp/uav-detection-baselines/runs/detect/runs/baselines/scratch-rtdetr-100ep-5090-b24-max
+resume_run_dir: /root/autodl-tmp/uav-detection-baselines/runs/detect/runs/baselines/scratch-rtdetr-100ep-5090-b20-resume-from-ep3
+initial_last_row:
+3,1764.61,2.15108,0.17107,0.67285,0.01757,0.05985,0.00719,0.00249,1.77514,0.30106,0.45148,0.0293697,0.0097899,0.0293697,0.0097899,0.0293697,0.0097899,0.0293697,0.0097899
+resume_last_row:
+5,2281.88,1.59105,0.41348,0.32043,0.17135,0.19203,0.10015,0.04869,1.20055,0.4989,0.18075,0.000684851,0.000684851,0.000684851
+weights_not_uploaded_to_github: best.pt/last.pt exceed normal GitHub limits
+total 504M
+-rw-r--r-- 1 root root 252M Jul 13 14:52 best.pt
+-rw-r--r-- 1 root root 252M Jul 13 14:52 last.pt
