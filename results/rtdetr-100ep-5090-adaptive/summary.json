@@ -1,0 +1,14 @@
+{
+  "completed_epoch": 100,
+  "run_dir": "/root/autodl-tmp/uav-detection-baselines/runs/detect/runs/baselines/scratch-rtdetr-100ep-5090-b24-max",
+  "weights": {
+    "best.pt": {
+      "bytes": 66264445,
+      "sha256": "0850b921636c4cc884b96b5098e801e3de3c1bf1e5333a815b6572926b4a9a5e"
+    },
+    "last.pt": {
+      "bytes": 66264445,
+      "sha256": "d4980aecaa9791c41d4d2f543d1b456ee59d6ca4be076f581184d0f48c0b6c4d"
+    }
+  }
+}
