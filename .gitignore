@@ -7,3 +7,12 @@ runs/
 *.engine
 __pycache__/
 *.pyc
+tmp/
+.venv/
+downloads/
+artifacts/
+secrets/
+results-checkout/
+github_token
+github_token.txt
+*.token
