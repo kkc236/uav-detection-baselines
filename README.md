@@ -15,6 +15,7 @@ Baselines:
 - BTD-SE smoke on the local RTX 4070: `powershell -ExecutionPolicy Bypass -File scripts/run_btdse_local.ps1 -Smoke`
 - BTD-SE full scratch run: `powershell -ExecutionPolicy Bypass -File scripts/run_btdse_local.ps1 -Epochs 100 -Batch 1`
 - BTD-SE RTX 4090 protected run: see `docs/RTX4090_SERVER_GUIDE.md`
+- Standalone IOQC-SA protected run on RTX 3090/4090/5090: see `docs/IOQC_SA_SERVER_GUIDE.md`
 
 BTD-SE uses `configs/rtdetr-l-btdse.yaml`, preserves VisDrone ignored boxes in `labels_ignore`, and adds background-reliability and saliency focal losses. The local runtime used for reproducibility is `C:\uav_env\Scripts\python.exe` with Ultralytics 8.4.90 and PyTorch 2.5.1+cu121.
 
@@ -27,6 +28,8 @@ Local BTD-SE recovery:
 - Checkpoints: `runs\btdse\scratch-rtdetr-l-btdse-100ep\weights`
 
 RTX 4090 server protection uses `scripts/setup_btdse_4090.sh` and `scripts/run_btdse_4090.sh`. Heavy checkpoints are uploaded as rolling GitHub Release assets, while metrics and SHA256 manifests are committed to the `training-results` branch.
+
+Standalone IOQC-SA keeps the stock `rtdetr-l.yaml` inference graph and adds only a training-time FP32 P3 sampling objective. `scripts/setup_ioqc_sa_server.sh` detects the GPU generation, and `scripts/run_ioqc_sa_server.sh` adapts batch size, falls back from AMP after a non-finite loss, validates checkpoints, and publishes isolated IOQC-SA Release assets. The complete clean-server and migration workflow is documented in `docs/IOQC_SA_SERVER_GUIDE.md`.
 
 Adaptive RTX 5090 resume:
 

@@ -37,6 +37,7 @@ fi
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
 export PYTHONUNBUFFERED=1
+printf '%s\n' "$$" > "$LOG_DIR/ioqc_sa_launcher.pid"
 
 STATE_FILE="$RUN_DIR/adaptive_state.json"
 STATUS_FILE="$LOG_DIR/ioqc_sa_status.json"
@@ -54,14 +55,23 @@ sync_arguments=(
   --source-branch "$SOURCE_BRANCH"
   --status-file "$SYNC_STATUS"
   --retain 3
+  --asset-prefix ioqc-sa-last
+  --release-name "IOQC-SA RT-DETR-L Live Checkpoints"
+  --release-body "Rolling resumable checkpoints for standalone IOQC-SA training."
   --interval 60
 )
 
 "$PYTHON" -u "${sync_arguments[@]}" >> "$LOG_DIR/ioqc_sa_github_sync.log" 2>&1 &
 sync_pid=$!
+supervisor_pid=""
 cleanup() {
+  if [[ -n "$supervisor_pid" ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
+    kill -TERM "$supervisor_pid" 2>/dev/null || true
+    wait "$supervisor_pid" 2>/dev/null || true
+  fi
   kill "$sync_pid" 2>/dev/null || true
   wait "$sync_pid" 2>/dev/null || true
+  rm -f "$LOG_DIR/ioqc_sa_launcher.pid"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -84,12 +94,16 @@ if [[ -n "$INITIAL_BATCH" ]]; then
 fi
 
 set +e
-"$PYTHON" -u "${supervisor_arguments[@]}"
+"$PYTHON" -u "${supervisor_arguments[@]}" &
+supervisor_pid=$!
+wait "$supervisor_pid"
 supervisor_rc=$?
+supervisor_pid=""
 set -e
 
 kill "$sync_pid" 2>/dev/null || true
 wait "$sync_pid" 2>/dev/null || true
+rm -f "$LOG_DIR/ioqc_sa_launcher.pid"
 trap - EXIT
 
 if (( supervisor_rc != 0 )); then

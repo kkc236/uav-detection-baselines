@@ -10,7 +10,7 @@ import requests
 import torch
 
 
-CHECKPOINT_ASSET_PATTERN = re.compile(r"^btdse-last-epoch-(\d+)\.pt$")
+DEFAULT_ASSET_PREFIX = "btdse-last"
 
 
 @dataclass(frozen=True)
@@ -51,26 +51,33 @@ def checkpoint_metadata(path: str | Path) -> CheckpointMetadata:
     )
 
 
-def checkpoint_asset_name(completed_epoch: int) -> str:
-    return f"btdse-last-epoch-{completed_epoch:04d}.pt"
+def checkpoint_asset_name(completed_epoch: int, *, prefix: str = DEFAULT_ASSET_PREFIX) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", prefix):
+        raise ValueError(f"Invalid checkpoint asset prefix: {prefix!r}")
+    return f"{prefix}-epoch-{completed_epoch:04d}.pt"
 
 
-def _asset_epoch(asset: dict[str, Any]) -> int:
-    match = CHECKPOINT_ASSET_PATTERN.match(str(asset.get("name", "")))
+def _asset_epoch(asset: dict[str, Any], *, prefix: str) -> int:
+    pattern = re.compile(rf"^{re.escape(prefix)}-epoch-(\d+)\.pt$")
+    match = pattern.match(str(asset.get("name", "")))
     return int(match.group(1)) if match else -1
 
 
-def matching_checkpoint_assets(assets: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def matching_checkpoint_assets(
+    assets: Iterable[dict[str, Any]], *, prefix: str = DEFAULT_ASSET_PREFIX
+) -> list[dict[str, Any]]:
     return sorted(
-        (asset for asset in assets if _asset_epoch(asset) >= 0),
-        key=_asset_epoch,
+        (asset for asset in assets if _asset_epoch(asset, prefix=prefix) >= 0),
+        key=lambda asset: _asset_epoch(asset, prefix=prefix),
     )
 
 
-def assets_to_delete(assets: Iterable[dict[str, Any]], retain: int) -> list[dict[str, Any]]:
+def assets_to_delete(
+    assets: Iterable[dict[str, Any]], retain: int, *, prefix: str = DEFAULT_ASSET_PREFIX
+) -> list[dict[str, Any]]:
     if retain < 1:
         raise ValueError("retain must be at least one")
-    matched = matching_checkpoint_assets(assets)
+    matched = matching_checkpoint_assets(assets, prefix=prefix)
     return matched[:-retain]
 
 
@@ -116,6 +123,11 @@ def get_or_create_release(
     repo: str,
     tag: str,
     branch: str,
+    release_name: str = "BTD-SE V2.5-S RTX 4090 Live Checkpoints",
+    release_body: str = (
+        "Rolling resumable checkpoints for scratch RT-DETR-L with BTD-SE V2.5-S. "
+        "The newest three validated epochs are retained."
+    ),
 ) -> dict[str, Any]:
     api = f"https://api.github.com/repos/{repo}"
     response = session.get(f"{api}/releases/tags/{tag}", timeout=30)
@@ -125,11 +137,8 @@ def get_or_create_release(
             json={
                 "tag_name": tag,
                 "target_commitish": branch,
-                "name": "BTD-SE V2.5-S RTX 4090 Live Checkpoints",
-                "body": (
-                    "Rolling resumable checkpoints for scratch RT-DETR-L with BTD-SE V2.5-S. "
-                    "The newest three validated epochs are retained."
-                ),
+                "name": release_name,
+                "body": release_body,
             },
             timeout=30,
         )
@@ -176,18 +185,31 @@ def publish_checkpoint(
     branch: str,
     checkpoint: str | Path,
     retain: int = 3,
+    asset_prefix: str = DEFAULT_ASSET_PREFIX,
+    release_name: str = "BTD-SE V2.5-S RTX 4090 Live Checkpoints",
+    release_body: str = (
+        "Rolling resumable checkpoints for scratch RT-DETR-L with BTD-SE V2.5-S. "
+        "The newest three validated epochs are retained."
+    ),
 ) -> dict[str, Any]:
     metadata = checkpoint_metadata(checkpoint)
-    release = get_or_create_release(session, repo=repo, tag=tag, branch=branch)
+    release = get_or_create_release(
+        session,
+        repo=repo,
+        tag=tag,
+        branch=branch,
+        release_name=release_name,
+        release_body=release_body,
+    )
     asset = upload_asset(
         session,
         release=release,
         path=metadata.source,
-        asset_name=checkpoint_asset_name(metadata.completed_epoch),
+        asset_name=checkpoint_asset_name(metadata.completed_epoch, prefix=asset_prefix),
     )
 
     release = _checked(session.get(str(release["url"]), timeout=30)).json()
-    for expired in assets_to_delete(release.get("assets", []), retain=retain):
+    for expired in assets_to_delete(release.get("assets", []), retain=retain, prefix=asset_prefix):
         _checked(session.delete(str(expired["url"]), timeout=30))
 
     return build_manifest(metadata, asset=asset, release_url=str(release["html_url"]))

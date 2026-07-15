@@ -190,8 +190,11 @@ def sync_once(args: argparse.Namespace) -> dict[str, Any] | None:
             repo=args.repo,
             tag=args.tag,
             branch=args.source_branch,
-            checkpoint=staging,
-            retain=args.retain,
+        checkpoint=staging,
+        retain=args.retain,
+        asset_prefix=args.asset_prefix,
+        release_name=args.release_name,
+        release_body=args.release_body,
         )
     finally:
         staging.unlink(missing_ok=True)
@@ -261,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-repo", type=Path, default=Path.home() / "uav-training-results")
     parser.add_argument("--run-name")
     parser.add_argument("--retain", type=int, default=3)
+    parser.add_argument("--asset-prefix", default="btdse-last")
+    parser.add_argument("--release-name", default="BTD-SE V2.5-S RTX 4090 Live Checkpoints")
+    parser.add_argument(
+        "--release-body",
+        default="Rolling resumable checkpoints for scratch RT-DETR-L with BTD-SE V2.5-S.",
+    )
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--status-file", type=Path, default=Path("logs/btdse_github_sync.json"))
     parser.add_argument("--once", action="store_true")

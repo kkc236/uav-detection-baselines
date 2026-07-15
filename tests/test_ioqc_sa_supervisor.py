@@ -82,3 +82,11 @@ def test_resume_selection_falls_back_from_corrupt_last_to_latest_epoch(tmp_path:
     selected = select_resume_checkpoint(tmp_path)
 
     assert selected == (weights / "epoch4.pt").resolve()
+
+
+def test_supervisor_forwards_termination_to_the_training_process_group():
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "supervise_ioqc_sa.py").read_text(encoding="utf-8")
+
+    assert "start_new_session=True" in source
+    assert "signal.SIGTERM" in source
+    assert "os.killpg" in source

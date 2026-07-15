@@ -33,6 +33,7 @@ def test_checkpoint_metadata_uses_human_completed_epoch_and_sha256(tmp_path: Pat
     assert len(metadata.sha256) == 64
     assert metadata.source == checkpoint.resolve()
     assert checkpoint_asset_name(metadata.completed_epoch) == "btdse-last-epoch-0001.pt"
+    assert checkpoint_asset_name(metadata.completed_epoch, prefix="ioqc-sa-last") == "ioqc-sa-last-epoch-0001.pt"
 
 
 def test_matching_assets_are_sorted_by_completed_epoch():
@@ -57,6 +58,19 @@ def test_retention_keeps_newest_three_checkpoint_assets():
     expired = assets_to_delete(assets, retain=3)
 
     assert [asset["id"] for asset in expired] == [1, 2]
+
+
+def test_matching_and_retention_are_isolated_by_asset_prefix():
+    assets = [
+        {"id": 1, "name": "btdse-last-epoch-0001.pt", "size": 10},
+        {"id": 2, "name": "ioqc-sa-last-epoch-0002.pt", "size": 20},
+        {"id": 3, "name": "ioqc-sa-last-epoch-0003.pt", "size": 30},
+    ]
+
+    matched = matching_checkpoint_assets(assets, prefix="ioqc-sa-last")
+
+    assert [asset["id"] for asset in matched] == [2, 3]
+    assert assets_to_delete(assets, retain=1, prefix="ioqc-sa-last") == [assets[1]]
 
 
 def test_manifest_records_remote_asset_and_local_integrity(tmp_path: Path):

@@ -36,10 +36,14 @@ def test_run_script_locks_starts_watcher_and_verifies_final_publication():
     assert "ioqc-sa-rtdetr-l-live" in content
     assert 'SOURCE_BRANCH="${SOURCE_BRANCH:-codex/ioqc-sa}"' in content
     assert "--retain 3" in content
+    assert "--asset-prefix ioqc-sa-last" in content
+    assert "--release-name" in content
     assert "--once" in content
     assert 'AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"' in content
     assert '[[ "$AUTO_SHUTDOWN" == "1" ]]' in content
     assert "shutdown -h now" in content
+    assert "ioqc_sa_launcher.pid" in content
+    assert 'kill -TERM "$supervisor_pid"' in content
 
 
 def test_run_script_keeps_runs_logs_and_secrets_outside_checkout():

@@ -29,8 +29,9 @@ LOSS_NAMES = (
 
 
 def apply_resume_runtime_overrides(args: object, overrides: dict) -> None:
-    if "amp" in overrides:
-        args.amp = bool(overrides["amp"])
+    for key in ("amp", "project", "name"):
+        if key in overrides:
+            setattr(args, key, bool(overrides[key]) if key == "amp" else overrides[key])
 
 
 def regular_query_statistics(

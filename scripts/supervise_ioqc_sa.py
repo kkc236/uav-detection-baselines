@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -215,14 +216,39 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 log_file.flush()
                 environment = os.environ.copy()
                 environment.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-                child = subprocess.run(
+                child = subprocess.Popen(
                     command,
                     cwd=ROOT,
                     env=environment,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
-                    check=False,
+                    start_new_session=True,
                 )
+                received_signal: int | None = None
+
+                def forward_signal(signum, _frame) -> None:
+                    nonlocal received_signal
+                    received_signal = signum
+                    if child.poll() is None:
+                        if os.name == "posix":
+                            os.killpg(child.pid, signal.SIGTERM)
+                        else:
+                            child.terminate()
+
+                previous_term = signal.signal(signal.SIGTERM, forward_signal)
+                previous_int = signal.signal(signal.SIGINT, forward_signal)
+                try:
+                    child.wait()
+                finally:
+                    signal.signal(signal.SIGTERM, previous_term)
+                    signal.signal(signal.SIGINT, previous_int)
+
+            if received_signal is not None:
+                state = load_adaptive_state(state_path)
+                state.last_event = "signal_stop"
+                save_adaptive_state(state_path, state)
+                _atomic_json(args.status, _status(state, process_state="signal_stop", signal=received_signal))
+                return 128 + received_signal
 
             state = load_adaptive_state(state_path)
             result = classify_child_exit(child.returncode, _read_log_segment(args.log, offset))
