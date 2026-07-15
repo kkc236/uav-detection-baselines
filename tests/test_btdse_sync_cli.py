@@ -44,6 +44,19 @@ def test_only_lightweight_artifacts_and_manifest_are_collected(tmp_path: Path):
     assert json.loads((destination / "latest.json").read_text(encoding="utf-8"))["completed_epoch"] == 7
 
 
+def test_ioqc_sa_diagnostics_and_adaptive_state_are_lightweight_artifacts(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    destination = tmp_path / "results"
+    run_dir.mkdir()
+    expected = {"ioqc_sa_diagnostics.jsonl", "batch_history.jsonl", "adaptive_state.json"}
+    for name in expected:
+        (run_dir / name).write_text(name, encoding="utf-8")
+
+    copied = collect_lightweight_artifacts(run_dir, destination, {"completed_epoch": 3})
+
+    assert expected <= {path.name for path in copied}
+
+
 def test_atomic_json_writer_replaces_complete_document(tmp_path: Path):
     path = tmp_path / "status.json"
 

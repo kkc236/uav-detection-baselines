@@ -19,7 +19,14 @@ from src.checkpoint_recovery import find_resume_checkpoint
 from src.github_checkpoint_sync import checkpoint_metadata, github_session, publish_checkpoint
 
 
-LIGHTWEIGHT_ARTIFACTS = ("results.csv", "btdse_diagnostics.jsonl", "args.yaml")
+LIGHTWEIGHT_ARTIFACTS = (
+    "results.csv",
+    "btdse_diagnostics.jsonl",
+    "ioqc_sa_diagnostics.jsonl",
+    "batch_history.jsonl",
+    "adaptive_state.json",
+    "args.yaml",
+)
 
 
 def write_json_atomic(path: str | Path, payload: dict[str, Any]) -> None:
@@ -138,7 +145,7 @@ def commit_and_push_results(
     changed = _run(["git", "diff", "--cached", "--quiet"], cwd=results_repo, check=False)
     if changed.returncode != 0:
         _run(
-            ["git", "commit", "-m", f"Update BTD-SE 4090 epoch {completed_epoch}"],
+            ["git", "commit", "-m", f"Update protected training epoch {completed_epoch}"],
             cwd=results_repo,
         )
     _run(["git", "push", "origin", f"HEAD:{branch}"], cwd=results_repo, env=environment)

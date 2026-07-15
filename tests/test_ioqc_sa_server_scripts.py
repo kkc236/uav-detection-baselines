@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def text(name: str) -> str:
+    return (ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+
+def test_setup_script_is_gpu_generic_and_uses_persistent_storage():
+    content = text("setup_ioqc_sa_server.sh")
+
+    assert "STORAGE_ROOT" in content
+    assert "nvidia-smi" in content
+    assert "detect_gpu_profile" in content
+    assert "VisDrone" in content
+    assert "torch==2.5.1" in content
+    assert "torch==2.7.1" in content
+    assert "torchvision==0.22.1" in content
+    assert "https://download.pytorch.org/whl/cu128" in content
+    assert "*5090*" in content
+    assert "ultralytics==8.4.90" not in content  # requirements.txt owns the Ultralytics pin
+    assert "Expected an RTX 4090" not in content
+    assert "chmod 600" in content
+
+
+def test_run_script_locks_starts_watcher_and_verifies_final_publication():
+    content = text("run_ioqc_sa_server.sh")
+
+    assert "flock -n" in content
+    assert "supervise_ioqc_sa.py" in content
+    assert "sync_btdse_checkpoint.py" in content
+    assert "ioqc-sa-rtdetr-l-live" in content
+    assert 'SOURCE_BRANCH="${SOURCE_BRANCH:-codex/ioqc-sa}"' in content
+    assert "--retain 3" in content
+    assert "--once" in content
+    assert 'AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"' in content
+    assert '[[ "$AUTO_SHUTDOWN" == "1" ]]' in content
+    assert "shutdown -h now" in content
+
+
+def test_run_script_keeps_runs_logs_and_secrets_outside_checkout():
+    content = text("run_ioqc_sa_server.sh")
+
+    assert 'PROJECT_DIR="${PROJECT_DIR:-$STORAGE_ROOT/runs/ioqc-sa}"' in content
+    assert 'LOG_DIR="${LOG_DIR:-$STORAGE_ROOT/logs}"' in content
+    assert 'TOKEN_FILE="${TOKEN_FILE:-$STORAGE_ROOT/secrets/github_token}"' in content
+    assert 'RESULTS_REPO="${RESULTS_REPO:-$STORAGE_ROOT/results-checkout}"' in content
