@@ -28,6 +28,11 @@ LOSS_NAMES = (
 )
 
 
+def apply_resume_runtime_overrides(args: object, overrides: dict) -> None:
+    if "amp" in overrides:
+        args.amp = bool(overrides["amp"])
+
+
 def regular_query_statistics(
     statistics: P3SamplingStatistics,
     dn_meta: dict | None,
@@ -177,6 +182,11 @@ class IOQCSATrainer(RTDETRTrainer):
         self.density_threshold = density_threshold
         self.duplicate_threshold = duplicate_threshold
         super().__init__(*args, **kwargs)
+
+    def check_resume(self, overrides):
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)
 
     def get_model(self, cfg: dict | str | None = None, weights: str | None = None, verbose: bool = True):
         model = IOQCSADetectionModel(

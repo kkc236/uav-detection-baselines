@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.train_rtdetr_ioqc_sa import ROOT, build_parser, build_settings
+from src.rtdetr_ioqc_sa import apply_resume_runtime_overrides
 
 
 def test_training_defaults_match_scratch_rtdetr_l_baseline():
@@ -80,3 +82,11 @@ def test_smoke_mode_limits_epoch_and_fraction_only():
     assert settings["epochs"] == 1
     assert settings["fraction"] == 0.01
     assert settings["imgsz"] == 640
+
+
+def test_resume_runtime_override_can_permanently_disable_amp():
+    runtime_args = SimpleNamespace(amp=True)
+
+    apply_resume_runtime_overrides(runtime_args, {"amp": False})
+
+    assert runtime_args.amp is False

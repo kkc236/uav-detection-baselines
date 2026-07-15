@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.rtdetr_ioqc_sa import IOQCSATrainer
+from src.gpu_adaptive_batch import load_adaptive_state, save_adaptive_state
+
+
+EXIT_PLANNED_RESTART = 75
 
 
 def parse_bool(value: str) -> bool:
@@ -119,6 +123,32 @@ def write_epoch_diagnostics(trainer: IOQCSATrainer) -> None:
     _atomic_write(path, existing + json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def update_adaptive_state_after_save(trainer: IOQCSATrainer, state_path: Path) -> None:
+    state = load_adaptive_state(state_path)
+    old_batch = state.current_batch
+    peak_gib = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+    total_gib = torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 1.0
+    state.checkpoint = str(Path(trainer.last).resolve())
+    state.record_epoch(completed_epoch=int(trainer.epoch) + 1, peak_gib=peak_gib, total_gib=total_gib)
+    save_adaptive_state(state_path, state)
+
+    history = state_path.parent / "batch_history.jsonl"
+    record = {
+        "epoch": state.completed_epoch,
+        "batch_before": old_batch,
+        "batch_after": state.current_batch,
+        "amp": state.amp_enabled,
+        "peak_gib": state.last_peak_gib,
+        "event": state.last_event,
+    }
+    existing = history.read_text(encoding="utf-8") if history.exists() else ""
+    _atomic_write(history, existing + json.dumps(record, ensure_ascii=True) + "\n")
+    if state.current_batch != old_batch:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(EXIT_PLANNED_RESTART)
+
+
 def main() -> None:
     args = build_parser().parse_args()
     trainer = IOQCSATrainer(
@@ -130,6 +160,9 @@ def main() -> None:
     )
     trainer.add_callback("on_train_epoch_start", update_ioqc_progress)
     trainer.add_callback("on_train_epoch_end", write_epoch_diagnostics)
+    if args.state is not None:
+        state_path = args.state.resolve()
+        trainer.add_callback("on_model_save", lambda current: update_adaptive_state_after_save(current, state_path))
     trainer.train()
 
 
