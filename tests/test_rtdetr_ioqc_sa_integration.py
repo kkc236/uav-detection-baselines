@@ -4,7 +4,7 @@ import torch
 import pytest
 
 from src.ioqc_sa_probe import P3SamplingStatistics
-from src.rtdetr_ioqc_sa import IOQCSADetectionModel, regular_query_statistics
+from src.rtdetr_ioqc_sa import IOQCSADetectionModel, prepare_matcher_inputs, regular_query_statistics
 
 
 def test_stock_rtdetr_l_has_one_final_layer_probe_and_no_btdse():
@@ -31,6 +31,20 @@ def test_regular_query_statistics_remove_denoising_prefix():
     assert regular.center.shape == (1, 6, 2)
     torch.testing.assert_close(regular.center, statistics.center[:, 4:])
     assert regular.p3_shape == (8, 8)
+
+
+def test_matcher_inputs_are_fp32_and_contiguous_after_query_slicing():
+    boxes = torch.rand(2, 6, 8, dtype=torch.float16)[..., ::2]
+    scores = torch.rand(2, 6, 20, dtype=torch.float16)[..., ::2]
+    assert not boxes.is_contiguous()
+    assert not scores.is_contiguous()
+
+    matcher_boxes, matcher_scores = prepare_matcher_inputs(boxes, scores)
+
+    assert matcher_boxes.dtype == torch.float32
+    assert matcher_scores.dtype == torch.float32
+    assert matcher_boxes.is_contiguous()
+    assert matcher_scores.is_contiguous()
 
 
 def test_eval_prediction_keeps_stock_output_and_does_not_capture_auxiliary_statistics():

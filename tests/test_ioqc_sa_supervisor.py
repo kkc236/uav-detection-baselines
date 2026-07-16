@@ -9,8 +9,10 @@ import torch
 from scripts.supervise_ioqc_sa import (
     EXIT_PLANNED_RESTART,
     acquire_pid_lock,
+    build_child_environment,
     build_child_command,
     classify_child_exit,
+    parse_device_indices,
     release_pid_lock,
     select_resume_checkpoint,
 )
@@ -41,7 +43,8 @@ def test_child_command_carries_batch_amp_paths_and_optional_resume(tmp_path: Pat
         amp_enabled=False,
         epochs=100,
         workers=8,
-        device="0",
+        device="0,1,2,3,4,5,6,7",
+        save_period=5,
         resume=tmp_path / "last.pt",
     )
 
@@ -50,7 +53,22 @@ def test_child_command_carries_batch_amp_paths_and_optional_resume(tmp_path: Pat
     assert command[command.index("--batch") + 1] == "6"
     assert command[command.index("--amp") + 1] == "false"
     assert command[command.index("--state") + 1].endswith("state.json")
+    assert command[command.index("--device") + 1] == "0,1,2,3,4,5,6,7"
+    assert command[command.index("--save-period") + 1] == "5"
     assert command[command.index("--resume") + 1].endswith("last.pt")
+
+
+def test_device_parser_accepts_ultralytics_ddp_device_list():
+    assert parse_device_indices("0,1,2,3,4,5,6,7") == tuple(range(8))
+    assert parse_device_indices("cuda:0, cuda:2") == (0, 2)
+
+
+def test_child_environment_makes_repository_importable_to_ddp_workers():
+    environment = build_child_environment({"PYTHONPATH": "/existing/path"})
+
+    entries = environment["PYTHONPATH"].split(os.pathsep)
+    assert entries[0] == str(Path(__file__).resolve().parents[1])
+    assert entries[1] == "/existing/path"
 
 
 def test_stale_pid_lock_is_replaced_but_live_lock_is_rejected(tmp_path: Path):

@@ -117,6 +117,16 @@ def batch_policy_for_vram(*, total_gib: float, free_gib: float) -> BatchPolicy:
     return BatchPolicy(levels=levels, initial_batch=initial)
 
 
+def scale_batch_policy(policy: BatchPolicy, *, world_size: int) -> BatchPolicy:
+    if world_size < 1:
+        raise ValueError(f"world_size must be positive, got {world_size}")
+    return BatchPolicy(
+        levels=tuple(level * world_size for level in policy.levels),
+        initial_batch=policy.initial_batch * world_size,
+        reason=f"{policy.reason}_x{world_size}",
+    )
+
+
 def detect_gpu_profile(device: int = 0) -> GPUProfile:
     import torch
 

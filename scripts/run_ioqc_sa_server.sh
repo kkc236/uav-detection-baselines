@@ -14,11 +14,15 @@ SOURCE_BRANCH="${SOURCE_BRANCH:-codex/ioqc-sa}"
 TAG="${TAG:-ioqc-sa-rtdetr-l-live}"
 EPOCHS="${EPOCHS:-100}"
 WORKERS="${WORKERS:-8}"
-DEVICE="${DEVICE:-0}"
+if [[ -z "${DEVICE:-}" ]]; then
+  DEVICE="$(nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd, -)"
+fi
 INITIAL_BATCH="${INITIAL_BATCH:-}"
+SAVE_PERIOD="${SAVE_PERIOD:-1}"
+ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"
 AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"
 
-mkdir -p "$PROJECT_DIR" "$RUN_DIR" "$LOG_DIR" "$RESULTS_REPO"
+mkdir -p "$PROJECT_DIR" "$RUN_DIR" "$LOG_DIR" "$RESULTS_REPO" "$STORAGE_ROOT/state"
 cd "$REPO_DIR"
 
 exec 9>"$LOG_DIR/ioqc_sa.lock"
@@ -28,10 +32,12 @@ if ! flock -n 9; then
 fi
 
 [[ -x "$PYTHON" ]] || { printf 'Python environment not found: %s\n' "$PYTHON" >&2; exit 1; }
-[[ -s "$TOKEN_FILE" ]] || { printf 'GitHub token file is missing or empty: %s\n' "$TOKEN_FILE" >&2; exit 1; }
-if (( $(stat -c '%a' "$TOKEN_FILE") % 100 != 0 )); then
-  printf 'GitHub token file must not be readable by group or others: %s\n' "$TOKEN_FILE" >&2
-  exit 1
+if [[ "$ENABLE_GITHUB_SYNC" == "1" ]]; then
+  [[ -s "$TOKEN_FILE" ]] || { printf 'GitHub token file is missing or empty: %s\n' "$TOKEN_FILE" >&2; exit 1; }
+  if (( $(stat -c '%a' "$TOKEN_FILE") % 100 != 0 )); then
+    printf 'GitHub token file must not be readable by group or others: %s\n' "$TOKEN_FILE" >&2
+    exit 1
+  fi
 fi
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -39,7 +45,7 @@ export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
 export PYTHONUNBUFFERED=1
 printf '%s\n' "$$" > "$LOG_DIR/ioqc_sa_launcher.pid"
 
-STATE_FILE="$RUN_DIR/adaptive_state.json"
+STATE_FILE="$STORAGE_ROOT/state/ioqc_sa_adaptive_state.json"
 STATUS_FILE="$LOG_DIR/ioqc_sa_status.json"
 SUPERVISOR_LOG="$LOG_DIR/ioqc_sa_training.log"
 PID_LOCK="$LOG_DIR/ioqc_sa_supervisor.pid"
@@ -61,16 +67,21 @@ sync_arguments=(
   --interval 60
 )
 
-"$PYTHON" -u "${sync_arguments[@]}" >> "$LOG_DIR/ioqc_sa_github_sync.log" 2>&1 &
-sync_pid=$!
+sync_pid=""
+if [[ "$ENABLE_GITHUB_SYNC" == "1" ]]; then
+  "$PYTHON" -u "${sync_arguments[@]}" >> "$LOG_DIR/ioqc_sa_github_sync.log" 2>&1 &
+  sync_pid=$!
+fi
 supervisor_pid=""
 cleanup() {
   if [[ -n "$supervisor_pid" ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
     kill -TERM "$supervisor_pid" 2>/dev/null || true
     wait "$supervisor_pid" 2>/dev/null || true
   fi
-  kill "$sync_pid" 2>/dev/null || true
-  wait "$sync_pid" 2>/dev/null || true
+  if [[ -n "$sync_pid" ]]; then
+    kill "$sync_pid" 2>/dev/null || true
+    wait "$sync_pid" 2>/dev/null || true
+  fi
   rm -f "$LOG_DIR/ioqc_sa_launcher.pid"
 }
 trap cleanup EXIT
@@ -88,6 +99,7 @@ supervisor_arguments=(
   --epochs "$EPOCHS"
   --workers "$WORKERS"
   --device "$DEVICE"
+  --save-period "$SAVE_PERIOD"
 )
 if [[ -n "$INITIAL_BATCH" ]]; then
   supervisor_arguments+=(--initial-batch "$INITIAL_BATCH")
@@ -101,8 +113,10 @@ supervisor_rc=$?
 supervisor_pid=""
 set -e
 
-kill "$sync_pid" 2>/dev/null || true
-wait "$sync_pid" 2>/dev/null || true
+if [[ -n "$sync_pid" ]]; then
+  kill "$sync_pid" 2>/dev/null || true
+  wait "$sync_pid" 2>/dev/null || true
+fi
 rm -f "$LOG_DIR/ioqc_sa_launcher.pid"
 trap - EXIT
 
@@ -111,22 +125,29 @@ if (( supervisor_rc != 0 )); then
   exit "$supervisor_rc"
 fi
 
-published=0
-for attempt in 1 2 3 4 5; do
-  if "$PYTHON" -u "${sync_arguments[@]}" --once >> "$LOG_DIR/ioqc_sa_github_sync.log" 2>&1; then
-    published=1
-    break
+if [[ "$ENABLE_GITHUB_SYNC" == "1" ]]; then
+  published=0
+  for attempt in 1 2 3 4 5; do
+    if "$PYTHON" -u "${sync_arguments[@]}" --once >> "$LOG_DIR/ioqc_sa_github_sync.log" 2>&1; then
+      published=1
+      break
+    fi
+    printf 'Final GitHub publication attempt %s failed; retrying in 60 seconds.\n' "$attempt" >&2
+    sleep 60
+  done
+
+  if (( published != 1 )); then
+    printf 'Training completed, but final GitHub publication still needs retry. Local data is intact.\n' >&2
+    exit 3
   fi
-  printf 'Final GitHub publication attempt %s failed; retrying in 60 seconds.\n' "$attempt" >&2
-  sleep 60
-done
-
-if (( published != 1 )); then
-  printf 'Training completed, but final GitHub publication still needs retry. Local data is intact.\n' >&2
-  exit 3
+  printf 'IOQC-SA training and final GitHub publication are verified.\n'
+else
+  printf 'IOQC-SA training completed with GitHub synchronization disabled.\n'
 fi
-
-printf 'IOQC-SA training and final GitHub publication are verified.\n'
 if [[ "$AUTO_SHUTDOWN" == "1" ]]; then
-  shutdown -h now
+  if [[ "$ENABLE_GITHUB_SYNC" == "1" ]]; then
+    shutdown -h now
+  else
+    printf 'Automatic shutdown skipped because GitHub synchronization is disabled.\n' >&2
+  fi
 fi

@@ -40,6 +40,11 @@ def test_run_script_locks_starts_watcher_and_verifies_final_publication():
     assert "--release-name" in content
     assert "--once" in content
     assert 'AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"' in content
+    assert 'ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"' in content
+    assert 'SAVE_PERIOD="${SAVE_PERIOD:-1}"' in content
+    assert 'nvidia-smi --query-gpu=index' in content
+    assert '--save-period "$SAVE_PERIOD"' in content
+    assert '[[ "$ENABLE_GITHUB_SYNC" == "1" ]]' in content
     assert '[[ "$AUTO_SHUTDOWN" == "1" ]]' in content
     assert "shutdown -h now" in content
     assert "ioqc_sa_launcher.pid" in content
@@ -53,3 +58,4 @@ def test_run_script_keeps_runs_logs_and_secrets_outside_checkout():
     assert 'LOG_DIR="${LOG_DIR:-$STORAGE_ROOT/logs}"' in content
     assert 'TOKEN_FILE="${TOKEN_FILE:-$STORAGE_ROOT/secrets/github_token}"' in content
     assert 'RESULTS_REPO="${RESULTS_REPO:-$STORAGE_ROOT/results-checkout}"' in content
+    assert 'STATE_FILE="$STORAGE_ROOT/state/ioqc_sa_adaptive_state.json"' in content

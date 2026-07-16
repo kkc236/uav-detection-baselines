@@ -7,6 +7,7 @@ from src.gpu_adaptive_batch import (
     batch_policy_for_vram,
     load_adaptive_state,
     save_adaptive_state,
+    scale_batch_policy,
 )
 
 
@@ -26,6 +27,16 @@ def test_low_startup_free_memory_reduces_initial_batch():
 
     assert policy.initial_batch == 4
     assert policy.reason == "startup_free_memory"
+
+
+def test_batch_policy_scales_from_per_gpu_to_global_ddp_batch():
+    policy = batch_policy_for_vram(total_gib=24, free_gib=24)
+
+    scaled = scale_batch_policy(policy, world_size=8)
+
+    assert scaled.levels == (16, 32, 48, 64)
+    assert scaled.initial_batch == 48
+    assert scaled.reason == "vram_default_x8"
 
 
 def test_three_low_peak_epochs_promote_one_level():

@@ -49,6 +49,13 @@ def regular_query_statistics(
     )
 
 
+def prepare_matcher_inputs(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return boxes.float().contiguous(), scores.float().contiguous()
+
+
 class IOQCSADetectionModel(RTDETRDetectionModel):
     def __init__(
         self,
@@ -123,9 +130,10 @@ class IOQCSADetectionModel(RTDETRDetectionModel):
         ensure_finite_losses(detection=detection_loss)
 
         with torch.autocast(device_type=image.device.type, enabled=False):
+            matcher_boxes, matcher_scores = prepare_matcher_inputs(last_boxes, last_scores)
             match_indices = self.criterion.matcher(
-                last_boxes.float(),
-                last_scores.float(),
+                matcher_boxes,
+                matcher_scores,
                 targets["bboxes"].float(),
                 targets["cls"],
                 groups,

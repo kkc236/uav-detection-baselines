@@ -60,6 +60,8 @@ def test_amp_batch_resume_and_persistent_project_are_configurable(tmp_path: Path
             "6",
             "--workers",
             "8",
+            "--save-period",
+            "5",
             "--resume",
             str(checkpoint),
             "--project",
@@ -71,6 +73,7 @@ def test_amp_batch_resume_and_persistent_project_are_configurable(tmp_path: Path
     assert settings["amp"] is False
     assert settings["batch"] == 6
     assert settings["workers"] == 8
+    assert settings["save_period"] == 5
     assert settings["resume"] == str(checkpoint.resolve())
     assert settings["project"] == str(project.resolve())
 

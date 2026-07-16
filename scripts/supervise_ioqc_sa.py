@@ -21,11 +21,30 @@ from src.gpu_adaptive_batch import (
     detect_gpu_profile,
     load_adaptive_state,
     save_adaptive_state,
+    scale_batch_policy,
 )
 
 
 EXIT_PLANNED_RESTART = 75
 OOM_MARKERS = ("cuda out of memory", "outofmemoryerror", "cudnn_status_alloc_failed")
+
+
+def parse_device_indices(device: str) -> tuple[int, ...]:
+    parts = tuple(part.strip() for part in device.split(",") if part.strip())
+    if not parts:
+        raise ValueError("At least one CUDA device is required")
+    try:
+        return tuple(int(part.removeprefix("cuda:")) for part in parts)
+    except ValueError as error:
+        raise ValueError(f"Invalid CUDA device list: {device!r}") from error
+
+
+def build_child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    environment = dict(os.environ if base is None else base)
+    existing_pythonpath = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
+    environment.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    return environment
 
 
 def classify_child_exit(returncode: int, output: str) -> str:
@@ -53,6 +72,7 @@ def build_child_command(
     epochs: int,
     workers: int,
     device: str,
+    save_period: int,
     resume: Path | None,
 ) -> list[str]:
     command = [
@@ -66,6 +86,8 @@ def build_child_command(
         str(workers),
         "--device",
         device,
+        "--save-period",
+        str(save_period),
         "--project",
         str(project),
         "--name",
@@ -167,13 +189,17 @@ def _status(state: AdaptiveTrainingState, **extra: object) -> dict[str, object]:
 
 
 def run_supervisor(args: argparse.Namespace) -> int:
-    profile = detect_gpu_profile(int(args.device))
+    device_indices = parse_device_indices(args.device)
+    profile = detect_gpu_profile(device_indices[0])
     state_path = args.state.resolve()
     run_dir = (args.project / args.name).resolve()
     if state_path.exists():
         state = load_adaptive_state(state_path)
     else:
-        policy = batch_policy_for_vram(total_gib=profile.total_gib, free_gib=profile.free_gib)
+        policy = scale_batch_policy(
+            batch_policy_for_vram(total_gib=profile.total_gib, free_gib=profile.free_gib),
+            world_size=len(device_indices),
+        )
         initial = args.initial_batch or policy.initial_batch
         if initial not in policy.levels:
             raise ValueError(f"Initial batch {initial} is not in detected ladder {policy.levels}")
@@ -204,6 +230,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 epochs=args.epochs,
                 workers=args.workers,
                 device=args.device,
+                save_period=args.save_period,
                 resume=resume,
             )
             args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -214,8 +241,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     f"epoch={state.completed_epoch} resume={resume}\n"
                 )
                 log_file.flush()
-                environment = os.environ.copy()
-                environment.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+                environment = build_child_environment()
                 child = subprocess.Popen(
                     command,
                     cwd=ROOT,
@@ -286,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="0")
+    parser.add_argument("--save-period", type=int, default=1)
     parser.add_argument("--initial-batch", type=int)
     parser.add_argument("--min-free-gib", type=float, default=20.0)
     parser.add_argument("--restart-delay", type=int, default=30)
