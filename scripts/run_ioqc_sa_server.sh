@@ -21,6 +21,8 @@ INITIAL_BATCH="${INITIAL_BATCH:-}"
 BATCH_LEVELS="${BATCH_LEVELS:-}"
 SAVE_PERIOD="${SAVE_PERIOD:-1}"
 OPTIMIZER="${OPTIMIZER:-AdamW}"
+LR0="${LR0:-0.000714}"
+MOMENTUM="${MOMENTUM:-0.9}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-8}"
 ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"
 AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"
@@ -104,6 +106,8 @@ supervisor_arguments=(
   --device "$DEVICE"
   --save-period "$SAVE_PERIOD"
   --optimizer "$OPTIMIZER"
+  --lr0 "$LR0"
+  --momentum "$MOMENTUM"
   --min-free-gib "$MIN_FREE_GIB"
 )
 if [[ -n "$INITIAL_BATCH" ]]; then

@@ -21,6 +21,8 @@ def test_training_defaults_match_scratch_rtdetr_l_baseline():
     assert settings["nms"] is False
     assert settings["save_period"] == 1
     assert settings["optimizer"] == "AdamW"
+    assert settings["lr0"] == 0.000714
+    assert settings["momentum"] == 0.9
     assert settings["nbs"] == 64
     assert settings["project"] == str(ROOT / "runs" / "ioqc-sa")
 

@@ -29,7 +29,7 @@ LOSS_NAMES = (
 
 
 def apply_resume_runtime_overrides(args: object, overrides: dict) -> None:
-    for key in ("amp", "project", "name", "optimizer"):
+    for key in ("amp", "project", "name", "optimizer", "lr0", "momentum"):
         if key in overrides:
             setattr(args, key, bool(overrides[key]) if key == "amp" else overrides[key])
     if "project" in overrides or "name" in overrides:

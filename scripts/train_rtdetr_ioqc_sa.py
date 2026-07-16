@@ -37,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="0")
     parser.add_argument("--save-period", type=int, default=1)
     parser.add_argument("--optimizer", default="AdamW")
+    parser.add_argument("--lr0", type=float, default=0.000714)
+    parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--fraction", type=float, default=1.0)
     parser.add_argument("--name", default="scratch-rtdetr-l-ioqc-sa-100ep")
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "ioqc-sa")
@@ -75,6 +77,8 @@ def build_settings(args: argparse.Namespace) -> dict:
         "save": True,
         "save_period": args.save_period,
         "optimizer": args.optimizer,
+        "lr0": args.lr0,
+        "momentum": args.momentum,
         "plots": True,
         "val": True,
     }

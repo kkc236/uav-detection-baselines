@@ -43,11 +43,15 @@ def test_run_script_locks_starts_watcher_and_verifies_final_publication():
     assert 'ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"' in content
     assert 'SAVE_PERIOD="${SAVE_PERIOD:-1}"' in content
     assert 'OPTIMIZER="${OPTIMIZER:-AdamW}"' in content
+    assert 'LR0="${LR0:-0.000714}"' in content
+    assert 'MOMENTUM="${MOMENTUM:-0.9}"' in content
     assert 'MIN_FREE_GIB="${MIN_FREE_GIB:-8}"' in content
     assert 'BATCH_LEVELS="${BATCH_LEVELS:-}"' in content
     assert 'nvidia-smi --query-gpu=index' in content
     assert '--save-period "$SAVE_PERIOD"' in content
     assert '--optimizer "$OPTIMIZER"' in content
+    assert '--lr0 "$LR0"' in content
+    assert '--momentum "$MOMENTUM"' in content
     assert '--min-free-gib "$MIN_FREE_GIB"' in content
     assert 'supervisor_arguments+=(--batch-levels "$BATCH_LEVELS")' in content
     assert '[[ "$ENABLE_GITHUB_SYNC" == "1" ]]' in content
