@@ -104,10 +104,6 @@ class IOQCSADetectionModel(RTDETRDetectionModel):
         if preds is None:
             preds = self.predict(image, batch=targets)
         dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = preds if self.training else preds[1]
-        captured = self.ioqc_probe.last_statistics
-        if captured is None:
-            raise RuntimeError("IOQC-SA P3 sampling statistics were not captured during the training forward pass")
-        statistics = regular_query_statistics(captured, dn_meta)
 
         if dn_meta is None:
             dn_bboxes, dn_scores = None, None
@@ -128,6 +124,16 @@ class IOQCSADetectionModel(RTDETRDetectionModel):
         )
         detection_loss = sum(detection_losses.values())
         ensure_finite_losses(detection=detection_loss)
+        detection_items = torch.stack(
+            [detection_losses[key].detach() for key in ("loss_giou", "loss_class", "loss_bbox")]
+        )
+        if not self.training:
+            return detection_loss, torch.cat((detection_items, detection_items.new_zeros(2)))
+
+        captured = self.ioqc_probe.last_statistics
+        if captured is None:
+            raise RuntimeError("IOQC-SA P3 sampling statistics were not captured during the training forward pass")
+        statistics = regular_query_statistics(captured, dn_meta)
 
         with torch.autocast(device_type=image.device.type, enabled=False):
             matcher_boxes, matcher_scores = prepare_matcher_inputs(last_boxes, last_scores)
@@ -166,9 +172,7 @@ class IOQCSADetectionModel(RTDETRDetectionModel):
         }
         loss_items = torch.cat(
             (
-                torch.stack(
-                    [detection_losses[key].detach() for key in ("loss_giou", "loss_class", "loss_bbox")]
-                ),
+                detection_items,
                 ioqc_result.competition.detach().reshape(1),
                 ioqc_result.alignment.detach().reshape(1),
             )

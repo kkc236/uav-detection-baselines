@@ -125,3 +125,16 @@ def test_model_loss_rejects_nonfinite_detection_loss_before_optimizer_step():
 
     with pytest.raises(FloatingPointError, match="NONFINITE_LOSS"):
         model.loss(batch, preds=predictions)
+
+
+def test_validation_loss_does_not_require_training_only_probe_statistics():
+    model = IOQCSADetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).eval()
+    batch, predictions, _ = synthetic_training_inputs()
+    model.ioqc_probe.clear()
+
+    with torch.no_grad():
+        total, items = model.loss(batch, preds=(None, predictions))
+
+    assert torch.isfinite(total)
+    assert items.shape == (5,)
+    torch.testing.assert_close(items[-2:], torch.zeros(2))
