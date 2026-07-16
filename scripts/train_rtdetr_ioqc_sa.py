@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--device", default="0")
     parser.add_argument("--save-period", type=int, default=1)
+    parser.add_argument("--optimizer", default="AdamW")
     parser.add_argument("--fraction", type=float, default=1.0)
     parser.add_argument("--name", default="scratch-rtdetr-l-ioqc-sa-100ep")
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "ioqc-sa")
@@ -73,6 +74,7 @@ def build_settings(args: argparse.Namespace) -> dict:
         "max_det": 300,
         "save": True,
         "save_period": args.save_period,
+        "optimizer": args.optimizer,
         "plots": True,
         "val": True,
     }

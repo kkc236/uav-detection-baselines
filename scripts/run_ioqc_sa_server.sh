@@ -19,6 +19,8 @@ if [[ -z "${DEVICE:-}" ]]; then
 fi
 INITIAL_BATCH="${INITIAL_BATCH:-}"
 SAVE_PERIOD="${SAVE_PERIOD:-1}"
+OPTIMIZER="${OPTIMIZER:-AdamW}"
+MIN_FREE_GIB="${MIN_FREE_GIB:-8}"
 ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"
 AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"
 
@@ -100,6 +102,8 @@ supervisor_arguments=(
   --workers "$WORKERS"
   --device "$DEVICE"
   --save-period "$SAVE_PERIOD"
+  --optimizer "$OPTIMIZER"
+  --min-free-gib "$MIN_FREE_GIB"
 )
 if [[ -n "$INITIAL_BATCH" ]]; then
   supervisor_arguments+=(--initial-batch "$INITIAL_BATCH")

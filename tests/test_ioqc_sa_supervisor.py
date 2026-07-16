@@ -45,6 +45,7 @@ def test_child_command_carries_batch_amp_paths_and_optional_resume(tmp_path: Pat
         workers=8,
         device="0,1,2,3,4,5,6,7",
         save_period=5,
+        optimizer="AdamW",
         resume=tmp_path / "last.pt",
     )
 
@@ -55,6 +56,7 @@ def test_child_command_carries_batch_amp_paths_and_optional_resume(tmp_path: Pat
     assert command[command.index("--state") + 1].endswith("state.json")
     assert command[command.index("--device") + 1] == "0,1,2,3,4,5,6,7"
     assert command[command.index("--save-period") + 1] == "5"
+    assert command[command.index("--optimizer") + 1] == "AdamW"
     assert command[command.index("--resume") + 1].endswith("last.pt")
 
 

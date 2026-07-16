@@ -73,6 +73,7 @@ def build_child_command(
     workers: int,
     device: str,
     save_period: int,
+    optimizer: str,
     resume: Path | None,
 ) -> list[str]:
     command = [
@@ -88,6 +89,8 @@ def build_child_command(
         device,
         "--save-period",
         str(save_period),
+        "--optimizer",
+        optimizer,
         "--project",
         str(project),
         "--name",
@@ -231,6 +234,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 workers=args.workers,
                 device=args.device,
                 save_period=args.save_period,
+                optimizer=args.optimizer,
                 resume=resume,
             )
             args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -313,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="0")
     parser.add_argument("--save-period", type=int, default=1)
+    parser.add_argument("--optimizer", default="AdamW")
     parser.add_argument("--initial-batch", type=int)
     parser.add_argument("--min-free-gib", type=float, default=20.0)
     parser.add_argument("--restart-delay", type=int, default=30)

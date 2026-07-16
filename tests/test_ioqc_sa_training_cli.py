@@ -20,6 +20,7 @@ def test_training_defaults_match_scratch_rtdetr_l_baseline():
     assert settings["seed"] == 0
     assert settings["nms"] is False
     assert settings["save_period"] == 1
+    assert settings["optimizer"] == "AdamW"
     assert settings["nbs"] == 64
     assert settings["project"] == str(ROOT / "runs" / "ioqc-sa")
 
@@ -88,13 +89,19 @@ def test_smoke_mode_limits_epoch_and_fraction_only():
 
 
 def test_resume_runtime_override_can_permanently_disable_amp():
-    runtime_args = SimpleNamespace(amp=True, project="old/project", name="old-run")
+    runtime_args = SimpleNamespace(amp=True, project="old/project", name="old-run", optimizer="auto")
 
     apply_resume_runtime_overrides(
         runtime_args,
-        {"amp": False, "project": "/new/persistent/runs", "name": "ioqc-new-server"},
+        {
+            "amp": False,
+            "project": "/new/persistent/runs",
+            "name": "ioqc-new-server",
+            "optimizer": "AdamW",
+        },
     )
 
     assert runtime_args.amp is False
     assert runtime_args.project == "/new/persistent/runs"
     assert runtime_args.name == "ioqc-new-server"
+    assert runtime_args.optimizer == "AdamW"
