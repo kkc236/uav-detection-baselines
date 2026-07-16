@@ -5,7 +5,7 @@ data: /root/data/ioqc-sa/storage/venv/lib/python3.10/site-packages/ultralytics/c
 epochs: 100
 time: null
 patience: 100
-batch: 12
+batch: 8
 imgsz: 640
 save: true
 save_period: 5
@@ -70,9 +70,9 @@ simplify: true
 opset: null
 workspace: null
 nms: false
-lr0: 0.01
+lr0: 0.000714
 lrf: 0.01
-momentum: 0.937
+momentum: 0.9
 weight_decay: 0.0005
 warmup_epochs: 3.0
 warmup_momentum: 0.8
