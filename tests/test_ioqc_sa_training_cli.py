@@ -89,7 +89,13 @@ def test_smoke_mode_limits_epoch_and_fraction_only():
 
 
 def test_resume_runtime_override_can_permanently_disable_amp():
-    runtime_args = SimpleNamespace(amp=True, project="old/project", name="old-run", optimizer="auto")
+    runtime_args = SimpleNamespace(
+        amp=True,
+        project="old/project",
+        name="old-run",
+        optimizer="auto",
+        save_dir="/old/server/run",
+    )
 
     apply_resume_runtime_overrides(
         runtime_args,
@@ -105,3 +111,4 @@ def test_resume_runtime_override_can_permanently_disable_amp():
     assert runtime_args.project == "/new/persistent/runs"
     assert runtime_args.name == "ioqc-new-server"
     assert runtime_args.optimizer == "AdamW"
+    assert runtime_args.save_dir == str(Path("/new/persistent/runs/ioqc-new-server").resolve())

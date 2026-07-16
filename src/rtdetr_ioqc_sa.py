@@ -32,6 +32,10 @@ def apply_resume_runtime_overrides(args: object, overrides: dict) -> None:
     for key in ("amp", "project", "name", "optimizer"):
         if key in overrides:
             setattr(args, key, bool(overrides[key]) if key == "amp" else overrides[key])
+    if "project" in overrides or "name" in overrides:
+        project = Path(getattr(args, "project"))
+        name = str(getattr(args, "name"))
+        setattr(args, "save_dir", str((project / name).resolve()))
 
 
 def regular_query_statistics(
