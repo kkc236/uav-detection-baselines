@@ -12,6 +12,7 @@ from scripts.supervise_ioqc_sa import (
     build_child_environment,
     build_child_command,
     classify_child_exit,
+    parse_batch_levels,
     parse_device_indices,
     release_pid_lock,
     select_resume_checkpoint,
@@ -63,6 +64,12 @@ def test_child_command_carries_batch_amp_paths_and_optional_resume(tmp_path: Pat
 def test_device_parser_accepts_ultralytics_ddp_device_list():
     assert parse_device_indices("0,1,2,3,4,5,6,7") == tuple(range(8))
     assert parse_device_indices("cuda:0, cuda:2") == (0, 2)
+
+
+def test_batch_level_parser_accepts_strict_ascending_ladder():
+    assert parse_batch_levels("8,10,12") == (8, 10, 12)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        parse_batch_levels("8,12,10")
 
 
 def test_child_environment_makes_repository_importable_to_ddp_workers():

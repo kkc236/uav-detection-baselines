@@ -18,6 +18,7 @@ if [[ -z "${DEVICE:-}" ]]; then
   DEVICE="$(nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd, -)"
 fi
 INITIAL_BATCH="${INITIAL_BATCH:-}"
+BATCH_LEVELS="${BATCH_LEVELS:-}"
 SAVE_PERIOD="${SAVE_PERIOD:-1}"
 OPTIMIZER="${OPTIMIZER:-AdamW}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-8}"
@@ -107,6 +108,9 @@ supervisor_arguments=(
 )
 if [[ -n "$INITIAL_BATCH" ]]; then
   supervisor_arguments+=(--initial-batch "$INITIAL_BATCH")
+fi
+if [[ -n "$BATCH_LEVELS" ]]; then
+  supervisor_arguments+=(--batch-levels "$BATCH_LEVELS")
 fi
 
 set +e

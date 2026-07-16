@@ -39,6 +39,18 @@ def parse_device_indices(device: str) -> tuple[int, ...]:
         raise ValueError(f"Invalid CUDA device list: {device!r}") from error
 
 
+def parse_batch_levels(value: str) -> tuple[int, ...]:
+    try:
+        levels = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    except ValueError as error:
+        raise ValueError(f"Invalid batch level list: {value!r}") from error
+    if not levels or any(level <= 0 for level in levels):
+        raise ValueError("Batch levels must contain positive integers")
+    if any(left >= right for left, right in zip(levels, levels[1:])):
+        raise ValueError("Batch levels must be strictly increasing")
+    return levels
+
+
 def build_child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     environment = dict(os.environ if base is None else base)
     existing_pythonpath = environment.get("PYTHONPATH", "")
@@ -198,15 +210,23 @@ def run_supervisor(args: argparse.Namespace) -> int:
     run_dir = (args.project / args.name).resolve()
     if state_path.exists():
         state = load_adaptive_state(state_path)
+        if args.batch_levels is not None:
+            if state.current_batch not in args.batch_levels:
+                raise ValueError(
+                    f"Current batch {state.current_batch} is not in configured ladder {args.batch_levels}"
+                )
+            state.levels = args.batch_levels
+            save_adaptive_state(state_path, state)
     else:
         policy = scale_batch_policy(
             batch_policy_for_vram(total_gib=profile.total_gib, free_gib=profile.free_gib),
             world_size=len(device_indices),
         )
-        initial = args.initial_batch or policy.initial_batch
-        if initial not in policy.levels:
-            raise ValueError(f"Initial batch {initial} is not in detected ladder {policy.levels}")
-        state = AdaptiveTrainingState(levels=policy.levels, current_batch=initial)
+        levels = args.batch_levels or policy.levels
+        initial = args.initial_batch or (policy.initial_batch if policy.initial_batch in levels else levels[0])
+        if initial not in levels:
+            raise ValueError(f"Initial batch {initial} is not in configured ladder {levels}")
+        state = AdaptiveTrainingState(levels=levels, current_batch=initial)
         save_adaptive_state(state_path, state)
 
     acquire_pid_lock(args.lock.resolve())
@@ -319,6 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-period", type=int, default=1)
     parser.add_argument("--optimizer", default="AdamW")
     parser.add_argument("--initial-batch", type=int)
+    parser.add_argument("--batch-levels", type=parse_batch_levels)
     parser.add_argument("--min-free-gib", type=float, default=20.0)
     parser.add_argument("--restart-delay", type=int, default=30)
     parser.add_argument("--max-unexpected-failures", type=int, default=3)
