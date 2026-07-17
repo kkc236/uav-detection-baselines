@@ -62,7 +62,6 @@ The custom detection model owns the module as a normal registered child:
 self.vsf_rmr = VSFRMR(
     channels=256,
     hidden_channels=32,
-    use_metadata=False,
 )
 ```
 
@@ -78,6 +77,16 @@ predictions = head(features, batch)
 ```
 
 `VSFRMRRTDETRTrainer.get_model()` must instantiate `VSFRMRRTDETRDetectionModel`; otherwise the official trainer would silently construct the stock RT-DETR model.
+
+VSF-RMR validates its input contract before routing:
+
+```text
+C3 = C4 = C5 = 256
+H3 = 2 H4 = 4 H5
+W3 = 2 W4 = 4 W5.
+```
+
+Any mismatch raises an explicit error. The implementation must not silently resize an irregular pyramid because the conditional cancellation equations rely on exact `2x` and `4x` alignment.
 
 ## 4. Shared Scale Space
 
@@ -211,32 +220,23 @@ Consequently, the initial module is an exact identity mapping for all three deco
 
 Self-cancellation is conditional rather than universal. For example, `Delta4=0` only when a corresponding `2x2` P3 region performs spatially consistent pure P4 selection. P5 requires consistent pure P5 selection over the corresponding `4x4` region.
 
-## 8. Optional Flight Metadata
+## 8. Future Flight-Metadata Extension
 
-The main experiment sets `use_metadata=False`, so no metadata module is instantiated. A future metadata adapter may encode altitude `h`, pitch `theta`, and focal length `f` as
+The first implementation contains no metadata flags, tensors, adapter class, parameters, or tests. This keeps the VisDrone model and paper contribution strictly visual.
 
-```text
-m = [log(h / h_ref), sin(theta), cos(theta), log(f / f_ref)].
-```
-
-The adapter outputs an intercept and vertical slope `(b0, by)` and forms
-
-```text
-B_meta(x, y) = b0 + by * y_norm,  y_norm in [-1, 1]
-A_v = b_vis + R_v + delta_meta * B_meta.
-```
-
-The final metadata-head weight and bias are initialized to zero. No separate zero-initialized metadata scale is used, avoiding a dead double-zero gradient path. `metadata_valid` must be explicitly reshaped to `B x 1 x 1 x 1` before multiplication.
-
-This adapter is an extension interface, not a validated contribution of the current VisDrone experiment.
+The architecture remains extensible at the scale-logit boundary. A future adapter may encode altitude, pitch, and focal length as `[log(h/h_ref), sin(theta), cos(theta), log(f/f_ref)]`, predict a global intercept and vertical slope, and add `b0 + by * y_norm` to `A_v` before the sigmoid. This documented injection point is sufficient for compatibility; it is not implemented or evaluated in the present work.
 
 ## 9. Apparent-Scale Supervision
 
-For each augmented GT box in image `b`, convert the normalized width and height to input-image pixels and define
+For each augmented normalized `xywh` GT box in image `b`, use the actual batch tensor shape `(H_img, W_img)` rather than the nominal configuration value:
 
 ```text
+w_b,g = w_norm,b,g * W_img
+h_b,g = h_norm,b,g * H_img
 r_b,g = sqrt(w_b,g * h_b,g).
 ```
+
+Target generation runs without gradients and in FP32. Invalid, ignored, or nonpositive boxes do not produce scale targets.
 
 The continuous target is
 
@@ -244,11 +244,11 @@ The continuous target is
 v_b,g = clip(log2(r_b,g / 8), 0.05, 1.95).
 ```
 
-The reference value 8 is the P3 stride. The fixed margins prevent labels from falling at the sigmoid and routing extremes. The mapping provides transitions around 8, 16, and 32 pixels, which is compatible with the observed VisDrone scale distribution and avoids the collapse caused by the earlier 32-pixel reference.
+The reference value 8 is the P3 stride. The fixed margins prevent labels from falling at the sigmoid and routing extremes. The mapping provides transitions around 8, 16, and 32 pixels. A pre-design audit of the local training labels at 640 input measured a median equivalent size of approximately 11.09 pixels and a 90th percentile of approximately 31.20 pixels. With the rejected 32-pixel reference, 90.5% of training targets would have collapsed to the P3 endpoint.
 
 ### 9.1 Image-balanced local loss
 
-Sample the predicted field bilinearly at each normalized GT center:
+Sample the predicted field bilinearly at each normalized GT center. For center `c=(cx, cy)` in `[0, 1]`, use `grid=(2cx-1, 2cy-1)` with `align_corners=False`:
 
 ```text
 v_hat_b,g = Sample(V_b, c_b,g).
@@ -262,7 +262,7 @@ L_local = mean over b in B+ (
 ).
 ```
 
-The per-image reduction prevents dense images from dominating merely because they contain more objects.
+`SmoothL1` uses `beta=1.0` and unreduced per-target values before the two-stage averaging. The per-image reduction prevents dense images from dominating merely because they contain more objects.
 
 ### 9.2 Image-balanced global loss
 
@@ -297,16 +297,9 @@ L = L_det + lambda_v * L_VSF
 lambda_v = 0.1.
 ```
 
-VSF supervision is active from epoch 1 with no warm-up. Target generation, bilinear sampling, logarithms, SmoothL1, and reductions execute with autocast disabled in FP32. The feature network, VSF-RMR forward, and stock detection path remain AMP-capable.
+VSF supervision is active from epoch 1 with no warm-up. Target generation, bilinear sampling, logarithms, SmoothL1 with `beta=1.0`, and reductions execute with autocast disabled in FP32. The feature network, VSF-RMR forward, and stock detection path remain AMP-capable. `scale_field`, both auxiliary losses, detection loss, and total loss are checked independently with `torch.isfinite` before optimizer update.
 
-At the first optimizer step:
-
-1. `L_VSF` trains the global and local scale-field path.
-2. Zero `gamma_l` blocks detection gradients from entering the residual route.
-3. Detection loss can update `gamma_l` because restoration outputs are nonzero.
-4. After `gamma_l` leaves zero, detection gradients reach the restoration projection, shared scale space, and routing path.
-
-Initializing `V` near 0.95 prevents later ordered-routing gradients from beginning exactly at the `V=1` ReLU knot; it does not bypass the initial `gamma_l` gate.
+At the first optimizer step, `L_VSF` trains the scale field while zero `gamma_l` blocks detection gradients from entering the residual route. Detection loss can update `gamma_l` because restoration outputs are nonzero. After `gamma_l` leaves zero, detection gradients reach the restoration projection, shared scale space, and routing path. Initializing `V` near 0.95 avoids beginning exactly at the `V=1` ReLU knot; it does not bypass the initial gate.
 
 ## 11. Auxiliary Cache Contract
 
@@ -321,12 +314,12 @@ Inference and validation do not create a cache. When Ultralytics requests loss i
 `VSFRMRRTDETRDetectionModel` overrides:
 
 - `__init__`: create VSF-RMR and store `lambda_v`.
-- `predict`: preserve the stock encoder loop, collect `head.f`, route the three features, and call the stock decoder.
+- `predict`: preserve the stock encoder loop and its `profile`, `visualize`, `augment`, and `embed` behavior, collect `head.f`, route the three features, and call the stock decoder.
 - `loss`: compute the stock detection loss; in training, pop the VSF cache, compute FP32 `L_VSF`, verify finiteness, and return the combined loss; in evaluation, skip the auxiliary branch and return stock loss items.
 
 The first implementation may retain the stock three displayed loss names and store `last_vsf_loss = loss_vsf.detach()` for diagnostics. The saved run arguments must include `lambda_v`, the module width, initialization, and augmentation boundary.
 
-`VSFRMRRTDETRTrainer` overrides `get_model()` to construct `VSFRMRRTDETRDetectionModel`, load optional resume weights, and preserve the standard RT-DETR validator. Resume-time runtime overrides must preserve the configured optimizer, learning rate, momentum, project, name, AMP state, and lambda value.
+`VSFRMRRTDETRTrainer` overrides `get_model()` to construct `VSFRMRRTDETRDetectionModel`, load optional resume weights, and preserve the standard RT-DETR validator. Resume-time runtime overrides must preserve the configured optimizer, learning rate, momentum, project, name, AMP state, and lambda value. Tests must also prove that VSF-RMR parameters enter the optimizer, EMA, checkpoint, and resumed model state.
 
 No file under the installed `ultralytics` package is edited.
 
@@ -334,60 +327,69 @@ No file under the installed `ultralytics` package is edited.
 
 For each batch:
 
-1. Apply the official non-Mosaic augmentation pipeline and produce normalized transformed GT boxes.
-2. Run the stock backbone and Hybrid Encoder.
-3. Run VSF-RMR on the three decoder features and cache the two supervision tensors.
-4. Run the unchanged RT-DETR decoder and detection criterion.
-5. Pop the current VSF cache.
-6. Convert the transformed boxes to pixel sizes using the actual batch image height and width.
-7. Build clipped log-scale targets and group them by image.
-8. Compute image-balanced local and global FP32 losses.
-9. Form `L_det + 0.1 L_VSF` and reject any non-finite component before optimizer update.
-10. Record `L_VSF`, local/global components, scale-field mean/std/range, correlation at GT centers, three route-weight means, `gamma_l` norms, AMP state, batch, and peak CUDA memory.
+1. Apply the official non-Mosaic augmentation pipeline and produce normalized transformed `xywh` GT boxes.
+2. Run the stock backbone and Hybrid Encoder under the configured AMP state.
+3. Validate the three-level shape contract, run VSF-RMR, and cache only the scale field and global scale.
+4. Pass the routed feature list into the unchanged RT-DETR decoder and detection criterion.
+5. Pop the current VSF cache exactly once.
+6. Under disabled autocast, convert valid normalized boxes to FP32 pixel sizes with the actual batch `H_img` and `W_img`.
+7. Build clipped log-scale targets, transform centers to the fixed `grid_sample` convention, and group targets by image.
+8. Compute unreduced `beta=1.0` SmoothL1 values, then image-balanced local and global reductions.
+9. Check the field, local loss, global loss, detection loss, and total loss for finiteness.
+10. Form `L_det + 0.1 L_VSF`, backpropagate, and let the stock trainer perform scaling, clipping, optimizer, EMA, and scheduler steps.
+11. At epoch end, record only `L_local`, `L_global`, scale-field mean/std/range, three derived route-weight means, GT-center scale correlation, three `gamma_l` norms, AMP state, batch, and peak CUDA memory. Full maps and routed features are never written to disk.
 
 The module adds no extra image forward, teacher model, matching pass, or inference post-processing.
 
 ## 14. Ablations and Evaluation
 
-The minimum ablation sequence is:
+Experiments are staged to avoid spending full-run compute before the mechanism is viable.
+
+Stage 1 runs only:
 
 1. Stock RT-DETR-L under the matched no-Mosaic configuration.
-2. Global-only scale routing without the local branch.
-3. Global-local scale routing without `L_VSF`.
-4. Full scale field and ordered routing without residual subtraction, using direct routed addition.
-5. Full VSF-RMR.
+2. Full VSF-RMR.
+
+Only after the full module beats the matched baseline and passes the mechanism diagnostics does Stage 2 run the explanatory ablations:
+
+1. Global-only scale routing without the local branch.
+2. Global-local scale routing without `L_VSF`.
+3. Full scale field and ordered routing without residual subtraction, using direct routed addition.
 
 Report:
 
 - precision, recall, mAP50, and mAP50-95;
-- AP by object-size bins, including a VisDrone-relevant small-object breakdown;
+- AP by object-size bins, including `AP_tiny` for equivalent size below 16 pixels and `AP_small` for equivalent size below 32 pixels at 640 input;
 - parameters, GFLOPs, peak memory, single-image latency, batch latency, and FPS;
 - performance under deterministic image-scale and perspective stress sets;
 - correlation between predicted and GT apparent scale at object centers;
 - routing-weight distributions versus GT size.
 
-The paper must not attribute a gain to viewpoint adaptation unless the scale-field diagnostics and robustness tests support the mechanism.
+The image-scale and perspective stress sets are fixed before examining model results. Scale variants use centered factors `0.75` and `1.25`, followed by padding or center cropping back to `640x640`. Perspective variants use vertical homography coefficients `-5e-4` and `+5e-4`. Boxes receive the identical transform, are clipped to the image, and are retained only when at least 50% of their transformed area remains visible and both sides are at least one pixel. The deterministic script saves the source image ID, transform, retained boxes, and checksum in a manifest. Synthetic perturbations measure controlled robustness; they do not prove recovery of physical flight pose.
+
+Latency is measured on the same GPU, software stack, precision, image set, and power mode for both models. Report batch 1 and training-batch timing after 50 warm-up iterations and 200 measured iterations with CUDA synchronization, including mean, P50, and P95 latency.
+
+The seed-0 method is scientifically successful when the 100-epoch VSF-RMR run improves matched-baseline mAP50-95 by at least 0.5 percentage points, does not reduce `AP_tiny` or `AP_small`, degrades less under the fixed stress sets, and remains within all resource limits. If the mAP50-95 gain is positive but below 0.5 points, repeat baseline and full VSF-RMR with seed 1 and require a positive two-seed mean gain before treating the method as effective. Passing software tests alone proves implementation correctness, not method effectiveness. The paper must not attribute a gain to viewpoint adaptation unless the scale-field diagnostics and robustness tests support the mechanism.
 
 ## 15. TDD and Acceptance
 
 Implementation is eligible for a full 100-epoch run only after tests prove:
 
-1. Output shapes equal the three decoder input shapes.
+1. Valid pyramid shapes pass and any channel or `2x/4x` mismatch fails explicitly.
 2. Zero `gamma_l` gives exact identity outputs.
-3. `L_VSF` gives nonzero first-step gradients to global/local scale heads.
-4. Detection loss gives nonzero first-step gradients to `gamma_l` but zero first-step gradients through the gated residual route.
-5. After a simulated optimizer step moves `gamma_l`, detection gradients reach restoration and routing parameters.
-6. Initial scale-field mean is near 0.95 and not identically 1.
-7. Ordered weights are nonnegative, sum to one, and never mix P3 and P5 directly.
+3. Scale targets use actual batch dimensions, fixed grid coordinates, `align_corners=False`, FP32, and `beta=1.0` SmoothL1.
+4. `L_VSF` gives nonzero first-step gradients to global/local scale heads.
+5. Detection loss gives nonzero first-step gradients to `gamma_l` but zero first-step gradients through the gated residual route.
+6. After a simulated optimizer step moves `gamma_l`, detection gradients reach restoration and routing parameters.
+7. Initial scale-field mean is near 0.95 and not identically 1; ordered weights are nonnegative, sum to one, and never mix P3 and P5 directly.
 8. Conditional P3/P4/P5 self-cancellation holds for block-consistent pure selections.
-9. Images with different object counts but equal mean target error contribute equally to `L_local`.
-10. Empty-GT loss is finite FP32 zero and remains graph-connected.
-11. Training cache exists after forward, clears after `pop_aux()`, and is absent during evaluation; evaluation loss does not attempt to pop it.
-12. Metadata validity broadcasts as `B x 1 x 1 x 1`; a zero-output metadata head can receive a first-step gradient when enabled.
-13. The stock YAML remains unchanged and the custom trainer constructs the custom model.
-14. Decoder input is a three-tensor list and training, validation, prediction, checkpoint save, and checkpoint resume all work.
-15. A real local forward/backward smoke test has finite loss and gradients.
-16. A one-to-three-epoch diagnostic run shows positive scale correlation, non-collapsed routing, and moving `gamma_l` before full training.
+9. Images with different object counts but equal mean target error contribute equally to `L_local`; empty-GT loss is finite FP32 zero and graph-connected.
+10. Training cache exists after forward, clears after `pop_aux()`, and is absent during evaluation; evaluation loss does not attempt to pop it.
+11. The stock YAML remains unchanged, the custom trainer constructs the custom model, and all router parameters appear in the optimizer and EMA.
+12. The custom prediction path preserves official profiling, visualization, embedding, validation, and inference behavior.
+13. Decoder input is a three-tensor list and training, validation, prediction, checkpoint save, and checkpoint resume all work without losing VSF configuration or state.
+14. A real local forward/backward smoke test has finite loss and gradients.
+15. A one-to-three-epoch diagnostic run shows positive scale correlation, non-collapsed routing, and moving `gamma_l` before full training.
 
 Measured acceptance limits are:
 
