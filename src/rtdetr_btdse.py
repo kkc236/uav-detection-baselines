@@ -16,6 +16,9 @@ from src.btd_se_loss import binary_focal_loss
 from src.btd_se_targets import build_auxiliary_targets
 
 
+LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "background_loss", "saliency_loss")
+
+
 def register_btdse_module() -> None:
     """Expose the repository-owned layer to Ultralytics' YAML parser without editing site-packages."""
     ultralytics_tasks.BTDSE = BTDSE
@@ -47,6 +50,7 @@ class BTDSEDetectionModel(RTDETRDetectionModel):
         self.last_auxiliary_losses: dict[str, torch.Tensor] = {}
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
         self.nc = self.yaml["nc"]
+        self.loss_names = LOSS_NAMES
 
     @property
     def btdse(self) -> BTDSE:
@@ -149,5 +153,5 @@ class BTDSETrainer(RTDETRTrainer):
         )
 
     def get_validator(self):
-        self.loss_names = "giou_loss", "cls_loss", "l1_loss", "background_loss", "saliency_loss"
+        self.loss_names = LOSS_NAMES
         return RTDETRValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
