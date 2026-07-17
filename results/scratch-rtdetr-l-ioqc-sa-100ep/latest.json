@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 480608178,
-    "asset_name": "ioqc-sa-last-epoch-0091.pt",
-    "bytes": 263778140,
-    "sha256": "00a497a4575a6ce2a3c957542273a31326d8d05b9b0de20adaf32ac7475193c1"
+    "asset_id": 480620832,
+    "asset_name": "ioqc-sa-last-epoch-0092.pt",
+    "bytes": 263778268,
+    "sha256": "eb621f041d0f02a505a3b01fbc5dee02c2d5422e5ff2a33e3c8fe1b89d4b19ab"
   },
-  "completed_epoch": 91,
-  "published_at": "2026-07-17T17:08:14.934956+00:00",
+  "completed_epoch": 92,
+  "published_at": "2026-07-17T17:20:55.661873+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/ioqc-sa-rtdetr-l-live",
   "run_name": "scratch-rtdetr-l-ioqc-sa-100ep"
 }
