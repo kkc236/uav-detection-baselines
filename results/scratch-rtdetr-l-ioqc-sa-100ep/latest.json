@@ -6,7 +6,7 @@
     "sha256": "d1136d39643796e12fc8b3044d251466342203e25be3a029d71ef628110740d8"
   },
   "completed_epoch": 86,
-  "published_at": "2026-07-17T15:34:39.462133+00:00",
+  "published_at": "2026-07-17T15:35:43.650343+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/ioqc-sa-rtdetr-l-live",
   "run_name": "scratch-rtdetr-l-ioqc-sa-100ep"
 }
