@@ -1,6 +1,6 @@
 task: detect
 mode: train
-model: configs/rtdetr-l-btdse.yaml
+model: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
 data: VisDrone.yaml
 epochs: 100
 time: null
@@ -24,7 +24,7 @@ single_cls: false
 rect: false
 cos_lr: false
 close_mosaic: 10
-resume: false
+resume: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
 amp: true
 fraction: 1.0
 profile: false
@@ -76,7 +76,7 @@ momentum: 0.937
 weight_decay: 0.0005
 warmup_epochs: 3.0
 warmup_momentum: 0.8
-warmup_bias_lr: 0.1
+warmup_bias_lr: 0.0
 distill_model: null
 dis: 6.0
 box: 7.5
@@ -108,4 +108,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: tracktrack.yaml
-save_dir: runs/btdse/scratch-rtdetr-l-btdse-100ep-4090
+save_dir: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090
