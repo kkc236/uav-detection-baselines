@@ -22,13 +22,6 @@ def ordered_scale_weights(scale_field: torch.Tensor) -> tuple[torch.Tensor, torc
     return alpha3, alpha4, alpha5
 
 
-def _group_count(channels: int, requested: int) -> int:
-    for groups in range(min(channels, requested), 0, -1):
-        if channels % groups == 0:
-            return groups
-    return 1
-
-
 class VSFRMR(nn.Module):
     """View-scale-field-guided residual multi-scale routing."""
 
@@ -36,40 +29,26 @@ class VSFRMR(nn.Module):
         self,
         channels: int = 256,
         route_channels: int = 32,
-        norm_groups: int = 32,
     ) -> None:
         super().__init__()
-        if channels <= 0 or route_channels <= 0 or norm_groups <= 0:
-            raise ValueError("channels, route_channels, and norm_groups must be positive")
+        if channels <= 0 or route_channels <= 0:
+            raise ValueError("channels and route_channels must be positive")
 
         self.channels = int(channels)
         self.route_channels = int(route_channels)
-        self.level_norms = nn.ModuleList(
-            nn.GroupNorm(_group_count(channels, norm_groups), channels) for _ in range(3)
-        )
         self.shared_projection = nn.Conv2d(channels, route_channels, kernel_size=1)
 
         fused_channels = route_channels * 3
-        self.global_head = nn.Sequential(
-            nn.Linear(fused_channels, route_channels),
-            nn.SiLU(),
-            nn.Linear(route_channels, 1),
-        )
-        nn.init.zeros_(self.global_head[-1].weight)
-        nn.init.constant_(self.global_head[-1].bias, -0.1)
+        self.global_bias = nn.Parameter(torch.full((1, 1, 1, 1), -0.1))
 
-        self.local_depthwise = nn.Conv2d(
+        self.local_head = nn.Conv2d(
             fused_channels,
-            fused_channels,
+            1,
             kernel_size=3,
             padding=1,
-            groups=fused_channels,
         )
-        self.local_norm = nn.GroupNorm(_group_count(fused_channels, norm_groups), fused_channels)
-        self.local_activation = nn.SiLU()
-        self.local_output = nn.Conv2d(fused_channels, 1, kernel_size=1)
-        nn.init.normal_(self.local_output.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(self.local_output.bias)
+        nn.init.normal_(self.local_head.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.local_head.bias)
 
         self.shared_restore = nn.Conv2d(route_channels, channels, kernel_size=1)
         self.gamma = nn.ParameterList(
@@ -111,36 +90,31 @@ class VSFRMR(nn.Module):
         self._validate(features)
         f3, f4, f5 = features
 
-        routed = [
-            self.shared_projection(normalizer(feature))
-            for normalizer, feature in zip(self.level_norms, (f3, f4, f5))
-        ]
+        routed = [self.shared_projection(feature) for feature in (f3, f4, f5)]
         u3, u4, u5 = routed
         u4_high = F.interpolate(u4, size=u3.shape[-2:], mode="nearest")
         u5_high = F.interpolate(u5, size=u3.shape[-2:], mode="nearest")
         fused = torch.cat((u3, u4_high, u5_high), dim=1)
 
-        pooled = torch.cat([F.adaptive_avg_pool2d(value, 1).flatten(1) for value in routed], dim=1)
-        global_logit = self.global_head(pooled).reshape(-1, 1, 1, 1)
-        local_logit = self.local_output(
-            self.local_activation(self.local_norm(self.local_depthwise(fused)))
-        )
+        local_logit = self.local_head(fused)
+        global_logit = self.global_bias + local_logit.mean(dim=(2, 3), keepdim=True)
         global_scale = 2.0 * torch.sigmoid(global_logit)
-        scale_field = 2.0 * torch.sigmoid(global_logit + local_logit)
+        scale_field = 2.0 * torch.sigmoid(self.global_bias + local_logit)
 
         alpha3, alpha4, alpha5 = ordered_scale_weights(scale_field)
         mixed = alpha3 * u3 + alpha4 * u4_high + alpha5 * u5_high
-        residuals = (
-            mixed - u3,
-            F.avg_pool2d(mixed, kernel_size=2, stride=2) - u4,
-            F.avg_pool2d(mixed, kernel_size=4, stride=4) - u5,
+        high_correction = self.shared_restore(mixed - u3)
+        corrections = (
+            high_correction,
+            F.avg_pool2d(high_correction, kernel_size=2, stride=2),
+            F.avg_pool2d(high_correction, kernel_size=4, stride=4),
         )
-        if not bool(torch.isfinite(scale_field).all()):
+        if self.training and not bool(torch.isfinite(scale_field).all()):
             raise FloatingPointError("NONFINITE_VSF_RMR: scale_field")
 
         outputs = [
-            feature + gamma * self.shared_restore(residual)
-            for feature, gamma, residual in zip((f3, f4, f5), self.gamma, residuals)
+            feature + gamma * correction
+            for feature, gamma, correction in zip((f3, f4, f5), self.gamma, corrections)
         ]
         if self.training:
             self._auxiliary_state = VSFRMRAuxiliaryState(
@@ -148,4 +122,3 @@ class VSFRMR(nn.Module):
                 global_scale=global_scale,
             )
         return outputs
-

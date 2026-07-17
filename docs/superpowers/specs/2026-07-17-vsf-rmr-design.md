@@ -98,13 +98,13 @@ F4: B x 256 x H/2 x W/2
 F5: B x 256 x H/4 x W/4,
 ```
 
-each level has an independent GroupNorm and all levels share one `1x1` projection from 256 to 32 channels:
+all levels share one `1x1` projection from 256 to 32 channels:
 
 ```text
-U_l = SiLU(phi(N_l(F_l))),  l in {3, 4, 5}.
+U_l = phi(F_l),  l in {3, 4, 5}.
 ```
 
-The independent normalizers handle level-specific feature statistics. The shared projection supplies a common coordinate assumption for cross-level addition and subtraction. It does not claim mathematically identical level distributions.
+The Hybrid Encoder already supplies normalized decoder features. Removing additional level-wise normalization avoids latency-heavy unfused kernels. The shared projection supplies a common coordinate assumption for cross-level addition and subtraction. It does not claim mathematically identical level distributions.
 
 P4 and P5 are aligned to P3 with nearest-neighbor upsampling:
 
@@ -118,26 +118,17 @@ Nearest-neighbor upsampling preserves block-constant values so aligned features 
 
 ## 5. Global-Local View Scale Field
 
-### 5.1 Global visual bias
+### 5.1 Global visual prior
 
-The global descriptor and scalar bias are
-
-```text
-z_vis = Concat(GAP(U3), GAP(U4), GAP(U5)) in R^(B x 96)
-b_vis = h_vis(z_vis) in R^(B x 1),
-```
-
-where `h_vis` is:
+The module has one learned scalar prior
 
 ```text
-Linear 96 -> 32
-SiLU
-Linear 32 -> 1
+a0 in R^(1 x 1 x 1 x 1), initialized to -0.1.
 ```
 
-The final weight is initialized to zero and the final bias to `-0.1`, producing an initial global scale value of approximately `2 sigmoid(-0.1) = 0.95`.
+It produces an initial scale value of approximately `2 sigmoid(-0.1) = 0.95`. Image-conditioned global scale is obtained from the spatial mean of the local scale logits rather than a separate micro-MLP, reducing inference kernel launches.
 
-### 5.2 Local scale residual
+### 5.2 Local scale field
 
 The aligned low-dimensional features are concatenated:
 
@@ -145,23 +136,27 @@ The aligned low-dimensional features are concatenated:
 U_cat = Concat(U3_bar, U4_bar, U5_bar) in R^(B x 96 x H x W).
 ```
 
-The local head is:
+The latency-oriented local head is one convolution:
 
 ```text
-3x3 depthwise convolution, 96 channels
-GroupNorm
-SiLU
-1x1 convolution, 96 -> 1
+3x3 convolution, 96 -> 1.
 ```
 
-It predicts `R_v = h_local(U_cat)`. The final `1x1` weight uses `Normal(mean=0, variance=1e-6)`, corresponding to `std=1e-3` in PyTorch, and zero bias. This creates a small spatial variation around the initial global value and avoids placing all pixels exactly on the `V=1` routing knot.
+It predicts `R_v = h_local(U_cat)`. Its weight uses `Normal(mean=0, variance=1e-6)`, corresponding to `std=1e-3` in PyTorch, and zero bias. This creates a small spatial variation around the initial global value without a depthwise-convolution, normalization, activation, and pointwise-convolution micro-pipeline.
+
+The image-level prediction used by global supervision is
+
+```text
+b_vis = a0 + Mean_xy(R_v)
+V_global = 2 sigmoid(b_vis).
+```
 
 ### 5.3 Continuous field
 
 With no metadata, the scale logit and scale field are
 
 ```text
-A_v(x, y) = b_vis + R_v(x, y)
+A_v(x, y) = a0 + R_v(x, y)
 V(x, y) = 2 sigmoid(A_v(x, y)),  V in (0, 2).
 ```
 
@@ -195,18 +190,18 @@ The novelty claim is limited to the combination of a GT-supervised global-local 
 
 ## 7. Residual Cross-Scale Transfer
 
-The residuals at each target level are
+The routed residual is first formed and restored at P3 resolution:
 
 ```text
-Delta3 = M - U3
-Delta4 = AvgPool2(M) - U4
-Delta5 = AvgPool4(M) - U5.
+Delta = M - U3
+T3 = psi(Delta),  psi: 32 -> 256.
 ```
 
-One shared restoration projection `psi: 32 -> 256` maps all residuals back to the decoder channel width:
+The same restored routing residual is then aligned to the lower-resolution decoder levels:
 
 ```text
-T_l = psi(Delta_l).
+T4 = AvgPool2(T3)
+T5 = AvgPool4(T3).
 ```
 
 Each level retains an independent zero-initialized channel scale:
@@ -218,7 +213,7 @@ gamma_l in R^(1 x 256 x 1 x 1), initialized to zero.
 
 Consequently, the initial module is an exact identity mapping for all three decoder inputs.
 
-Self-cancellation is conditional rather than universal. For example, `Delta4=0` only when a corresponding `2x2` P3 region performs spatially consistent pure P4 selection. P5 requires consistent pure P5 selection over the corresponding `4x4` region.
+Self-cancellation occurs when the ordered routed feature equals the native P3 representation, in which case all three transferred residuals are zero. Restoring once and downsampling preserves a shared cross-scale correction while removing two small restoration convolutions from inference.
 
 ## 8. Future Flight-Metadata Extension
 

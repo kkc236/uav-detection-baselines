@@ -18,7 +18,7 @@
 
 - [ ] Add failing tests for three 256-channel inputs, shape validation, scale-field range, ordered adjacent weights, and output shapes.
 - [ ] Run `C:\uav_env\Scripts\python.exe -m pytest tests/test_vsf_rmr.py -q` and confirm import failure.
-- [ ] Implement independent GroupNorm, shared 256-to-32 projection, global and local field heads, and ordered routing weights.
+- [ ] Implement the shared 256-to-32 projection, scalar global prior, single-convolution local field head, and ordered routing weights.
 - [ ] Add failing tests proving zero-initialized `gamma` makes every output exactly equal to its input and that the initial global prior is approximately 0.95.
 - [ ] Implement residual restoration and per-level channel scales.
 - [ ] Add failing tests for train-only cache creation, cache clearing at the next forward, and eval-mode cache suppression.
@@ -97,4 +97,3 @@
 - [ ] Run one real 640-pixel RT-DETR-L forward/backward smoke test with AMP when CUDA is available.
 - [ ] Confirm finite total loss, FP32 VSF losses, nonzero gamma gradients, and no retained cache.
 - [ ] Document local baseline and VSF-RMR commands and the acceptance thresholds.
-

@@ -145,3 +145,11 @@ class VSFRMRTrainer(RTDETRTrainer):
         self.loss_names = LOSS_NAMES
         return RTDETRValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
 
+
+class MatchedBaselineTrainer(RTDETRTrainer):
+    """Stock RT-DETR trainer whose runtime controls remain adjustable after resume."""
+
+    def check_resume(self, overrides):
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)

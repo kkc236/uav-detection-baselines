@@ -7,13 +7,12 @@ import sys
 from pathlib import Path
 
 import torch
-from ultralytics.models.rtdetr.train import RTDETRTrainer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.gpu_adaptive_batch import load_adaptive_state, save_adaptive_state
-from src.rtdetr_vsf_rmr import VSFRMRTrainer
+from src.rtdetr_vsf_rmr import MatchedBaselineTrainer, VSFRMRTrainer
 
 
 EXIT_PLANNED_RESTART = 75
@@ -38,7 +37,7 @@ def run_name_for_variant(variant: str) -> str:
 
 def trainer_class_for_variant(variant: str):
     if variant == "baseline":
-        return RTDETRTrainer
+        return MatchedBaselineTrainer
     if variant == "vsf-rmr":
         return VSFRMRTrainer
     raise ValueError(f"Unknown training variant: {variant}")
@@ -152,8 +151,9 @@ def update_adaptive_state_after_save(trainer, state_path: Path) -> None:
     state.checkpoint = str(Path(trainer.last).resolve())
     state.record_epoch(completed_epoch=int(trainer.epoch) + 1, peak_gib=peak_gib, total_gib=total_gib)
     save_adaptive_state(state_path, state)
+    run_dir = Path(trainer.save_dir).resolve()
+    save_adaptive_state(run_dir / "adaptive_state.json", state)
 
-    history = state_path.parent / "batch_history.jsonl"
     record = {
         "epoch": state.completed_epoch,
         "batch_before": previous_batch,
@@ -162,8 +162,9 @@ def update_adaptive_state_after_save(trainer, state_path: Path) -> None:
         "peak_gib": state.last_peak_gib,
         "event": state.last_event,
     }
-    existing = history.read_text(encoding="utf-8") if history.exists() else ""
-    _atomic_write(history, existing + json.dumps(record, ensure_ascii=True) + "\n")
+    for history in {state_path.parent / "batch_history.jsonl", run_dir / "batch_history.jsonl"}:
+        existing = history.read_text(encoding="utf-8") if history.exists() else ""
+        _atomic_write(history, existing + json.dumps(record, ensure_ascii=True) + "\n")
     if state.current_batch != previous_batch:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -188,4 +189,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

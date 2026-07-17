@@ -99,7 +99,7 @@ class AdaptiveTrainingState:
 
 def batch_policy_for_vram(*, total_gib: float, free_gib: float) -> BatchPolicy:
     if total_gib < 20:
-        raise ValueError(f"IOQC-SA RT-DETR-L server training requires at least 20 GiB VRAM, found {total_gib:.1f}")
+        raise ValueError(f"RT-DETR-L server training requires at least 20 GiB VRAM, found {total_gib:.1f}")
     if total_gib < 27:
         levels, initial = (2, 4, 6, 8), 6
     elif total_gib < 36:

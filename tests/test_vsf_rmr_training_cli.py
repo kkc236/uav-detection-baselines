@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.train_rtdetr_vsf_rmr import (
     ROOT,
@@ -8,8 +9,10 @@ from scripts.train_rtdetr_vsf_rmr import (
     build_settings,
     run_name_for_variant,
     trainer_class_for_variant,
+    update_adaptive_state_after_save,
 )
-from src.rtdetr_vsf_rmr import VSFRMRTrainer
+from src.gpu_adaptive_batch import AdaptiveTrainingState, save_adaptive_state
+from src.rtdetr_vsf_rmr import MatchedBaselineTrainer, VSFRMRTrainer
 from ultralytics.models.rtdetr.train import RTDETRTrainer
 
 
@@ -40,7 +43,8 @@ def test_baseline_and_vsf_use_different_models_but_same_settings():
     baseline_settings = build_settings(baseline_args)
 
     assert trainer_class_for_variant("vsf-rmr") is VSFRMRTrainer
-    assert trainer_class_for_variant("baseline") is RTDETRTrainer
+    assert trainer_class_for_variant("baseline") is MatchedBaselineTrainer
+    assert issubclass(MatchedBaselineTrainer, RTDETRTrainer)
     assert run_name_for_variant("vsf-rmr") != run_name_for_variant("baseline")
     differing = {key for key in vsf_settings if vsf_settings[key] != baseline_settings[key]}
     assert differing == {"name"}
@@ -90,3 +94,23 @@ def test_smoke_mode_changes_only_duration_fraction_and_name():
     assert smoke["epochs"] == 1
     assert smoke["fraction"] == 0.01
 
+
+def test_checkpoint_callback_mirrors_adaptive_state_and_history_into_run_dir(tmp_path: Path):
+    state_path = tmp_path / "state" / "vsf_state.json"
+    run_dir = tmp_path / "runs" / "vsf"
+    weights = run_dir / "weights"
+    weights.mkdir(parents=True)
+    save_adaptive_state(
+        state_path,
+        AdaptiveTrainingState(levels=(1,), current_batch=1),
+    )
+    trainer = SimpleNamespace(
+        last=weights / "last.pt",
+        epoch=0,
+        save_dir=run_dir,
+    )
+
+    update_adaptive_state_after_save(trainer, state_path)
+
+    assert (run_dir / "adaptive_state.json").is_file()
+    assert (run_dir / "batch_history.jsonl").is_file()
