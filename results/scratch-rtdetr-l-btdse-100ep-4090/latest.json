@@ -6,7 +6,7 @@
     "sha256": "091f091c6a8803641b35f7c67eccd492349e8bcd4d13445674cb1bdbd6dbf577"
   },
   "completed_epoch": 72,
-  "published_at": "2026-07-18T20:02:47.991934+00:00",
+  "published_at": "2026-07-18T20:16:58.536430+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/btdse-v2.5-s-4090-live",
   "run_name": "scratch-rtdetr-l-btdse-100ep-4090"
 }
