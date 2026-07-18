@@ -12,7 +12,7 @@ save_period: 1
 cache: false
 device: '0'
 workers: 8
-project: runs/btdse
+project: /root/data/btdse/storage/runs/btdse
 name: scratch-rtdetr-l-btdse-100ep-4090
 exist_ok: true
 pretrained: false
@@ -24,7 +24,7 @@ single_cls: false
 rect: false
 cos_lr: false
 close_mosaic: 10
-resume: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
+resume: /root/data/btdse/storage/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
 amp: true
 fraction: 1.0
 profile: false
