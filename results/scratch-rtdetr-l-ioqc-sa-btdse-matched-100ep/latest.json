@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 481872069,
-    "asset_name": "ioqc-sa-last-epoch-0047.pt",
-    "bytes": 197657740,
-    "sha256": "e0eba8e48f863e2bf707621e3f1c8727d6876a544b86fba294f748e14f89aaee"
+    "asset_id": 481883929,
+    "asset_name": "ioqc-sa-last-epoch-0048.pt",
+    "bytes": 197657932,
+    "sha256": "ec46ac2e140285cbd17da88ed8ad5ed25dca39eba14fff1bf1d5c754bd0bedfc"
   },
-  "completed_epoch": 47,
-  "published_at": "2026-07-18T22:59:18.236505+00:00",
+  "completed_epoch": 48,
+  "published_at": "2026-07-18T23:20:00.125905+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/ioqc-sa-btdse-matched-live",
   "run_name": "scratch-rtdetr-l-ioqc-sa-btdse-matched-100ep"
 }
