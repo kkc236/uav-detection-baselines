@@ -6,7 +6,7 @@
     "sha256": "f5b304f4c10d540ff24e6cd8eb806f064b9f1f3543fc27e759336f0826c363bf"
   },
   "completed_epoch": 1,
-  "published_at": "2026-07-18T04:14:25.225477+00:00",
+  "published_at": "2026-07-18T04:26:46.671130+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/vsf-rmr-rtdetr-l-live",
   "run_name": "scratch-rtdetr-l-vsf-rmr-100ep"
 }
