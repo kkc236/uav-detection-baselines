@@ -19,10 +19,10 @@ def binary_focal_loss(
     if exponent < 0:
         raise ValueError("exponent must be non-negative")
 
-    eps = 1e-4 if probabilities.dtype == torch.float16 else 1e-7
-    probability = probabilities.clamp(min=eps, max=1.0 - eps)
-    positive = -alpha * (1.0 - probability).pow(exponent) * target * probability.log()
-    negative = -(1.0 - alpha) * probability.pow(exponent) * (1.0 - target) * (1.0 - probability).log()
+    probability = probabilities.float().clamp(min=1e-7, max=1.0 - 1e-7)
+    target_float = target.float()
+    positive = -alpha * (1.0 - probability).pow(exponent) * target_float * probability.log()
+    negative = -(1.0 - alpha) * probability.pow(exponent) * (1.0 - target_float) * (1.0 - probability).log()
     loss = positive + negative
 
     if valid_mask is None:
@@ -31,5 +31,5 @@ def binary_focal_loss(
         raise ValueError("valid_mask must have the same shape as probabilities")
     valid = valid_mask.to(dtype=torch.bool)
     if not torch.any(valid):
-        return probabilities.sum() * 0.0
+        return probability.sum() * 0.0
     return loss[valid].mean()

@@ -84,6 +84,19 @@ def test_binary_focal_loss_is_finite_and_respects_valid_mask():
     assert torch.count_nonzero(probabilities.grad[0, 0, 1]).item() == 0
 
 
+def test_binary_focal_loss_keeps_saturated_half_inputs_finite():
+    probabilities = torch.tensor([0.0, 1.0], dtype=torch.float16, requires_grad=True)
+    target = torch.tensor([0.0, 1.0], dtype=torch.float16)
+
+    loss = binary_focal_loss(probabilities, target)
+    loss.backward()
+
+    assert loss.dtype == torch.float32
+    assert torch.isfinite(loss)
+    assert probabilities.grad is not None
+    assert torch.isfinite(probabilities.grad).all()
+
+
 def test_binary_focal_loss_returns_differentiable_zero_when_no_pixels_are_valid():
     probabilities = torch.full((1, 1, 2, 2), 0.5, requires_grad=True)
     target = torch.zeros_like(probabilities)
