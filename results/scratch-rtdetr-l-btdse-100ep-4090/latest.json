@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 481642244,
-    "asset_name": "btdse-last-epoch-0060.pt",
-    "bytes": 224143983,
-    "sha256": "6546c33988813b7f6ecc6ebdaea4f0b43e2fd8f05a84586e71be8bd70dbded14"
+    "asset_id": 481653286,
+    "asset_name": "btdse-last-epoch-0061.pt",
+    "bytes": 224144239,
+    "sha256": "2ab1de3d1bfeeebd84b6078dacdb7a0be2e7290e822e32b928660e75c325123c"
   },
-  "completed_epoch": 60,
-  "published_at": "2026-07-18T16:59:27.902747+00:00",
+  "completed_epoch": 61,
+  "published_at": "2026-07-18T17:15:11.789602+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/btdse-v2.5-s-4090-live",
   "run_name": "scratch-rtdetr-l-btdse-100ep-4090"
 }
