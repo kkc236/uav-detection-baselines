@@ -16,6 +16,19 @@ from src.rtdetr_vsf_rmr import MatchedBaselineTrainer, VSFRMRTrainer
 
 
 EXIT_PLANNED_RESTART = 75
+FROZEN_PROTOCOL = {
+    "model": "rtdetr-l.yaml",
+    "epochs": 100,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "save_period": 1,
+    "optimizer": "auto",
+    "lr0": 0.01,
+    "momentum": 0.937,
+    "fraction": 1.0,
+    "amp": True,
+}
 
 
 def parse_bool(value: str) -> bool:
@@ -47,19 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train the matched RT-DETR-L baseline or standalone VSF-RMR.")
     parser.add_argument("--variant", choices=("baseline", "vsf-rmr"), default="vsf-rmr")
     parser.add_argument("--model", default="rtdetr-l.yaml")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--batch", type=int, default=1)
-    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=FROZEN_PROTOCOL["epochs"])
+    parser.add_argument("--imgsz", type=int, default=FROZEN_PROTOCOL["imgsz"])
+    parser.add_argument("--batch", type=int, default=FROZEN_PROTOCOL["batch"])
+    parser.add_argument("--workers", type=int, default=FROZEN_PROTOCOL["workers"])
     parser.add_argument("--device", default="0")
-    parser.add_argument("--save-period", type=int, default=1)
-    parser.add_argument("--optimizer", default="AdamW")
-    parser.add_argument("--lr0", type=float, default=0.000714)
-    parser.add_argument("--momentum", type=float, default=0.9)
-    parser.add_argument("--fraction", type=float, default=1.0)
+    parser.add_argument("--save-period", type=int, default=FROZEN_PROTOCOL["save_period"])
+    parser.add_argument("--optimizer", default=FROZEN_PROTOCOL["optimizer"])
+    parser.add_argument("--lr0", type=float, default=FROZEN_PROTOCOL["lr0"])
+    parser.add_argument("--momentum", type=float, default=FROZEN_PROTOCOL["momentum"])
+    parser.add_argument("--fraction", type=float, default=FROZEN_PROTOCOL["fraction"])
     parser.add_argument("--name")
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "vsf-rmr")
-    parser.add_argument("--amp", type=parse_bool, default=True)
+    parser.add_argument("--amp", type=parse_bool, default=FROZEN_PROTOCOL["amp"])
+    parser.add_argument("--fixed-protocol", action="store_true")
     parser.add_argument("--lambda-vsf", type=float, default=0.1)
     parser.add_argument("--resume", help="Resume from a validated last.pt or epochN.pt checkpoint.")
     parser.add_argument("--state", type=Path, help="Adaptive supervisor state updated after model saves.")
@@ -68,6 +82,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_settings(args: argparse.Namespace) -> dict:
+    actual = {
+        "model": args.model,
+        "epochs": args.epochs,
+        "imgsz": args.imgsz,
+        "batch": args.batch,
+        "workers": args.workers,
+        "save_period": args.save_period,
+        "optimizer": args.optimizer,
+        "lr0": args.lr0,
+        "momentum": args.momentum,
+        "fraction": args.fraction,
+        "amp": args.amp,
+    }
+    drift = {key: (actual[key], expected) for key, expected in FROZEN_PROTOCOL.items() if actual[key] != expected}
+    if drift:
+        raise ValueError(f"Arguments violate the frozen matched protocol: {drift}")
+
     name = args.name or run_name_for_variant(args.variant)
     settings = {
         "model": args.model,
@@ -93,12 +124,16 @@ def build_settings(args: argparse.Namespace) -> dict:
         "save_period": args.save_period,
         "optimizer": args.optimizer,
         "lr0": args.lr0,
+        "lrf": 0.01,
         "momentum": args.momentum,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3.0,
         "plots": True,
         "val": True,
-        "mosaic": 0.0,
+        "mosaic": 1.0,
         "mixup": 0.0,
         "scale": 0.5,
+        "translate": 0.1,
         "perspective": 0.0,
     }
     if args.resume:

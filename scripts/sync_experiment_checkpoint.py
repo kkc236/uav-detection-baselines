@@ -132,10 +132,14 @@ def ensure_results_checkout(
     _run(["git", "config", "user.name", "uav-training-bot"], cwd=results_repo)
     _run(["git", "config", "user.email", "uav-training-bot@users.noreply.github.com"], cwd=results_repo)
 
-    if _run(["git", "branch", "--list", branch], cwd=results_repo).stdout.strip():
-        _run(["git", "switch", branch], cwd=results_repo)
-        return environment
+    local_branch = _run(["git", "branch", "--list", branch], cwd=results_repo).stdout.strip()
     remote = _run(["git", "ls-remote", "--heads", "origin", branch], cwd=results_repo, env=environment).stdout
+    if local_branch:
+        _run(["git", "switch", branch], cwd=results_repo)
+        if remote.strip():
+            _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+            _run(["git", "rebase", "FETCH_HEAD"], cwd=results_repo)
+        return environment
     if remote.strip():
         _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
         _run(["git", "switch", "-c", branch, "FETCH_HEAD"], cwd=results_repo)
@@ -342,4 +346,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

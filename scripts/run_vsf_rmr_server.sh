@@ -11,13 +11,13 @@ LOG_DIR="${LOG_DIR:-$STORAGE_ROOT/logs/$VARIANT}"
 TOKEN_FILE="${TOKEN_FILE:-$STORAGE_ROOT/secrets/github_token}"
 RESULTS_REPO="${RESULTS_REPO:-$STORAGE_ROOT/results-checkout}"
 EPOCHS="${EPOCHS:-100}"
-WORKERS="${WORKERS:-8}"
-INITIAL_BATCH="${INITIAL_BATCH:-}"
-BATCH_LEVELS="${BATCH_LEVELS:-}"
+WORKERS="8"
+INITIAL_BATCH="8"
+BATCH_LEVELS="8"
 SAVE_PERIOD="${SAVE_PERIOD:-1}"
-OPTIMIZER="${OPTIMIZER:-AdamW}"
-LR0="${LR0:-0.000714}"
-MOMENTUM="${MOMENTUM:-0.9}"
+OPTIMIZER="auto"
+LR0="0.01"
+MOMENTUM="0.937"
 MIN_FREE_GIB="${MIN_FREE_GIB:-8}"
 ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"
 AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"
@@ -43,9 +43,8 @@ case "$VARIANT" in
     ;;
 esac
 
-if [[ -z "${DEVICE:-}" ]]; then
-  DEVICE="$(nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd, -)"
-fi
+DEVICE="${DEVICE:-0}"
+[[ "$DEVICE" != *,* ]] || { printf 'The matched protocol requires one GPU.\n' >&2; exit 2; }
 
 STATE_KEY="${VARIANT//-/_}"
 RUN_DIR="$PROJECT_DIR/$RUN_NAME"
@@ -133,6 +132,7 @@ supervisor_arguments=(
   --lr0 "$LR0"
   --momentum "$MOMENTUM"
   --min-free-gib "$MIN_FREE_GIB"
+  --fixed-protocol
 )
 if [[ -n "$INITIAL_BATCH" ]]; then
   supervisor_arguments+=(--initial-batch "$INITIAL_BATCH")
@@ -187,4 +187,3 @@ if [[ "$AUTO_SHUTDOWN" == "1" ]]; then
     printf 'Automatic shutdown skipped because GitHub synchronization is disabled.\n' >&2
   fi
 fi
-

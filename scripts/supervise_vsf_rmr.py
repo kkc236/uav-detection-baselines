@@ -100,6 +100,10 @@ def classify_child_exit(returncode: int, output: str) -> str:
     return "failure"
 
 
+def fixed_protocol_stop_code(result: str) -> int | None:
+    return {"oom": 4, "numeric_failure": 5}.get(result)
+
+
 def build_child_command(
     *,
     python_executable: str,
@@ -117,6 +121,7 @@ def build_child_command(
     lr0: float,
     momentum: float,
     resume: Path | None,
+    fixed_protocol: bool,
 ) -> list[str]:
     command = [
         python_executable,
@@ -148,6 +153,8 @@ def build_child_command(
         "--amp",
         str(amp_enabled).lower(),
     ]
+    if fixed_protocol:
+        command.append("--fixed-protocol")
     if resume is not None:
         command.extend(("--resume", str(resume)))
     return command
@@ -248,18 +255,26 @@ def run_supervisor(args: argparse.Namespace) -> int:
 
     if state_path.exists():
         state = load_adaptive_state(state_path)
+        if args.fixed_protocol and (state.levels != (8,) or state.current_batch != 8 or not state.amp_enabled):
+            raise ValueError("Existing state violates fixed protocol batch=8 and AMP=True")
         if args.batch_levels is not None:
             if state.current_batch not in args.batch_levels:
                 raise ValueError(f"Current batch {state.current_batch} is not in ladder {args.batch_levels}")
             state.levels = args.batch_levels
             save_adaptive_state(state_path, state)
     else:
-        policy = scale_batch_policy(
-            batch_policy_for_vram(total_gib=profile.total_gib, free_gib=profile.free_gib),
-            world_size=len(devices),
-        )
-        levels = args.batch_levels or policy.levels
-        initial = args.initial_batch or (policy.initial_batch if policy.initial_batch in levels else levels[0])
+        if args.fixed_protocol:
+            if args.batch_levels not in {None, (8,)} or args.initial_batch not in {None, 8}:
+                raise ValueError("Fixed protocol requires initial batch and batch levels to remain 8")
+            levels = (8,)
+            initial = 8
+        else:
+            policy = scale_batch_policy(
+                batch_policy_for_vram(total_gib=profile.total_gib, free_gib=profile.free_gib),
+                world_size=len(devices),
+            )
+            levels = args.batch_levels or policy.levels
+            initial = args.initial_batch or (policy.initial_batch if policy.initial_batch in levels else levels[0])
         if initial not in levels:
             raise ValueError(f"Initial batch {initial} is not in ladder {levels}")
         state = AdaptiveTrainingState(levels=levels, current_batch=initial)
@@ -294,6 +309,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 lr0=args.lr0,
                 momentum=args.momentum,
                 resume=resume,
+                fixed_protocol=args.fixed_protocol,
             )
             args.log.parent.mkdir(parents=True, exist_ok=True)
             offset = args.log.stat().st_size if args.log.exists() else 0
@@ -342,6 +358,15 @@ def run_supervisor(args: argparse.Namespace) -> int:
 
             state = load_adaptive_state(state_path)
             result = classify_child_exit(child.returncode, _read_log_segment(args.log, offset))
+            fixed_stop = fixed_protocol_stop_code(result) if args.fixed_protocol else None
+            if fixed_stop is not None:
+                state.last_event = f"{result}_fixed_protocol_stop"
+                save_adaptive_state(state_path, state)
+                _atomic_json(
+                    args.status,
+                    _status(state, variant=args.variant, process_state=state.last_event, returncode=child.returncode),
+                )
+                return fixed_stop
             if result == "oom":
                 state.record_oom()
             elif result == "numeric_failure":
@@ -381,14 +406,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="0")
     parser.add_argument("--save-period", type=int, default=1)
-    parser.add_argument("--optimizer", default="AdamW")
-    parser.add_argument("--lr0", type=float, default=0.000714)
-    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--optimizer", default="auto")
+    parser.add_argument("--lr0", type=float, default=0.01)
+    parser.add_argument("--momentum", type=float, default=0.937)
     parser.add_argument("--initial-batch", type=int)
     parser.add_argument("--batch-levels", type=parse_batch_levels)
     parser.add_argument("--min-free-gib", type=float, default=8.0)
     parser.add_argument("--restart-delay", type=int, default=30)
     parser.add_argument("--max-unexpected-failures", type=int, default=3)
+    parser.add_argument("--fixed-protocol", action="store_true")
     return parser
 
 
@@ -398,4 +424,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

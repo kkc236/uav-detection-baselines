@@ -11,6 +11,7 @@ from scripts.supervise_vsf_rmr import (
     build_child_command,
     build_child_environment,
     classify_child_exit,
+    fixed_protocol_stop_code,
     parse_batch_levels,
     parse_device_indices,
     select_resume_checkpoint,
@@ -41,23 +42,31 @@ def test_child_command_carries_variant_batch_amp_and_resume(tmp_path: Path, vari
         state_path=tmp_path / "state.json",
         variant=variant,
         batch=8,
-        amp_enabled=False,
+        amp_enabled=True,
         epochs=100,
         workers=8,
         device="0,1",
         save_period=1,
-        optimizer="AdamW",
-        lr0=0.000714,
-        momentum=0.9,
+        optimizer="auto",
+        lr0=0.01,
+        momentum=0.937,
         resume=tmp_path / "last.pt",
+        fixed_protocol=True,
     )
 
     assert Path(command[1]).name == "train_rtdetr_vsf_rmr.py"
     assert command[command.index("--variant") + 1] == variant
     assert command[command.index("--batch") + 1] == "8"
-    assert command[command.index("--amp") + 1] == "false"
+    assert command[command.index("--amp") + 1] == "true"
     assert command[command.index("--device") + 1] == "0,1"
     assert command[command.index("--resume") + 1].endswith("last.pt")
+    assert "--fixed-protocol" in command
+
+
+def test_fixed_protocol_stops_instead_of_changing_batch_or_amp():
+    assert fixed_protocol_stop_code("oom") == 4
+    assert fixed_protocol_stop_code("numeric_failure") == 5
+    assert fixed_protocol_stop_code("failure") is None
 
 
 def test_variants_have_disjoint_run_and_release_identities():
@@ -101,4 +110,3 @@ def test_resume_selection_falls_back_from_corrupt_last_to_latest_epoch(tmp_path:
     _save_checkpoint(weights / "epoch7.pt", 7)
 
     assert select_resume_checkpoint(tmp_path) == (weights / "epoch7.pt").resolve()
-

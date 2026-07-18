@@ -7,6 +7,8 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-$STORAGE_ROOT/venv}"
 TOKEN_FILE="${TOKEN_FILE:-$STORAGE_ROOT/secrets/github_token}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-30}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 
 command -v nvidia-smi >/dev/null || { printf 'nvidia-smi is required.\n' >&2; exit 1; }
 command -v git >/dev/null || { printf 'git is required.\n' >&2; exit 1; }
@@ -25,21 +27,25 @@ fi
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
-"$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
+export PIP_INDEX_URL="$PYPI_INDEX_URL"
+export PIP_TRUSTED_HOST
+"$VENV_DIR/bin/python" -m pip install --index-url "$PYPI_INDEX_URL" --upgrade pip wheel setuptools
 gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader -i 0 | head -n 1)
 case "$gpu_name" in
   *5090*)
     "$VENV_DIR/bin/python" -m pip install \
-      torch==2.7.1 torchvision==0.22.1 \
-      --index-url https://download.pytorch.org/whl/cu128
+      torch==2.7.1+cu128 torchvision==0.22.1+cu128 \
+      --index-url https://download.pytorch.org/whl/cu128 \
+      --extra-index-url "$PYPI_INDEX_URL"
     ;;
   *)
     "$VENV_DIR/bin/python" -m pip install \
-      torch==2.5.1 torchvision==0.20.1 \
-      --index-url https://download.pytorch.org/whl/cu121
+      torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
+      --index-url https://download.pytorch.org/whl/cu121 \
+      --extra-index-url "$PYPI_INDEX_URL"
     ;;
 esac
-"$VENV_DIR/bin/python" -m pip install -r "$REPO_DIR/requirements.txt"
+"$VENV_DIR/bin/python" -m pip install --index-url "$PYPI_INDEX_URL" -r "$REPO_DIR/requirements.txt"
 
 "$VENV_DIR/bin/python" - <<PY
 from ultralytics import settings
@@ -72,4 +78,3 @@ chmod 600 "$TOKEN_FILE"
 
 printf '\nSetup complete. Put a fine-grained GitHub token in:\n  %s\n' "$TOKEN_FILE"
 printf 'The token needs Contents read/write access only to kkc236/uav-detection-baselines.\n'
-

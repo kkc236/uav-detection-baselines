@@ -19,6 +19,8 @@ def test_setup_uses_persistent_storage_and_supported_torch_wheels():
     assert "torch==2.5.1" in content
     assert "torch==2.7.1" in content
     assert "https://download.pytorch.org/whl/cu128" in content
+    assert "https://pypi.tuna.tsinghua.edu.cn/simple" in content
+    assert '--extra-index-url "$PYPI_INDEX_URL"' in content
     assert "*5090*" in content
     assert "chmod 600" in content
     assert "github_pat_" not in content
@@ -40,6 +42,12 @@ def test_run_script_separates_variants_and_protects_final_shutdown():
     assert 'ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"' in content
     assert "published=1" in content
     assert "shutdown -h now" in content
+    assert 'INITIAL_BATCH="8"' in content
+    assert 'BATCH_LEVELS="8"' in content
+    assert 'OPTIMIZER="auto"' in content
+    assert 'LR0="0.01"' in content
+    assert 'MOMENTUM="0.937"' in content
+    assert "--fixed-protocol" in content
 
 
 def test_run_script_keeps_mutable_data_outside_git_checkout():
@@ -52,10 +60,17 @@ def test_run_script_keeps_mutable_data_outside_git_checkout():
     assert 'STATE_FILE="$STORAGE_ROOT/state/${STATE_KEY}_adaptive_state.json"' in content
 
 
+def test_result_sync_rebases_concurrent_training_results_before_push():
+    content = script("sync_experiment_checkpoint.py")
+
+    assert '["git", "fetch", "origin", branch]' in content
+    assert '["git", "rebase", "FETCH_HEAD"]' in content
+    assert '["git", "push", "origin", f"HEAD:{branch}"]' in content
+
+
 def test_shell_scripts_use_strict_mode_and_have_no_embedded_secret():
     for name in ("setup_vsf_rmr_server.sh", "run_vsf_rmr_server.sh"):
         content = script(name)
         assert "set -euo pipefail" in content
         assert "GxpHy" not in content
         assert "fyZZ" not in content
-
