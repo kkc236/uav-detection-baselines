@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 481795555,
-    "asset_name": "vsf-rmr-last-epoch-0041.pt",
-    "bytes": 197775153,
-    "sha256": "11ce300cbeb266e9e41114daa2976a719d8347841f2aef0fe442135d16b57a60"
+    "asset_id": 481804033,
+    "asset_name": "vsf-rmr-last-epoch-0042.pt",
+    "bytes": 197775345,
+    "sha256": "ffd74b75fe6731bc83de1fcbd63f3019b135481a75c56e01f21ffbb6e473be37"
   },
-  "completed_epoch": 41,
-  "published_at": "2026-07-18T20:59:13.038542+00:00",
+  "completed_epoch": 42,
+  "published_at": "2026-07-18T21:12:59.641881+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/vsf-rmr-rtdetr-l-live",
   "run_name": "scratch-rtdetr-l-vsf-rmr-100ep"
 }
