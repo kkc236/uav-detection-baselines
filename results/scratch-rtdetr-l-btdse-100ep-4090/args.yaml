@@ -1,6 +1,6 @@
 task: detect
 mode: train
-model: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
+model: /root/data/btdse/storage/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090/weights/last.pt
 data: VisDrone.yaml
 epochs: 100
 time: null
@@ -12,7 +12,7 @@ save_period: 1
 cache: false
 device: '0'
 workers: 8
-project: /root/data/btdse/storage/runs/btdse
+project: runs/btdse
 name: scratch-rtdetr-l-btdse-100ep-4090
 exist_ok: true
 pretrained: false
@@ -108,4 +108,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: tracktrack.yaml
-save_dir: /root/uav-detection-baselines/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090
+save_dir: /root/data/btdse/storage/runs/btdse/scratch-rtdetr-l-btdse-100ep-4090
