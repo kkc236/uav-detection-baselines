@@ -8,6 +8,31 @@
 
 GitHub checkpoint Release：<https://github.com/kkc236/uav-detection-baselines/releases/tag/rtdetr-l-btdse-matched-baseline-live>
 
+## 0. 两个脚本分别做什么
+
+| 脚本 | 运行时机 | 主要作用 | 是否开始训练 |
+| --- | --- | --- | --- |
+| `scripts/setup_matched_baseline_server.sh` | 首次部署只运行一次 | 检查磁盘和GPU、创建虚拟环境、安装PyTorch及项目依赖、下载并转换VisDrone、创建持久化目录 | 否 |
+| `scripts/run_matched_baseline_server.sh` | 首次启动、异常恢复或服务器重启后运行 | 按固定协议启动/恢复RT-DETR-L训练、守护训练进程、每轮同步checkpoint和指标到GitHub | 是 |
+
+先运行安装脚本，再运行训练脚本。首次安装完成后，以后恢复训练不再运行安装脚本，只重新执行第6节的训练启动命令。
+
+### 完整执行顺序
+
+1. 选择服务器持久化数据盘，并确认剩余空间不少于100GB。
+2. 检查GPU和磁盘，将Ubuntu APT与普通PyPI切换到清华源。
+3. 从GitHub克隆 `codex/matched-baseline` 分支。
+4. 运行一次 `setup_matched_baseline_server.sh`，完成环境和VisDrone数据准备。
+5. 创建GitHub fine-grained token并写入权限为600的独立文件。
+6. 使用 `nohup` 启动 `run_matched_baseline_server.sh`。
+7. 核对batch、AMP、优化器和预训练设置，确认实验协议没有变化。
+8. 查看训练日志、GPU状态、指标文件和GitHub同步状态。
+9. SSH断开后无需操作；训练、下载和上传均继续使用服务器资源。
+10. 训练完成后核验100轮结果，并从服务器或GitHub取回结果。
+11. 若更换服务器，重新完成环境准备并从GitHub恢复最新checkpoint，然后执行训练启动命令。
+
+后续章节给出上述每一步的完整命令。
+
 ## 1. 固定实验协议
 
 baseline只使用原始 `rtdetr-l.yaml`，不包含BTD-SE、IOQC-SA或VSF-RMR。
@@ -62,9 +87,18 @@ df -h
 先备份APT配置，然后替换Ubuntu官方软件源。云平台自带的NVIDIA/CUDA专用源不会被修改。
 
 ```bash
+if [[ $EUID -eq 0 ]]; then
+  SUDO=""
+elif command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+else
+  echo "需要root权限或sudo才能安装系统依赖" >&2
+  exit 1
+fi
+
 if [[ -f /etc/apt/sources.list ]]; then
-  sudo cp -a /etc/apt/sources.list /etc/apt/sources.list.before-tuna
-  sudo sed -i \
+  $SUDO cp -a /etc/apt/sources.list /etc/apt/sources.list.before-tuna
+  $SUDO sed -i \
     -e 's|https\?://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
     -e 's|https\?://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
     -e 's|https\?://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
@@ -72,17 +106,17 @@ if [[ -f /etc/apt/sources.list ]]; then
 fi
 
 if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-  sudo cp -a /etc/apt/sources.list.d/ubuntu.sources \
+  $SUDO cp -a /etc/apt/sources.list.d/ubuntu.sources \
     /etc/apt/sources.list.d/ubuntu.sources.before-tuna
-  sudo sed -i \
+  $SUDO sed -i \
     -e 's|https\?://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
     -e 's|https\?://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
     -e 's|https\?://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
     /etc/apt/sources.list.d/ubuntu.sources
 fi
 
-sudo apt-get update
-sudo apt-get install -y git python3 python3-venv curl
+$SUDO apt-get update
+$SUDO apt-get install -y git python3 python3-venv curl
 ```
 
 确认Ubuntu源已经指向清华：
@@ -117,8 +151,14 @@ export REPO_DIR=$WORK_ROOT/repo
 export STORAGE_ROOT=$WORK_ROOT/storage
 
 mkdir -p "$WORK_ROOT"
-git clone --branch codex/matched-baseline --single-branch \
-  https://github.com/kkc236/uav-detection-baselines.git "$REPO_DIR"
+if [[ -d "$REPO_DIR/.git" ]]; then
+  git -C "$REPO_DIR" fetch origin codex/matched-baseline
+  git -C "$REPO_DIR" checkout codex/matched-baseline
+  git -C "$REPO_DIR" pull --ff-only origin codex/matched-baseline
+else
+  git clone --branch codex/matched-baseline --single-branch \
+    https://github.com/kkc236/uav-detection-baselines.git "$REPO_DIR"
+fi
 
 cd "$REPO_DIR"
 git branch --show-current
@@ -130,6 +170,23 @@ git log -1 --oneline
 ```text
 codex/matched-baseline
 ```
+
+### 3.1 交给Codex或Claude Code执行
+
+将本MD文件交给Codex或Claude Code后，附上服务器SSH连接信息和GitHub Token的安全存放位置，再发送下面这段任务：
+
+```text
+严格按照这份BASELINE.md完成部署并立即开始训练，不要反复向我确认。
+自动识别服务器持久化数据盘，并依次执行环境检查、清华源配置、仓库克隆、
+环境和VisDrone准备、GitHub checkpoint同步配置、后台训练启动及启动核验。
+必须保持文档中的固定实验协议，不得修改batch、AMP、优化器、学习率、seed、
+预训练设置或数据增强参数。启动后确认训练进程和GPU占用正常，核对
+batch=8、AMP=True、pretrained=False及MuSGD，然后返回训练日志路径、
+当前epoch和GitHub同步状态。遇到普通外部中断时从完整checkpoint恢复；
+遇到OOM、NaN或Inf时停止并报告，不得擅自降低batch或关闭AMP。
+```
+
+Codex或Claude Code应继续执行第4至第8节，而不是只复述命令。Token不得写入代码、Git URL、日志、提示词或Git提交，只能通过服务器上的 `$STORAGE_ROOT/secrets/github_token` 文件提供。
 
 ## 4. 自动配置环境和数据集
 
@@ -336,6 +393,44 @@ cat "$STORAGE_ROOT/logs/matched_baseline_github_sync.json"
 - 不加载预训练权重。
 - `last.pt`记录第100轮完成状态并可读取。
 - GitHub最终checkpoint及SHA256清单上传成功。
+
+### 13.1 从服务器取回全部结果
+
+在服务器打包完整实验目录：
+
+```bash
+export RUN_DIR=$STORAGE_ROOT/runs/matched-baseline/scratch-rtdetr-l-btdse-matched-baseline-100ep
+export RESULT_ARCHIVE=$WORK_ROOT/matched-baseline-results.tar.gz
+
+tar -czf "$RESULT_ARCHIVE" -C "$RUN_DIR" results.csv args.yaml weights
+sha256sum "$RESULT_ARCHIVE"
+ls -lh "$RESULT_ARCHIVE"
+```
+
+在本地PowerShell下载，替换实际SSH端口、地址和服务器文件路径：
+
+```powershell
+scp -P <SSH端口> root@<服务器地址>:<RESULT_ARCHIVE完整路径> .
+```
+
+下载后保留服务器输出的SHA256值，用于确认本地文件完整。
+
+### 13.2 从GitHub取回checkpoint和指标
+
+从GitHub取回checkpoint有两种方式：
+
+1. 打开文档顶部的GitHub checkpoint Release，下载最新的 `matched-baseline-last-epoch-XXXX.pt` 及对应SHA256清单。
+2. 在新服务器按第11节执行 `restore_vsf_rmr_checkpoint.py`，自动选择、下载并校验最新checkpoint。
+
+轻量指标、参数和同步状态保存在 `training-results` 分支，可单独克隆：
+
+```bash
+git clone --branch training-results --single-branch \
+  https://github.com/kkc236/uav-detection-baselines.git \
+  matched-baseline-training-results
+```
+
+GitHub保存的是换服务器续训所需的滚动checkpoint和轻量结果；服务器持久化盘上的实验目录仍是完整主副本。
 
 ## 14. 论文使用方式
 
