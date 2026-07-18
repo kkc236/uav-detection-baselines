@@ -1,2 +1,3 @@
 {"epoch": 1, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 11.126749038696289, "event": "stable"}
 {"epoch": 2, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 12.526113033294678, "event": "stable"}
+{"epoch": 3, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 10.028623580932617, "event": "promote"}
