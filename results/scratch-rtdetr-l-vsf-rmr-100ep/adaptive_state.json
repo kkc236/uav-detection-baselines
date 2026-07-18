@@ -1,0 +1,19 @@
+{
+  "amp_enabled": false,
+  "checkpoint": "/root/data/vsf-rmr/storage/runs/vsf-rmr/scratch-rtdetr-l-vsf-rmr-100ep/weights/last.pt",
+  "completed_epoch": 1,
+  "cooldown_remaining": 4,
+  "current_batch": 4,
+  "last_event": "cooldown",
+  "last_peak_gib": 9.6685209274292,
+  "levels": [
+    2,
+    4,
+    6,
+    8
+  ],
+  "numeric_failure_count": 1,
+  "oom_count": 0,
+  "stable_epochs": 0,
+  "unexpected_failures": 0
+}
