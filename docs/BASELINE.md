@@ -57,12 +57,55 @@ nvidia-smi
 df -h
 ```
 
-安装基础工具：
+### 2.1 将Ubuntu APT切换为清华TUNA
+
+先备份APT配置，然后替换Ubuntu官方软件源。云平台自带的NVIDIA/CUDA专用源不会被修改。
 
 ```bash
+if [[ -f /etc/apt/sources.list ]]; then
+  sudo cp -a /etc/apt/sources.list /etc/apt/sources.list.before-tuna
+  sudo sed -i \
+    -e 's|https\?://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    -e 's|https\?://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    -e 's|https\?://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+    /etc/apt/sources.list
+fi
+
+if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+  sudo cp -a /etc/apt/sources.list.d/ubuntu.sources \
+    /etc/apt/sources.list.d/ubuntu.sources.before-tuna
+  sudo sed -i \
+    -e 's|https\?://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    -e 's|https\?://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    -e 's|https\?://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+    /etc/apt/sources.list.d/ubuntu.sources
+fi
+
 sudo apt-get update
 sudo apt-get install -y git python3 python3-venv curl
 ```
+
+确认Ubuntu源已经指向清华：
+
+```bash
+grep -R "mirrors.tuna.tsinghua.edu.cn" \
+  /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null
+```
+
+### 2.2 下载源使用边界
+
+以下可替换内容均使用清华源：
+
+- Ubuntu系统包：`https://mirrors.tuna.tsinghua.edu.cn/ubuntu`
+- Python普通依赖：`https://pypi.tuna.tsinghua.edu.cn/simple`
+
+以下内容保留官方地址：
+
+- PyTorch CUDA轮子必须从 `download.pytorch.org` 获取精确的 `+cu121` 或 `+cu128` 构建；依赖包仍由清华PyPI补充。
+- GitHub仓库和GitHub Release没有清华官方的任意仓库镜像。
+- VisDrone数据压缩包没有清华官方镜像，下载脚本继续使用Ultralytics资源地址并支持断点续传。
+
+不要使用来源不明的GitHub代理替换代码和checkpoint下载，否则无法保证文件完整性。
 
 ## 3. 克隆专用分支
 
@@ -94,15 +137,16 @@ codex/matched-baseline
 cd "$REPO_DIR"
 
 STORAGE_ROOT="$STORAGE_ROOT" REPO_DIR="$REPO_DIR" \
+  PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
   bash scripts/setup_matched_baseline_server.sh
 ```
 
 脚本会自动完成：
 
 - 创建独立Python虚拟环境。
-- 4090等GPU安装PyTorch 2.5.1+cu121。
-- 5090安装PyTorch 2.7.1+cu128并检查 `sm_120`。
-- 安装Ultralytics 8.4.90及项目依赖。
+- 4090等GPU从PyTorch官方CUDA仓库安装PyTorch 2.5.1+cu121。
+- 5090从PyTorch官方CUDA仓库安装PyTorch 2.7.1+cu128并检查 `sm_120`。
+- 从清华PyPI安装Ultralytics 8.4.90及其他项目依赖。
 - 下载并转换VisDrone train/val数据集。
 - 创建runs、logs、secrets和GitHub同步目录。
 

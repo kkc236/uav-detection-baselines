@@ -41,6 +41,27 @@ def test_setup_script_creates_persistent_baseline_storage():
     assert "scripts/prepare_visdrone.py" in content
 
 
+def test_setup_uses_tsinghua_for_every_supported_package_source():
+    content = (ROOT / "scripts" / "setup_matched_baseline_server.sh").read_text(encoding="utf-8")
+
+    assert 'PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"' in content
+    assert 'PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"' in content
+    assert 'pip install --index-url "$PYPI_INDEX_URL"' in content
+    assert 'pip install --index-url "$PYPI_INDEX_URL" -r "$REPO_DIR/requirements.txt"' in content
+    assert "https://download.pytorch.org/whl/cu121" in content
+    assert "https://download.pytorch.org/whl/cu128" in content
+
+
+def test_server_guide_uses_tsinghua_apt_and_pypi_with_documented_exceptions():
+    content = (ROOT / "docs" / "BASELINE.md").read_text(encoding="utf-8")
+
+    assert "https://mirrors.tuna.tsinghua.edu.cn/ubuntu" in content
+    assert "https://pypi.tuna.tsinghua.edu.cn/simple" in content
+    assert "PyTorch CUDA轮子" in content
+    assert "GitHub仓库" in content
+    assert "VisDrone数据压缩包" in content
+
+
 def test_server_guide_is_complete_and_uses_real_scripts():
     content = (ROOT / "docs" / "BASELINE.md").read_text(encoding="utf-8")
 
