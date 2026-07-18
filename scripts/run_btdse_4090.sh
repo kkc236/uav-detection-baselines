@@ -11,7 +11,6 @@ RUN_DIR="$PROJECT_DIR/$RUN_NAME"
 RESULTS_REPO="${RESULTS_REPO:-$STORAGE_ROOT/results-checkout}"
 LOG_DIR="${LOG_DIR:-$STORAGE_ROOT/logs}"
 BATCH="${BATCH:-8}"
-MIN_BATCH="${MIN_BATCH:-4}"
 WORKERS="${WORKERS:-8}"
 EPOCHS="${EPOCHS:-100}"
 MAX_RESTARTS="${MAX_RESTARTS:-50}"
@@ -29,6 +28,7 @@ if ! flock -n 9; then
 fi
 
 [[ -x "$PYTHON" ]] || { printf 'Python environment not found: %s\n' "$PYTHON" >&2; exit 1; }
+[[ "$BATCH" == "8" ]] || { printf 'The paper protocol requires BATCH=8.\n' >&2; exit 2; }
 [[ -s "$TOKEN_FILE" ]] || { printf 'GitHub token file is missing or empty: %s\n' "$TOKEN_FILE" >&2; exit 1; }
 if (( $(stat -c '%a' "$TOKEN_FILE") % 100 != 0 )); then
   printf 'GitHub token file must not be readable by group or others: %s\n' "$TOKEN_FILE" >&2
@@ -148,10 +148,10 @@ else
       exit "$train_rc"
     fi
 
-    if grep -q 'CUDA out of memory' "$attempt_log" && (( BATCH > MIN_BATCH )); then
-      BATCH=$((BATCH - 2))
-      (( BATCH < MIN_BATCH )) && BATCH=$MIN_BATCH
-      printf '[%s] OOM detected; reducing batch to %s.\n' "$(date '+%F %T')" "$BATCH" | tee -a "$LOG_DIR/btdse_4090_supervisor.log"
+    if grep -Eq 'CUDA out of memory|NONFINITE_LOSS|non-finite|NaN|Inf' "$attempt_log"; then
+      printf '[%s] Fixed protocol violation detected; stopping without changing batch or AMP.\n' \
+        "$(date '+%F %T')" | tee -a "$LOG_DIR/btdse_4090_supervisor.log"
+      exit 2
     fi
 
     resume_checkpoint="$(find_checkpoint || true)"

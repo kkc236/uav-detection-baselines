@@ -109,7 +109,7 @@ echo $!
 1. 从零训练，不加载任何 `.pt` 预训练权重。
 2. 每轮写入 `last.pt` 和独立的 `epochN.pt`。
 3. 异常退出时校验 `last.pt`，损坏则回退到最新完整 `epochN.pt`。
-4. 如发生 OOM，batch 自动由 8 降为 6，再降为 4后真续训。
+4. 如发生 OOM、NaN 或 Inf，任务停止并保留最近完整检查点；论文协议固定 batch 8 和 AMP，不允许自动降级后继续。
 5. 每个新 checkpoint 上传 GitHub Release，保留最近三个。
 6. 指标和 SHA256 清单自动提交到 `training-results` 分支。
 7. 训练完成后强制进行一次最终上传验证，不会自动删除本地数据。
@@ -122,7 +122,7 @@ echo $!
 tail -f "$STORAGE_ROOT/logs/btdse_4090_training.log"
 ```
 
-恢复和 batch 变化：
+恢复与固定参数检查：
 
 ```bash
 tail -f "$STORAGE_ROOT/logs/btdse_4090_supervisor.log"
