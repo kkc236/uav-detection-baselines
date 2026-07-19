@@ -6,7 +6,7 @@
     "sha256": "034e462fc2efc51ec1f6125a5ebf6553dd95d84d3cfd396748d9b58e06756459"
   },
   "completed_epoch": 73,
-  "published_at": "2026-07-19T07:37:48.125346+00:00",
+  "published_at": "2026-07-19T07:39:02.967226+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/ioqc-sa-btdse-matched-live",
   "run_name": "scratch-rtdetr-l-ioqc-sa-btdse-matched-100ep"
 }
