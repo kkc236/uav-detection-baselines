@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 482192446,
-    "asset_name": "matched-baseline-last-epoch-0009.pt",
-    "bytes": 197649228,
-    "sha256": "288807bef5f3bb13a0c8511820f2d8ff9ad8d0f5a8d5fe9f00ea20dcc622a36f"
+    "asset_id": 482202651,
+    "asset_name": "matched-baseline-last-epoch-0010.pt",
+    "bytes": 197649420,
+    "sha256": "039976ee08b1b4d94a8df454053a7c5c651309196575f4b6825e75178c44702e"
   },
-  "completed_epoch": 9,
-  "published_at": "2026-07-19T07:40:12.821971+00:00",
+  "completed_epoch": 10,
+  "published_at": "2026-07-19T07:44:54.654081+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/rtdetr-l-btdse-matched-baseline-live",
   "run_name": "scratch-rtdetr-l-btdse-matched-baseline-100ep"
 }
