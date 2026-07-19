@@ -35,7 +35,7 @@ def test_run_script_separates_variants_and_protects_final_shutdown():
     assert "vsf-rmr-last" in content
     assert "supervise_vsf_rmr.py" in content
     assert "sync_experiment_checkpoint.py" in content
-    assert "--retain 3" in content
+    assert "--retain 1" in content
     assert 'AUTO_SHUTDOWN="${AUTO_SHUTDOWN:-0}"' in content
     assert 'ENABLE_GITHUB_SYNC="${ENABLE_GITHUB_SYNC:-1}"' in content
     assert "published=1" in content

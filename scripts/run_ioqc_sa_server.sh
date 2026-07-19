@@ -65,7 +65,7 @@ sync_arguments=(
   --tag "$TAG"
   --source-branch "$SOURCE_BRANCH"
   --status-file "$SYNC_STATUS"
-  --retain 3
+  --retain 1
   --asset-prefix ioqc-sa-last
   --release-name "IOQC-SA RT-DETR-L Live Checkpoints"
   --release-body "Rolling resumable checkpoints for standalone IOQC-SA training."

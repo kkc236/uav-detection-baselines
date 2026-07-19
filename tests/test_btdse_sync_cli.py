@@ -18,7 +18,7 @@ def test_sync_cli_has_protective_defaults(tmp_path: Path):
 
     assert args.repo == "kkc236/uav-detection-baselines"
     assert args.tag == "btdse-v2.5-s-4090-live"
-    assert args.retain == 3
+    assert args.retain == 1
     assert args.interval == 60
     assert args.results_branch == "training-results"
     assert args.once is False

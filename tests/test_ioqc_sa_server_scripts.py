@@ -35,7 +35,7 @@ def test_run_script_locks_starts_watcher_and_verifies_final_publication():
     assert "sync_btdse_checkpoint.py" in content
     assert "ioqc-sa-rtdetr-l-live" in content
     assert 'SOURCE_BRANCH="${SOURCE_BRANCH:-codex/ioqc-sa}"' in content
-    assert "--retain 3" in content
+    assert "--retain 1" in content
     assert "--asset-prefix ioqc-sa-last" in content
     assert "--release-name" in content
     assert "--once" in content
