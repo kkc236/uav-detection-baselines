@@ -65,3 +65,4 @@
 {"epoch": 65, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 12.345160007476807, "event": "stable"}
 {"epoch": 66, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 11.06137228012085, "event": "promote"}
 {"epoch": 67, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 13.748426914215088, "event": "stable"}
+{"epoch": 68, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 13.30577039718628, "event": "stable"}
