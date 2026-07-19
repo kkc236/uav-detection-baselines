@@ -83,3 +83,4 @@
 {"epoch": 83, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 15.438133239746094, "event": "stable"}
 {"epoch": 84, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 10.533575057983398, "event": "promote"}
 {"epoch": 85, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 9.59825611114502, "event": "stable"}
+{"epoch": 86, "batch_before": 8, "batch_after": 8, "amp": true, "peak_gib": 11.73176097869873, "event": "stable"}
