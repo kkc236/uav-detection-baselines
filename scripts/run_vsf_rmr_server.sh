@@ -86,7 +86,7 @@ sync_arguments=(
   --tag "$TAG"
   --source-branch "$SOURCE_BRANCH"
   --status-file "$SYNC_STATUS"
-  --retain 3
+  --retain 1
   --asset-prefix "$ASSET_PREFIX"
   --release-name "$RELEASE_NAME"
   --release-body "$RELEASE_BODY"
