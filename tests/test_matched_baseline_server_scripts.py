@@ -16,6 +16,7 @@ def test_server_runner_uses_fixed_protocol_and_separate_artifacts():
     assert 'TAG="${TAG:-rtdetr-l-btdse-matched-baseline-live}"' in content
     assert 'ASSET_PREFIX="${ASSET_PREFIX:-matched-baseline-last}"' in content
     assert "scripts/sync_experiment_checkpoint.py" in content
+    assert "--retain 1" in content
     assert "CUDA out of memory" in content
     assert "NONFINITE_LOSS" in content
     assert "reducing batch" not in content.lower()

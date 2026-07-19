@@ -59,7 +59,7 @@ sync_arguments=(
   --tag "$TAG"
   --source-branch "$SOURCE_BRANCH"
   --status-file "$SYNC_STATUS"
-  --retain 3
+  --retain 1
   --asset-prefix "$ASSET_PREFIX"
   --release-name "BTD-SE-Matched RT-DETR-L Baseline Checkpoints"
   --release-body "Rolling resumable checkpoints for the fixed batch-8 matched RT-DETR-L baseline."
