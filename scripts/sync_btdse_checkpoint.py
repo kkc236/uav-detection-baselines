@@ -117,6 +117,14 @@ def ensure_results_checkout(
     local_branch = _run(["git", "branch", "--list", branch], cwd=results_repo).stdout.strip()
     if local_branch:
         _run(["git", "switch", branch], cwd=results_repo)
+        remote_branch = _run(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=results_repo,
+            env=environment,
+        ).stdout.strip()
+        if remote_branch:
+            _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+            _run(["git", "rebase", "FETCH_HEAD"], cwd=results_repo)
         return environment
 
     remote_branch = _run(
@@ -148,6 +156,22 @@ def commit_and_push_results(
             ["git", "commit", "-m", f"Update protected training epoch {completed_epoch}"],
             cwd=results_repo,
         )
+    for _ in range(5):
+        pushed = _run(
+            ["git", "push", "origin", f"HEAD:{branch}"],
+            cwd=results_repo,
+            env=environment,
+            check=False,
+        )
+        if pushed.returncode == 0:
+            return
+        if not any(
+            marker in pushed.stderr.lower()
+            for marker in ("non-fast-forward", "fetch first", "[rejected]")
+        ):
+            pushed.check_returncode()
+        _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+        _run(["git", "rebase", "FETCH_HEAD"], cwd=results_repo)
     _run(["git", "push", "origin", f"HEAD:{branch}"], cwd=results_repo, env=environment)
 
 
@@ -263,7 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-branch", default="training-results")
     parser.add_argument("--results-repo", type=Path, default=Path.home() / "uav-training-results")
     parser.add_argument("--run-name")
-    parser.add_argument("--retain", type=int, default=3)
+    parser.add_argument("--retain", type=int, default=1)
     parser.add_argument("--asset-prefix", default="btdse-last")
     parser.add_argument("--release-name", default="BTD-SE V2.5-S RTX 4090 Live Checkpoints")
     parser.add_argument(

@@ -73,7 +73,7 @@ sync_arguments=(
   --run-name "$RUN_NAME"
   --tag "$TAG"
   --status-file "$LOG_DIR/btdse_github_sync.json"
-  --retain 3
+  --retain 1
   --interval 60
 )
 
