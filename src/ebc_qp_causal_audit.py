@@ -217,6 +217,8 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
         raise ValueError("common initial-state fingerprint mismatch")
     if control.get("optimizer_common_manifest") != auxiliary.get("optimizer_common_manifest"):
         raise ValueError("optimizer common-parameter manifest mismatch")
+    if control.get("controlled_amp") != auxiliary.get("controlled_amp"):
+        raise ValueError("controlled AMP configuration mismatch")
     probe_fields = (
         "batch_fingerprint",
         "rng_before_forward",
@@ -385,6 +387,7 @@ def compare_a0_repeats(reference: dict, repeat: dict) -> dict:
         ("completed_successful_updates", "successful-update count"),
         ("common_initial_fingerprint", "common initial-state fingerprint"),
         ("optimizer_common_manifest", "optimizer common-parameter manifest"),
+        ("controlled_amp", "controlled AMP configuration"),
         ("initial_probe", "initial forward/query probe"),
     ):
         if reference.get(field) != repeat.get(field):

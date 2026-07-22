@@ -72,6 +72,17 @@ def controlled_amp_config(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def validate_controlled_amp_runtime(amp_enabled: bool, scaler: Any, config: Mapping[str, Any]) -> None:
+    if not config.get("enabled"):
+        return
+    if not amp_enabled or not scaler.is_enabled():
+        raise RuntimeError("controlled AMP audit requires AMP to remain enabled")
+    actual_scale = float(scaler.get_scale())
+    expected_scale = float(config["init_scale"])
+    if actual_scale != expected_scale:
+        raise RuntimeError(f"controlled AMP scale mismatch: expected {expected_scale}, got {actual_scale}")
+
+
 def build_audit_settings(args: argparse.Namespace) -> dict[str, Any]:
     """Return the arm-independent training protocol used by both E0 traces."""
     return {
@@ -307,6 +318,7 @@ def _make_trainers():
                     init_scale=self.audit_controlled_amp["init_scale"],
                     growth_interval=self.audit_controlled_amp["growth_interval"],
                 )
+                validate_controlled_amp_runtime(bool(self.amp), self.scaler, self.audit_controlled_amp)
             self.validator = self.get_validator()
             self.scheduler.last_epoch = self.start_epoch - 1
 

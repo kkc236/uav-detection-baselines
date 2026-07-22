@@ -16,6 +16,7 @@ from scripts.audit_ebc_qp_aux_causality import (
     resolved_audit_steps,
     resolved_run_name,
     tensor_structure_fingerprint,
+    validate_controlled_amp_runtime,
 )
 from src.ebc_qp_causal_audit import (
     capture_grouped_gradients,
@@ -205,6 +206,26 @@ def test_trace_json_marks_nonfinite_amp_attempts_without_emitting_invalid_json()
     assert _clip_coefficient_from_norm(float("inf")) is None
 
 
+def test_controlled_amp_runtime_rejects_silent_fp32_fallback():
+    class Scaler:
+        def __init__(self, enabled: bool, scale: float):
+            self.enabled = enabled
+            self.scale = scale
+
+        def is_enabled(self):
+            return self.enabled
+
+        def get_scale(self):
+            return self.scale
+
+    config = {"enabled": True, "init_scale": 256.0}
+    validate_controlled_amp_runtime(True, Scaler(True, 256.0), config)
+    with pytest.raises(RuntimeError, match="requires AMP to remain enabled"):
+        validate_controlled_amp_runtime(False, Scaler(False, 1.0), config)
+    with pytest.raises(RuntimeError, match="scale mismatch"):
+        validate_controlled_amp_runtime(True, Scaler(True, 1.0), config)
+
+
 def test_compare_audit_runs_only_allows_nonfinite_partition_on_skipped_attempt():
     auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05, skipped=True)
     auxiliary["steps"][0]["clip_norm_partition_relative_error"] = "NaN"
@@ -268,6 +289,11 @@ def test_compare_audit_runs_rejects_batch_or_optimizer_mismatch():
     broken_probe["initial_probe"]["decoder_output_fingerprint"] = "DIFFERENT"
     with pytest.raises(ValueError, match="initial stock forward/query mismatch"):
         compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), broken_probe)
+
+    broken_controlled_amp = _run("aux-audit", clip=1.0, stock_delta=0.1)
+    broken_controlled_amp["controlled_amp"] = {"enabled": True, "init_scale": 256.0}
+    with pytest.raises(ValueError, match="controlled AMP configuration mismatch"):
+        compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), broken_controlled_amp)
 
 
 def test_compare_audit_runs_prioritizes_direct_gradient_or_amp_coupling():
