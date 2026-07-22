@@ -109,6 +109,33 @@ def test_full_model_configures_gamma_after_yaml_construction():
     assert isinstance(model.ebc_head.p2_fusion_gamma, torch.nn.Parameter)
 
 
+def test_a1_single_batch_trains_p2_and_gamma_without_ebc_contribution():
+    config = EBCQPConfig(lambda_ebc=0.0, learnable_fusion_gamma=True)
+    model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False, ebc_config=config)
+    model.train()
+    model.set_ebc_progress(3)
+    batch = {
+        "img": torch.rand(1, 3, 160, 160),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+        "cls": torch.tensor([[1.0]]),
+        "batch_idx": torch.tensor([0.0]),
+    }
+
+    total, _ = model.loss(batch)
+    state = model.ebc_head.last_state
+    expected = state.stock_loss + config.lambda_p2 * state.p2_loss.detach()
+    torch.testing.assert_close(total.detach(), expected)
+    total.backward()
+
+    assert state.ordinary_query_count == config.query_budget
+    assert _has_finite_nonzero_gradient(model.ebc_head.p2_adapter)
+    assert _has_finite_nonzero_gradient(model.ebc_head.p2_bbox_head)
+    gamma_gradient = model.ebc_head.p2_fusion_gamma.grad
+    assert gamma_gradient is not None
+    assert torch.isfinite(gamma_gradient)
+    assert torch.count_nonzero(gamma_gradient) == 1
+
+
 def _small_head() -> EBCQPDecoder:
     return EBCQPDecoder(
         nc=3,
@@ -127,3 +154,10 @@ def _small_head() -> EBCQPDecoder:
 def _assert_state_dict_equal(first: torch.nn.Module, second: torch.nn.Module) -> None:
     for name, value in first.state_dict().items():
         torch.testing.assert_close(value, second.state_dict()[name])
+
+
+def _has_finite_nonzero_gradient(module: torch.nn.Module) -> bool:
+    gradients = [parameter.grad for parameter in module.parameters() if parameter.grad is not None]
+    return bool(gradients) and all(torch.isfinite(gradient).all() for gradient in gradients) and any(
+        torch.count_nonzero(gradient) for gradient in gradients
+    )

@@ -165,15 +165,25 @@ def build_settings(args: argparse.Namespace) -> dict:
     return settings
 
 
+def build_ebc_config(args: argparse.Namespace) -> EBCQPConfig:
+    stage_key = args.arm if args.stage == "formal" or (args.stage == "d2" and args.arm == "a1") else args.stage
+    stage = STAGES[stage_key]
+    return EBCQPConfig(
+        lambda_ebc=stage.lambda_ebc,
+        quality_weighted_ebc=args.quality_weighted_ebc,
+        learnable_fusion_gamma=args.learnable_fusion_gamma,
+    )
+
+
 def validate_protocol(args: argparse.Namespace) -> None:
-    if args.stage == "d2" and args.arm not in {"control", "a2"}:
-        raise SystemExit("D2 arm must be control or a2")
+    if args.stage == "d2" and args.arm not in {"control", "a1", "a2"}:
+        raise SystemExit("D2 arm must be control, a1, or a2")
     if args.stage == "formal" and args.arm not in {"a1", "a2"}:
         raise SystemExit("formal arm must be a1 or a2")
     if args.quality_weighted_ebc and not (args.arm == "a2" and args.stage in {"d2", "formal"}):
         raise SystemExit("quality-weighted EBC is only valid for the A2 arm")
-    if args.learnable_fusion_gamma and not (args.arm == "a2" and args.stage in {"d2", "formal"}):
-        raise SystemExit("learnable fusion gamma is only valid for the A2 arm")
+    if args.learnable_fusion_gamma and not (args.arm in {"a1", "a2"} and args.stage in {"d2", "formal"}):
+        raise SystemExit("learnable fusion gamma is only valid for the A1/A2 arms")
     if args.quality_weighted_ebc and args.learnable_fusion_gamma:
         raise SystemExit("quality-weighted EBC and fusion gamma are mutually exclusive")
 
@@ -214,17 +224,11 @@ def main() -> None:
     if args.stage in {"d2", "d3"}:
         _validate_pair_artifacts(args)
 
-    stage_key = args.arm if args.stage == "formal" else args.stage
-    stage = STAGES[stage_key]
     settings = build_settings(args)
     if args.stage == "d2" and args.arm == "control":
         trainer = PairedControlTrainer(overrides=settings, initial_state_path=args.initial_state)
     else:
-        config = EBCQPConfig(
-            lambda_ebc=stage.lambda_ebc,
-            quality_weighted_ebc=args.quality_weighted_ebc,
-            learnable_fusion_gamma=args.learnable_fusion_gamma,
-        )
+        config = build_ebc_config(args)
         trainer = EBCQPTrainer(
             overrides=settings,
             ebc_config=config,

@@ -115,8 +115,50 @@ def test_fusion_gamma_adds_one_trainable_scalar_and_receives_p2_gradient():
     assert torch.count_nonzero(head.p2_fusion_gamma.grad) == 1
 
 
+def test_a1_and_a2_start_with_identical_fixed_budget_query_injection():
+    a1 = _small_ebc_head_with_config(
+        EBCQPConfig(
+            query_budget=8,
+            p2_candidates=4,
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=True,
+        )
+    )
+    a2 = _small_ebc_head_with_config(
+        EBCQPConfig(
+            query_budget=8,
+            p2_candidates=4,
+            lambda_ebc=0.05,
+            learnable_fusion_gamma=True,
+        )
+    )
+    a2.load_state_dict(a1.state_dict(), strict=True)
+    a1.train()
+    a2.train()
+    a1.set_progress(epoch=3)
+    a2.set_progress(epoch=3)
+    inputs = _small_inputs(requires_grad=False)
+    batch = _single_tiny_batch()
+
+    torch.manual_seed(41)
+    a1_state = a1.forward_with_state(inputs, batch)
+    torch.manual_seed(41)
+    a2_state = a2.forward_with_state(inputs, batch)
+
+    assert a1_state.ordinary_query_count == a2_state.ordinary_query_count == 8
+    assert a1_state.p2_entry_count == a2_state.p2_entry_count
+    assert torch.equal(a1_state.stock_topk_indices, a2_state.stock_topk_indices)
+    assert torch.equal(a1_state.p2_topk_indices, a2_state.p2_topk_indices)
+    assert torch.equal(a1_state.final_sources, a2_state.final_sources)
+    assert torch.equal(a1_state.final_source_indices, a2_state.final_source_indices)
+
+
 def _small_ebc_head() -> EBCQPDecoder:
     config = EBCQPConfig(query_budget=8, p2_candidates=4)
+    return _small_ebc_head_with_config(config)
+
+
+def _small_ebc_head_with_config(config: EBCQPConfig) -> EBCQPDecoder:
     return EBCQPDecoder(
         nc=3,
         ch=(4, 8, 8, 8),

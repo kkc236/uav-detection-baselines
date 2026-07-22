@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from scripts.train_rtdetr_ebc_qp import CompactDiagnosticsWriter, build_parser, build_settings, validate_protocol
+from scripts.train_rtdetr_ebc_qp import (
+    CompactDiagnosticsWriter,
+    build_ebc_config,
+    build_parser,
+    build_settings,
+    validate_protocol,
+)
 from src.rtdetr_ebc_qp import resolve_protocol_optimizer
 
 
@@ -86,6 +92,42 @@ def test_fusion_gamma_is_explicit_and_mutually_exclusive_with_quality_ebc():
     )
     with pytest.raises(SystemExit, match="mutually exclusive"):
         validate_protocol(conflicting)
+
+
+def test_d2_a1_copies_gamma_a2_settings_and_only_disables_ebc():
+    common = [
+        "--stage",
+        "d2",
+        "--initial-state",
+        "init.pt",
+        "--name",
+        "paired",
+        "--learnable-fusion-gamma",
+    ]
+    a1 = build_parser().parse_args([*common, "--arm", "a1"])
+    a2 = build_parser().parse_args([*common, "--arm", "a2"])
+
+    validate_protocol(a1)
+    validate_protocol(a2)
+    assert build_settings(a1) == build_settings(a2)
+
+    a1_config = build_ebc_config(a1)
+    a2_config = build_ebc_config(a2)
+    a1_values = a1_config.as_dict()
+    a2_values = a2_config.as_dict()
+    assert a1_values.pop("lambda_ebc") == 0.0
+    assert a2_values.pop("lambda_ebc") == 0.05
+    assert a1_values == a2_values
+    assert a1_config.learnable_fusion_gamma
+
+
+def test_d2_a1_rejects_quality_weighted_ebc():
+    args = build_parser().parse_args(
+        ["--stage", "d2", "--arm", "a1", "--initial-state", "init.pt", "--quality-weighted-ebc"]
+    )
+
+    with pytest.raises(SystemExit, match="only valid for the A2 arm"):
+        validate_protocol(args)
 
 
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
