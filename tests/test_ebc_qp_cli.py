@@ -14,12 +14,47 @@ def test_d2_defaults_are_frozen_ten_epoch_ten_percent_scratch_settings():
 
     assert settings["model"].endswith("configs\\rtdetr-l-ebc-qp.yaml")
     assert settings["epochs"] == 10
-    assert settings["fraction"] == 0.10
+    assert settings["fraction"] == 1.0
     assert settings["pretrained"] is False
     assert settings["seed"] == 0
     assert settings["imgsz"] == 640
     assert settings["batch"] == 8
+    assert settings["workers"] == 8
     assert settings["max_det"] == 300
+    assert settings["optimizer"] == "auto"
+    assert settings["lr0"] == 0.01
+    assert settings["lrf"] == 0.01
+    assert settings["momentum"] == 0.937
+    assert settings["weight_decay"] == 0.0005
+    assert settings["warmup_epochs"] == 3.0
+    assert settings["warmup_momentum"] == 0.8
+    assert settings["warmup_bias_lr"] == 0.0
+    assert settings["nbs"] == 64
+    assert settings["cos_lr"] is False
+    assert settings["mosaic"] == 1.0
+    assert settings["close_mosaic"] == 10
+    assert settings["mixup"] == 0.0
+    assert settings["scale"] == 0.5
+    assert settings["translate"] == 0.1
+    assert settings["degrees"] == 0.0
+    assert settings["shear"] == 0.0
+    assert settings["perspective"] == 0.0
+    assert settings["flipud"] == 0.0
+    assert settings["fliplr"] == 0.5
+    assert settings["hsv_h"] == 0.015
+    assert settings["hsv_s"] == 0.7
+    assert settings["hsv_v"] == 0.4
+    assert settings["cutmix"] == 0.0
+    assert settings["copy_paste"] == 0.0
+    assert settings["resume"] is False
+    assert settings["exist_ok"] is False
+
+
+def test_fixed_batch_and_workers_cannot_be_overridden_from_cli():
+    options = {action.dest for action in build_parser()._actions}
+
+    assert "batch" not in options
+    assert "workers" not in options
 
 
 def test_d2_control_uses_stock_yaml_and_the_same_initial_state():
@@ -29,7 +64,7 @@ def test_d2_control_uses_stock_yaml_and_the_same_initial_state():
 
     assert settings["model"] == "rtdetr-l.yaml"
     assert settings["epochs"] == 10
-    assert settings["fraction"] == 0.10
+    assert settings["fraction"] == 1.0
     assert settings["seed"] == 0
 
 

@@ -13,7 +13,7 @@ from ultralytics.models.rtdetr.train import RTDETRTrainer as UltralyticsRTDETRTr
 from ultralytics.models.rtdetr.val import RTDETRValidator
 from ultralytics.nn.tasks import RTDETRDetectionModel
 from ultralytics.utils import RANK
-from ultralytics.utils.torch_utils import unwrap_model
+from ultralytics.utils.torch_utils import init_seeds, unwrap_model
 
 from src.ebc_qp_config import (
     SOURCE_SHA256,
@@ -23,6 +23,7 @@ from src.ebc_qp_config import (
 )
 from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
 from src.ebc_qp_metrics import TinyDetectionMetrics, validation_xy_gain
+from src.ebc_qp_protocol import load_initial_state
 
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
@@ -223,8 +224,16 @@ class EBCQPValidator(RTDETRValidator):
 
 
 class EBCQPTrainer(UltralyticsRTDETRTrainer):
-    def __init__(self, *args, ebc_config: EBCQPConfig | None = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        ebc_config: EBCQPConfig | None = None,
+        initial_state_path: str | Path | None = None,
+        **kwargs,
+    ):
         self.ebc_config = ebc_config or EBCQPConfig()
+        self.initial_state_path = Path(initial_state_path) if initial_state_path is not None else None
+        self.initial_state = _load_protocol_state(self.initial_state_path)
         super().__init__(*args, **kwargs)
         self.add_callback("on_train_epoch_start", self._set_ebc_progress)
 
@@ -238,7 +247,14 @@ class EBCQPTrainer(UltralyticsRTDETRTrainer):
         )
         if weights:
             model.load(weights)
+        if self.initial_state is not None:
+            _validate_initial_state_seed(self.initial_state, self.args.seed)
+            load_initial_state(model, self.initial_state, include_innovation=True)
         return model
+
+    def _build_train_pipeline(self):
+        _reset_paired_random_state(self.args.seed, self.args.deterministic)
+        return super()._build_train_pipeline()
 
     def _set_ebc_progress(self, _trainer=None) -> None:
         unwrap_model(self.model).set_ebc_progress(int(self.epoch))
@@ -301,3 +317,43 @@ class EBCQPTrainer(UltralyticsRTDETRTrainer):
         super().resume_training(checkpoint)
         if checkpoint is not None and self.resume:
             unwrap_model(self.model).set_ebc_progress(int(checkpoint["ebc_qp"]["ebc_epoch"]))
+
+
+class PairedControlTrainer(UltralyticsRTDETRTrainer):
+    def __init__(self, *args, initial_state_path: str | Path, **kwargs):
+        self.initial_state_path = Path(initial_state_path)
+        self.initial_state = _load_protocol_state(self.initial_state_path)
+        super().__init__(*args, **kwargs)
+
+    def get_model(self, cfg=None, weights=None, verbose: bool = True):
+        model = RTDETRDetectionModel(
+            cfg=cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if weights:
+            model.load(weights)
+        _validate_initial_state_seed(self.initial_state, self.args.seed)
+        load_initial_state(model, self.initial_state, include_innovation=False)
+        return model
+
+    def _build_train_pipeline(self):
+        _reset_paired_random_state(self.args.seed, self.args.deterministic)
+        return super()._build_train_pipeline()
+
+
+def _load_protocol_state(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def _validate_initial_state_seed(artifact: dict, seed: int) -> None:
+    artifact_seed = artifact.get("metadata", {}).get("seed")
+    if artifact_seed != seed:
+        raise ValueError(f"initial-state seed mismatch: expected {seed}, got {artifact_seed}")
+
+
+def _reset_paired_random_state(seed: int, deterministic: bool) -> None:
+    init_seeds(seed + 1 + RANK, deterministic=deterministic)

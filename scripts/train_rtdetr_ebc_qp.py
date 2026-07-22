@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.ebc_qp_config import EBCQPConfig
-from src.rtdetr_ebc_qp import EBCQPTrainer
+from src.rtdetr_ebc_qp import EBCQPTrainer, PairedControlTrainer
 
 
 @dataclass(frozen=True)
@@ -92,10 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--a2-manifest", type=Path)
     parser.add_argument("--frozen-manifest", type=Path)
     parser.add_argument("--signature-file", type=Path)
+    parser.add_argument("--protocol-manifest", type=Path)
     parser.add_argument("--seed", type=int, default=0, choices=(0, 1, 2))
     parser.add_argument("--device", default="0")
-    parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--data", default="VisDrone.yaml")
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "ebc-qp")
     parser.add_argument("--name")
@@ -113,14 +112,15 @@ def build_settings(args: argparse.Namespace) -> dict:
         "model": model,
         "data": args.data,
         "epochs": 1 if args.smoke else stage.epochs,
-        "fraction": 0.01 if args.smoke else stage.fraction,
+        "fraction": 0.01 if args.smoke else (1.0 if args.stage in {"d2", "d3"} else stage.fraction),
         "imgsz": 640,
-        "batch": args.batch,
-        "workers": args.workers,
+        "batch": 8,
+        "workers": 8,
         "device": args.device,
         "project": str(args.project.resolve()),
         "name": args.name or (f"{default_name}-smoke" if args.smoke else default_name),
-        "exist_ok": True,
+        "exist_ok": False,
+        "resume": False,
         "pretrained": False,
         "cache": False,
         "amp": True,
@@ -137,10 +137,24 @@ def build_settings(args: argparse.Namespace) -> dict:
         "momentum": 0.937,
         "weight_decay": 0.0005,
         "warmup_epochs": 3.0,
+        "warmup_momentum": 0.8,
+        "warmup_bias_lr": 0.0,
+        "cos_lr": False,
         "mosaic": 1.0,
+        "close_mosaic": 10,
         "mixup": 0.0,
         "scale": 0.5,
         "translate": 0.1,
+        "degrees": 0.0,
+        "shear": 0.0,
+        "perspective": 0.0,
+        "flipud": 0.0,
+        "fliplr": 0.5,
+        "hsv_h": 0.015,
+        "hsv_s": 0.7,
+        "hsv_v": 0.4,
+        "cutmix": 0.0,
+        "copy_paste": 0.0,
         "plots": True,
         "val": True,
     }
@@ -185,16 +199,38 @@ def main() -> None:
     if args.stage == "d1":
         if args.weights is None or not args.weights.is_file():
             raise SystemExit("D1 requires the verified matched baseline best.pt artifact")
-    if args.stage in {"d2", "d3", "formal"} and args.initial_state is None:
+    if args.stage in {"d2", "d3", "formal"} and (args.initial_state is None or not args.initial_state.is_file()):
         raise SystemExit(f"{args.stage} requires a frozen initial-state artifact")
-    if args.stage == "d2" and args.arm == "control":
-        raise SystemExit("D2 control launcher is gated until common-state loading is implemented")
+    if args.stage in {"d2", "d3"}:
+        _validate_pair_artifacts(args)
 
     stage_key = args.arm if args.stage == "formal" else args.stage
     stage = STAGES[stage_key]
-    config = EBCQPConfig(lambda_ebc=stage.lambda_ebc)
-    trainer = EBCQPTrainer(overrides=build_settings(args), ebc_config=config)
+    settings = build_settings(args)
+    if args.stage == "d2" and args.arm == "control":
+        trainer = PairedControlTrainer(overrides=settings, initial_state_path=args.initial_state)
+    else:
+        config = EBCQPConfig(lambda_ebc=stage.lambda_ebc)
+        trainer = EBCQPTrainer(
+            overrides=settings,
+            ebc_config=config,
+            initial_state_path=args.initial_state,
+        )
     trainer.train()
+
+
+def _validate_pair_artifacts(args: argparse.Namespace) -> None:
+    manifest = _read_json(args.protocol_manifest, "paired protocol manifest")
+    expected_data = str(Path(args.data).resolve())
+    expected_state = str(args.initial_state.resolve())
+    if manifest.get("data", {}).get("path") != expected_data:
+        raise SystemExit("paired protocol manifest does not match the D2 data file")
+    if manifest.get("initial_state", {}).get("path") != expected_state:
+        raise SystemExit("paired protocol manifest does not match the initial state")
+    if manifest.get("initial_state", {}).get("sha256") != _file_sha256(args.initial_state):
+        raise SystemExit("paired protocol initial-state hash mismatch")
+    if manifest.get("seed") != args.seed:
+        raise SystemExit("paired protocol seed mismatch")
 
 
 def _read_json(path: Path | None, label: str) -> dict:
