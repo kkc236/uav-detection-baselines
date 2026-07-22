@@ -11,6 +11,7 @@ from scripts.audit_ebc_qp_aux_causality import (
     batch_fingerprint,
     build_audit_settings,
     build_parser,
+    controlled_amp_config,
     optimizer_common_manifest,
     resolved_audit_steps,
     resolved_run_name,
@@ -307,6 +308,16 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
     repeat = parser.parse_args(["--arm", "a0-repeat", *common])
     assert build_audit_settings(repeat) == build_audit_settings(a0)
     assert resolved_run_name(repeat) == "e0-a0-repeat-seed0"
+
+    controlled = parser.parse_args(["--arm", "a0", *common, "--controlled-amp-scale", "256"])
+    assert resolved_audit_steps(controlled) == 32
+    assert resolved_run_name(controlled) == "e0-a0-seed0-controlled-amp256-32step"
+    assert controlled_amp_config(controlled) == {
+        "enabled": True,
+        "init_scale": 256.0,
+        "growth_interval": 1000,
+        "require_zero_skips": True,
+    }
 
 
 def test_batch_and_optimizer_manifests_are_stable_and_common_only():

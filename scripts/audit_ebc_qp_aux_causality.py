@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--steps", type=int, default=100, choices=(100,))
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--controlled-amp-scale", type=float, choices=(256.0,))
     parser.add_argument("--seed", type=int, default=0, choices=(0,))
     parser.add_argument("--device", default="0")
     parser.add_argument("--project", type=Path, default=Path("/mnt/uav/runs/ebc-qp-e0-causal-audit"))
@@ -48,12 +49,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolved_audit_steps(args: argparse.Namespace) -> int:
+    if args.controlled_amp_scale is not None:
+        return 32
     return 1 if args.smoke else int(args.steps)
 
 
 def resolved_run_name(args: argparse.Namespace) -> str:
+    if args.controlled_amp_scale is not None:
+        scale = int(args.controlled_amp_scale)
+        return f"e0-{args.arm}-seed0-controlled-amp{scale}-32step"
     suffix = "-smoke" if args.smoke else ""
     return f"e0-{args.arm}-seed0{suffix}"
+
+
+def controlled_amp_config(args: argparse.Namespace) -> dict[str, Any]:
+    enabled = args.controlled_amp_scale is not None
+    return {
+        "enabled": enabled,
+        "init_scale": float(args.controlled_amp_scale) if enabled else None,
+        "growth_interval": 1000 if enabled else None,
+        "require_zero_skips": enabled,
+    }
 
 
 def build_audit_settings(args: argparse.Namespace) -> dict[str, Any]:
@@ -253,6 +269,7 @@ def _make_trainers():
             audit_output: Path,
             audit_steps: int,
             audit_metadata: dict[str, Any],
+            audit_controlled_amp: dict[str, Any],
             **trainer_kwargs,
         ):
             self.audit_arm = audit_arm
@@ -269,6 +286,7 @@ def _make_trainers():
             self.audit_p2_only_aux_private_grad_parameters: dict[str, dict[str, float | int]] = {}
             self.audit_initial_probe: dict[str, Any] = {}
             self.audit_metadata = audit_metadata
+            self.audit_controlled_amp = dict(audit_controlled_amp)
             super().__init__(*trainer_args, **trainer_kwargs)
 
         def _setup_train(self):
@@ -282,6 +300,13 @@ def _make_trainers():
                 if hasattr(loader, "close"):
                     loader.close()
             self._build_train_pipeline()
+            if self.audit_controlled_amp["enabled"]:
+                self.scaler = torch.amp.GradScaler(
+                    "cuda",
+                    enabled=bool(self.amp),
+                    init_scale=self.audit_controlled_amp["init_scale"],
+                    growth_interval=self.audit_controlled_amp["growth_interval"],
+                )
             self.validator = self.get_validator()
             self.scheduler.last_epoch = self.start_epoch - 1
 
@@ -516,6 +541,8 @@ def _make_trainers():
             violations = validate_audit_attempt(record)
             if violations:
                 raise RuntimeError(f"invalid audit attempt {step}: {'; '.join(violations)}")
+            if self.audit_controlled_amp["require_zero_skips"] and step_skipped:
+                raise RuntimeError(f"controlled AMP audit invalidated by a skipped step at attempt {step}")
             skipped_attempts = sum(bool(item["amp_step_skipped"]) for item in self.audit_steps)
             consecutive_skips = 0
             for item in reversed(self.audit_steps):
@@ -541,6 +568,7 @@ def _make_trainers():
                 "initial_state_path": str(self.initial_state_path.resolve()),
                 "initial_state_sha256": self.audit_initial_state_sha256,
                 "optimizer_common_manifest": getattr(self, "audit_optimizer_manifest", {}),
+                "controlled_amp": self.audit_controlled_amp,
                 "p2_only_stock_grad_l2": self.audit_p2_only_stock_grad_l2,
                 "p2_only_stock_grad_parameters": self.audit_p2_only_stock_grad_parameters,
                 "p2_only_aux_private_grad_l2": self.audit_p2_only_aux_private_grad_l2,
@@ -660,6 +688,7 @@ def _build_evidence_metadata(args: argparse.Namespace, settings: dict[str, Any],
         "sources": sources,
         "command": list(sys.argv),
         "settings": settings,
+        "controlled_amp": controlled_amp_config(args),
         "protocol_manifest_path": str(args.protocol_manifest.resolve()),
         "protocol_manifest_sha256": _sha256(args.protocol_manifest),
         "protocol_signature": manifest.get("signature"),
@@ -677,6 +706,8 @@ def _build_evidence_metadata(args: argparse.Namespace, settings: dict[str, Any],
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.smoke and args.controlled_amp_scale is not None:
+        raise SystemExit("--smoke and --controlled-amp-scale are mutually exclusive")
     manifest = _validate_protocol(args)
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite existing audit trace: {args.output}")
@@ -698,6 +729,7 @@ def main() -> None:
         "audit_output": args.output,
         "audit_steps": target_steps,
         "audit_metadata": evidence,
+        "audit_controlled_amp": controlled_amp_config(args),
     }
     if args.arm in {"a0", "a0-repeat"}:
         trainer = ControlTrainer(**common)
