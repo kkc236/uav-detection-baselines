@@ -38,7 +38,6 @@ class EBCQPForwardState:
     final_sources: torch.Tensor
     final_source_indices: torch.Tensor
     p2_loss: torch.Tensor
-    quality_loss: torch.Tensor
     ebc_loss: torch.Tensor
     p2_entry_count: int
     ordinary_query_count: int
@@ -48,6 +47,7 @@ class EBCQPForwardState:
     stock_boundary: torch.Tensor
     assigned_pairs: list[torch.Tensor]
     uncovered: list[torch.Tensor]
+    quality_loss: torch.Tensor | None = None
     p2_all_boxes: torch.Tensor | None = None
     p2_all_logits: torch.Tensor | None = None
     p2_all_quality_logits: torch.Tensor | None = None
