@@ -1,0 +1,115 @@
+import json
+from hashlib import sha256
+from pathlib import Path
+
+import pytest
+
+from scripts.train_rtdetr_ebc_qp import CompactDiagnosticsWriter, build_parser, build_settings, validate_protocol
+
+
+def test_d2_defaults_are_frozen_ten_epoch_ten_percent_scratch_settings():
+    args = build_parser().parse_args(["--stage", "d2", "--arm", "a2", "--initial-state", "init.pt"])
+
+    settings = build_settings(args)
+
+    assert settings["model"].endswith("configs\\rtdetr-l-ebc-qp.yaml")
+    assert settings["epochs"] == 10
+    assert settings["fraction"] == 0.10
+    assert settings["pretrained"] is False
+    assert settings["seed"] == 0
+    assert settings["imgsz"] == 640
+    assert settings["batch"] == 8
+    assert settings["max_det"] == 300
+
+
+def test_d2_control_uses_stock_yaml_and_the_same_initial_state():
+    args = build_parser().parse_args(["--stage", "d2", "--arm", "control", "--initial-state", "init.pt"])
+
+    settings = build_settings(args)
+
+    assert settings["model"] == "rtdetr-l.yaml"
+    assert settings["epochs"] == 10
+    assert settings["fraction"] == 0.10
+    assert settings["seed"] == 0
+
+
+def test_d3_forces_zero_ebc_and_requires_passing_d2_manifest(tmp_path: Path):
+    manifest = tmp_path / "d2.json"
+    manifest.write_text(json.dumps({"gate": {"passed": False}}), encoding="utf-8")
+    args = build_parser().parse_args(["--stage", "d3", "--d2-manifest", str(manifest)])
+
+    with pytest.raises(SystemExit, match="passing D2 manifest"):
+        validate_protocol(args)
+
+
+def test_formal_a1_requires_completed_a2_seed0_and_exact_initial_state(tmp_path: Path):
+    initial_state = tmp_path / "initial.pt"
+    initial_state.write_bytes(b"frozen-state")
+    manifest = tmp_path / "a2-seed0.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "formal_a2_seed0": {
+                    "complete": True,
+                    "initial_state": str(initial_state.resolve()),
+                    "initial_state_sha256": sha256(initial_state.read_bytes()).hexdigest().upper(),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(
+        [
+            "--stage",
+            "formal",
+            "--arm",
+            "a1",
+            "--initial-state",
+            str(initial_state),
+            "--a2-manifest",
+            str(manifest),
+        ]
+    )
+
+    validate_protocol(args)
+    initial_state.write_bytes(b"changed")
+    with pytest.raises(SystemExit, match="exact A2 seed-0 initial state"):
+        validate_protocol(args)
+
+
+def test_seed_one_rejects_changed_frozen_signature(tmp_path: Path):
+    frozen = tmp_path / "frozen.json"
+    current = tmp_path / "current.json"
+    frozen.write_text(json.dumps({"signature": {"git": "abc", "dataset": "same"}}), encoding="utf-8")
+    current.write_text(json.dumps({"git": "changed", "dataset": "same"}), encoding="utf-8")
+    args = build_parser().parse_args(
+        [
+            "--stage",
+            "d2",
+            "--arm",
+            "a2",
+            "--initial-state",
+            "init.pt",
+            "--seed",
+            "1",
+            "--frozen-manifest",
+            str(frozen),
+            "--signature-file",
+            str(current),
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="frozen experiment signature"):
+        validate_protocol(args)
+
+
+def test_compact_diagnostics_writer_rejects_candidate_maps(tmp_path: Path):
+    path = tmp_path / "diagnostics.jsonl"
+    writer = CompactDiagnosticsWriter(path)
+
+    writer.append({"epoch": 1, "ap_tiny": 0.1, "p2_entry_count": 4})
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record == {"epoch": 1, "ap_tiny": 0.1, "p2_entry_count": 4}
+
+    with pytest.raises(ValueError, match="unsupported diagnostic fields"):
+        writer.append({"epoch": 2, "p2_map": [[1, 2]]})
