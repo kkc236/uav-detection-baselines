@@ -1,0 +1,46 @@
+﻿{
+    "run_name":  "scratch-rtdetr-l-btdse-matched-baseline-100ep",
+    "completed_epoch":  100,
+    "best_epoch":  100,
+    "metrics":  {
+                    "precision":  0.51131,
+                    "recall":  0.43493,
+                    "mAP50":  0.41451,
+                    "mAP50_95":  0.2417
+                },
+    "results_csv":  {
+                        "rows":  100,
+                        "sha256":  "823fe80aaa880591c8b1eebc535238db6239afeeb0e0762c513e5837fb0574b4",
+                        "merge":  "epochs 1-11 from protected GitHub results; epochs 12-100 from resumed run; resumed time offset adjusted to cumulative time"
+                    },
+    "scratch_args_yaml":  {
+                              "name":  "args.yaml",
+                              "sha256":  "7bb083904a3e7378077642f55fa6a1330d251496258b8c8c0665747293a9841c"
+                          },
+    "resume_args_yaml":  {
+                             "name":  "args-resume-epoch12.yaml",
+                             "sha256":  "cf7afd0b3e4df83bb8b1bc8fa77ef59f216b98b0943397a272bcc29a3f04d378"
+                         },
+    "source_archive":  {
+                           "name":  "scratch-rtdetr-l-btdse-matched-baseline-100ep.zip",
+                           "bytes":  472916220,
+                           "sha256":  "856bbf6cbc6229586aaf258a48b32d8f9ea3f9427bba00991c6f57b265cee34c"
+                       },
+    "checkpoints":  {
+                        "best_pt":  {
+                                        "epoch":  100,
+                                        "bytes":  66262262,
+                                        "sha256":  "54ce60289dd34c6750b8ba5f7516eefcf3afef6c174c6e4f3b1ef810c883099b"
+                                    },
+                        "last_pt":  {
+                                        "epoch":  100,
+                                        "bytes":  66262262,
+                                        "sha256":  "6774f50c87e058c0ddd8de10724d6303030f7228072f50768222796f11692da9"
+                                    },
+                        "resume_pt":  {
+                                          "epoch":  99,
+                                          "bytes":  197663308,
+                                          "sha256":  "93a055f050ad2eac9d1c5cf648d18ab8e7d5c22b1c8fa3f8c3589f1e1b6e4004"
+                                      }
+                    }
+}
