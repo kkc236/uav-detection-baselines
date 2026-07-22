@@ -7,7 +7,14 @@ from scripts.benchmark_qg_p2 import build_parser, measurement_order, percentage_
 
 def test_qg_benchmark_defaults_follow_frozen_protocol():
     args = build_parser().parse_args(
-        ["--control-checkpoint", "control.pt", "--method-checkpoint", "method.pt"]
+        [
+            "--control-checkpoint",
+            "control.pt",
+            "--method-checkpoint",
+            "method.pt",
+            "--output",
+            "benchmark.json",
+        ]
     )
 
     assert args.imgsz == 640
