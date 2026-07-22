@@ -126,7 +126,7 @@ def state_fingerprint(state: Mapping[str, torch.Tensor]) -> str:
         digest.update(b"\0")
         digest.update(str(tuple(tensor.shape)).encode("ascii"))
         digest.update(b"\0")
-        digest.update(tensor.view(torch.uint8).numpy().tobytes())
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
         digest.update(b"\n")
     return digest.hexdigest().upper()
 

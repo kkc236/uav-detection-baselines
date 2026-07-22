@@ -10,6 +10,7 @@ from src.ebc_qp_protocol import (
     load_initial_state,
     select_hashed_subset,
     subset_signature,
+    state_fingerprint,
     write_d2_subset,
 )
 
@@ -109,3 +110,10 @@ def test_initial_state_rejects_non_p2_method_parameters():
 
     with pytest.raises(ValueError, match="unapproved innovation state"):
         build_initial_state(control.state_dict(), method.state_dict(), metadata={})
+
+
+def test_state_fingerprint_accepts_scalar_long_buffers():
+    first = state_fingerprint({"num_batches_tracked": torch.tensor(0, dtype=torch.long)})
+    second = state_fingerprint({"num_batches_tracked": torch.tensor(1, dtype=torch.long)})
+
+    assert first != second
