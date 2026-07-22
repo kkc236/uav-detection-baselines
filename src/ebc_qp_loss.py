@@ -141,11 +141,22 @@ def compute_sparse_quality_loss(
             quality_targets[selected_rows] = iou_targets
 
         if classification_indices.numel():
-            raw_loss = F.binary_cross_entropy_with_logits(selected_logits.float(), quality_targets, reduction="sum")
+            element_loss = F.binary_cross_entropy_with_logits(
+                selected_logits.float(),
+                quality_targets,
+                reduction="none",
+            )
+            positive_rows = torch.isin(classification_indices, assigned_indices)
+            group_losses = []
+            if positive_rows.any():
+                group_losses.append(element_loss[positive_rows].mean())
+            if (~positive_rows).any():
+                group_losses.append(element_loss[~positive_rows].mean())
+            raw_loss = torch.stack(group_losses).mean()
         else:
             raw_loss = differentiable_zero(quality_logits[image_index])
         positive_count = quality_logits.new_tensor(float(len(pairs)))
-        image_losses.append(raw_loss / max(len(pairs), 1))
+        image_losses.append(raw_loss)
         image_positive_counts.append(positive_count)
         image_indices.append(classification_indices)
         image_targets.append(quality_targets.detach())

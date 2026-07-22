@@ -142,6 +142,7 @@ def test_sparse_quality_uses_detached_iou_and_excludes_inside_gt_negatives():
     result = compute_sparse_quality_loss(quality_logits, boxes, targets)
     result.total.backward()
 
+    torch.testing.assert_close(result.total.detach(), torch.tensor(0.6931472))
     assert result.classification_indices[0].tolist() == [0, 2]
     torch.testing.assert_close(result.targets, torch.tensor([1.0, 0.0]))
     assert result.targets.requires_grad is False
