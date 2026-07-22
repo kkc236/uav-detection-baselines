@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from hashlib import sha256
 from pathlib import Path
@@ -42,6 +43,37 @@ def derive_qg_initial_state(
         name: value.detach().cpu().clone()
         for name, value in innovation.items()
     }
+
+
+def derive_qg_protocol_manifest(
+    parent: Mapping[str, Any],
+    *,
+    initial_state_path: Path,
+    initial_state_sha256: str,
+    common_fingerprint: str,
+    git_commit: str,
+) -> dict[str, Any]:
+    required = ("seed", "dataset", "subset", "data", "initial_state", "signature")
+    missing = [name for name in required if name not in parent]
+    if missing:
+        raise ValueError(f"parent protocol is missing fields: {missing}")
+    manifest = {
+        **{name: value for name, value in parent.items() if name not in {"signature", "initial_state", "git_commit"}},
+        "format_version": 2,
+        "variant": "qg-p2-v1",
+        "git_commit": git_commit,
+        "common_fingerprint": common_fingerprint,
+        "initial_state": {
+            "path": str(initial_state_path.resolve()),
+            "sha256": initial_state_sha256,
+        },
+        "lineage": {
+            "parent_protocol_signature": parent["signature"],
+            "parent_initial_state_sha256": parent["initial_state"]["sha256"],
+        },
+    }
+    manifest["signature"] = _json_sha256(manifest)
+    return manifest
     derived_innovation.update(
         {
             name: value.detach().cpu().clone()
@@ -69,8 +101,10 @@ def derive_qg_initial_state(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Derive an immutable QG-P2 initial state from a frozen parent state.")
     parser.add_argument("--parent", type=Path, required=True)
+    parser.add_argument("--parent-protocol", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output-protocol", type=Path, required=True)
     return parser
 
 
@@ -104,6 +138,17 @@ def main() -> None:
         parent_sha256=parent_hash,
     )
     _write_locked_state(args.output, derived)
+    parent_protocol = json.loads(args.parent_protocol.read_text(encoding="utf-8"))
+    if parent_protocol.get("initial_state", {}).get("sha256") != parent_hash:
+        raise SystemExit("parent protocol does not identify the supplied parent initial state")
+    manifest = derive_qg_protocol_manifest(
+        parent_protocol,
+        initial_state_path=args.output,
+        initial_state_sha256=_file_sha256(args.output),
+        common_fingerprint=derived["fingerprints"]["common"],
+        git_commit=_git_commit(),
+    )
+    _write_locked_text(args.output_protocol, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(
         json.dumps(
             {
@@ -113,6 +158,8 @@ def main() -> None:
                 "common_fingerprint": derived["fingerprints"]["common"],
                 "innovation_fingerprint": derived["fingerprints"]["innovation"],
                 "quality_tensors": sorted(quality_names),
+                "protocol": str(args.output_protocol.resolve()),
+                "protocol_signature": manifest["signature"],
             },
             indent=2,
             sort_keys=True,
@@ -131,6 +178,31 @@ def _write_locked_state(path: Path, artifact: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(artifact, temporary)
     temporary.replace(path)
+
+
+def _write_locked_text(path: Path, content: str) -> None:
+    path = path.resolve()
+    if path.exists() and path.read_text(encoding="utf-8") != content:
+        raise FileExistsError(f"refusing to replace changed protocol manifest: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _git_commit() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _json_sha256(payload: object) -> str:
+    content = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return sha256(content).hexdigest().upper()
 
 
 def _file_sha256(path: Path) -> str:
