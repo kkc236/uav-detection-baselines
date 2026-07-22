@@ -85,71 +85,23 @@ def _lexicographic_assignment(costs: torch.Tensor, legal: torch.Tensor) -> torch
 
     costs_cpu = costs.detach().double().cpu().numpy()
     legal_cpu = legal.detach().cpu().numpy().astype(bool, copy=False)
-    all_gt = list(range(gt_count))
-    all_candidates = list(range(candidate_count))
-    target_matches, target_distance = _solve_objective(costs_cpu, legal_cpu, all_gt, all_candidates)
-
-    used_candidates: set[int] = set()
-    selected_pairs: list[tuple[int, int]] = []
-    prefix_matches = 0
-    prefix_distance = 0.0
-
-    for gt_index in all_gt:
-        available = [index for index in all_candidates if index not in used_candidates]
-        legal_options = [index for index in available if legal_cpu[gt_index, index]]
-        remaining_gt = list(range(gt_index + 1, gt_count))
-        chosen: int | None | object = _NO_CHOICE
-
-        for candidate in [*legal_options, None]:
-            remaining_candidates = available if candidate is None else [i for i in available if i != candidate]
-            remaining_matches, remaining_distance = _solve_objective(
-                costs_cpu,
-                legal_cpu,
-                remaining_gt,
-                remaining_candidates,
-            )
-            option_matches = prefix_matches + (candidate is not None) + remaining_matches
-            option_distance = prefix_distance + remaining_distance
-            if candidate is not None:
-                option_distance += float(costs_cpu[gt_index, candidate])
-
-            if option_matches == target_matches and abs(option_distance - target_distance) <= 1e-10:
-                chosen = candidate
-                break
-
-        if chosen is _NO_CHOICE:
-            raise RuntimeError("failed to construct deterministic optimal assignment")
-        if chosen is not None:
-            candidate_index = int(chosen)
-            selected_pairs.append((gt_index, candidate_index))
-            used_candidates.add(candidate_index)
-            prefix_matches += 1
-            prefix_distance += float(costs_cpu[gt_index, candidate_index])
-
-    if not selected_pairs:
+    candidate_indices = np.flatnonzero(legal_cpu.any(axis=0))
+    if candidate_indices.size == 0:
         return torch.empty((0, 2), dtype=torch.long, device=costs.device)
-    return torch.tensor(selected_pairs, dtype=torch.long, device=costs.device)
 
-
-def _solve_objective(
-    costs: np.ndarray,
-    legal: np.ndarray,
-    gt_indices: list[int],
-    candidate_indices: list[int],
-) -> tuple[int, float]:
-    row_count = len(gt_indices)
-    if row_count == 0:
-        return 0, 0.0
-
-    column_count = len(candidate_indices)
-    sub_costs = costs[np.ix_(gt_indices, candidate_indices)]
-    sub_legal = legal[np.ix_(gt_indices, candidate_indices)]
+    sub_costs = costs_cpu[:, candidate_indices]
+    sub_legal = legal_cpu[:, candidate_indices]
+    row_count, column_count = sub_costs.shape
     max_legal_cost = float(sub_costs[sub_legal].max()) if sub_legal.any() else 0.0
     penalty = (max_legal_cost + 1.0) * (row_count + 1)
     forbidden = 2.0 * penalty
     assignment_costs = np.full((row_count, column_count + row_count), penalty, dtype=np.float64)
     if column_count:
         assignment_costs[:, :column_count] = np.where(sub_legal, sub_costs, forbidden)
+
+    tie_rank = np.concatenate((np.arange(column_count, dtype=np.float64), np.full(row_count, column_count)))
+    row_weight = np.power(column_count + 1.0, -np.arange(row_count, dtype=np.float64))
+    assignment_costs += 1e-12 * row_weight[:, None] * tie_rank[None, :]
 
     rows, columns = linear_sum_assignment(assignment_costs)
     real = columns < column_count
@@ -160,9 +112,8 @@ def _solve_objective(
         real_rows = real_rows[selected_legal]
         real_columns = real_columns[selected_legal]
 
-    matched = int(real_columns.size)
-    distance = float(sub_costs[real_rows, real_columns].sum()) if matched else 0.0
-    return matched, distance
-
-
-_NO_CHOICE = object()
+    if real_columns.size == 0:
+        return torch.empty((0, 2), dtype=torch.long, device=costs.device)
+    selected_candidates = candidate_indices[real_columns]
+    pairs = np.column_stack((real_rows, selected_candidates))
+    return torch.as_tensor(pairs, dtype=torch.long, device=costs.device)
