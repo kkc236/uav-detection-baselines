@@ -59,12 +59,23 @@ def classify_stock_parameter(name: str) -> str:
     return "stock_other"
 
 
+def classify_tsgr_gradient_boundary(name: str) -> str:
+    if any(part in name.split(".") for part in _AUXILIARY_PARTS):
+        return "auxiliary_private"
+    layer = _model_layer_index(name.split("."))
+    return "routed_shallow" if layer in {0, 1} else "forbidden_common"
+
+
 def clone_named_parameters(parameters: Mapping[str, torch.nn.Parameter]) -> dict[str, torch.Tensor]:
     return {name: value.detach().float().clone() for name, value in parameters.items()}
 
 
 def capture_grouped_gradients(parameters: Mapping[str, torch.nn.Parameter]) -> dict[str, dict[str, float]]:
     tensors = {name: parameter.grad for name, parameter in parameters.items() if parameter.grad is not None}
+    return _capture_grouped_tensors(tensors)
+
+
+def capture_grouped_tensor_mapping(tensors: Mapping[str, torch.Tensor]) -> dict[str, dict[str, float]]:
     return _capture_grouped_tensors(tensors)
 
 
@@ -379,6 +390,134 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
     }
 
 
+def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 1e-12) -> dict:
+    """Apply the preregistered E0b gate to contribution-separated A0/H0/H1 traces."""
+    errors: list[str] = []
+    if (a0.get("arm"), h0.get("arm"), h1.get("arm")) != ("a0", "h0", "h1"):
+        errors.append("E0b arms must be a0, h0, and h1")
+    targets = {trace.get("target_optimizer_steps") for trace in (a0, h0, h1)}
+    if len(targets) != 1:
+        errors.append("E0b target optimizer-step counts differ")
+    for trace in (a0, h0, h1):
+        if trace.get("completed_successful_updates") != trace.get("target_optimizer_steps"):
+            errors.append(f"{trace.get('arm')} did not complete its successful-update target")
+        if any(step.get("amp_step_skipped") for step in trace.get("steps", [])):
+            errors.append(f"{trace.get('arm')} contains an AMP skip")
+        if not trace.get("controlled_amp", {}).get("enabled"):
+            errors.append(f"{trace.get('arm')} is not a controlled-AMP trace")
+
+    paired_fields = ("common_initial_fingerprint", "initial_state_sha256", "optimizer_common_manifest")
+    for field in paired_fields:
+        if not (a0.get(field) == h0.get(field) == h1.get(field)):
+            errors.append(f"E0b pairing mismatch: {field}")
+    probe_fields = (
+        "batch_fingerprint",
+        "rng_before_forward",
+        "stock_topk_fingerprint",
+        "decoder_output_fingerprint",
+        "stock_output_fingerprint",
+    )
+    for field in probe_fields:
+        values = [trace.get("initial_probe", {}).get(field) for trace in (a0, h0, h1)]
+        if values[0] is None or len(set(values)) != 1:
+            errors.append(f"E0b initial probe mismatch: {field}")
+    if not _nested_close(
+        h0.get("initial_probe", {}).get("p2_loss"),
+        h1.get("initial_probe", {}).get("p2_loss"),
+        tolerance,
+    ):
+        errors.append("H0/H1 initial P2 loss differs")
+
+    h0_signatures = h0.get("p2_only_stock_grad_parameters", {})
+    h1_signatures = h1.get("p2_only_stock_grad_parameters", {})
+    h0_nonzero = [name for name, record in h0_signatures.items() if float(record.get("max_abs", 0.0)) > tolerance]
+    if h0_nonzero:
+        errors.append(f"H0 has common P2-only gradients: {h0_nonzero[:5]}")
+    h1_allowed = [
+        name
+        for name, record in h1_signatures.items()
+        if float(record.get("max_abs", 0.0)) > tolerance
+        and classify_tsgr_gradient_boundary(name) == "routed_shallow"
+    ]
+    h1_forbidden = [
+        name
+        for name, record in h1_signatures.items()
+        if float(record.get("max_abs", 0.0)) > tolerance
+        and classify_tsgr_gradient_boundary(name) != "routed_shallow"
+    ]
+    allowed_layers = {_model_layer_index(name.split(".")) for name in h1_allowed}
+    if not {0, 1}.issubset(allowed_layers):
+        errors.append("H1 did not produce finite nonzero P2-only gradients in both model.0 and model.1")
+    if h1_forbidden:
+        errors.append(f"H1 P2-only gradient escaped model.0/1: {h1_forbidden[:5]}")
+    h0_aux = float(h0.get("p2_only_aux_private_grad_l2", 0.0))
+    h1_aux = float(h1.get("p2_only_aux_private_grad_l2", 0.0))
+    if h0_aux <= tolerance or h1_aux <= tolerance:
+        errors.append("H0/H1 auxiliary-private P2-only gradient is missing")
+    elif not isclose(h0_aux, h1_aux, rel_tol=1e-6, abs_tol=tolerance):
+        errors.append("H0/H1 auxiliary-private P2-only gradients differ")
+
+    for trace in (h0, h1):
+        config = trace.get("ebc_config") or {}
+        expected_eta = 0.0 if trace.get("arm") == "h0" else 0.1
+        if config.get("p2_c2_grad_scale") != expected_eta:
+            errors.append(f"{trace.get('arm')} eta mismatch")
+        if config.get("lambda_p2") != 0.1 or not config.get("contribution_separated_aux_gradients"):
+            errors.append(f"{trace.get('arm')} is not the frozen contribution-separated TSGR config")
+        if config.get("query_injection_enabled") or config.get("lambda_ebc") != 0.0:
+            errors.append(f"{trace.get('arm')} enables a forbidden stock-coupling feature")
+        if trace.get("initial_probe", {}).get("p2_entry_count") != 0:
+            errors.append(f"{trace.get('arm')} initial probe injected P2 queries")
+        if trace.get("initial_probe", {}).get("ordinary_query_count") != 300:
+            errors.append(f"{trace.get('arm')} initial query count is not 300")
+        for step in trace.get("steps", []):
+            if step.get("gradient_clipping_mode") != "contribution_separated":
+                errors.append(f"{trace.get('arm')} did not use contribution-separated clipping")
+                break
+            if step.get("p2_entry_count") != 0 or step.get("ordinary_query_count") != 300:
+                errors.append(f"{trace.get('arm')} query integrity failed")
+                break
+            if not _nested_close(
+                step.get("clip_coefficient"), step.get("stock_only_clip_coefficient"), tolerance
+            ):
+                errors.append(f"{trace.get('arm')} auxiliary gradients changed the stock clip coefficient")
+                break
+
+    h1_first = (h1.get("steps") or [{}])[0]
+    shallow_stock_norm = _signature_subset_l2(
+        h1_first.get("stock_grad_preclip_parameters", {}),
+        lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
+    )
+    shallow_p2_norm = _signature_subset_l2(
+        h1_signatures,
+        lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
+    )
+    rho = shallow_p2_norm / (shallow_stock_norm + 1e-12)
+    if not 0.01 <= rho <= 0.25:
+        errors.append(f"H1 shallow gradient ratio rho={rho:.6g} is outside [0.01, 0.25]")
+
+    if h0.get("steps") and h1.get("steps"):
+        h0_delta = h0["steps"][0].get("stock_delta_sha256", {})
+        h1_delta = h1["steps"][0].get("stock_delta_sha256", {})
+        deep_names = {
+            name
+            for name in set(h0_delta).intersection(h1_delta)
+            if classify_tsgr_gradient_boundary(name) == "forbidden_common"
+        }
+        divergent = [name for name in sorted(deep_names) if h0_delta[name] != h1_delta[name]]
+        if divergent:
+            errors.append(f"H1 first update changed forbidden deep parameters: {divergent[:5]}")
+
+    return {
+        "passed": not errors,
+        "classification": "TSGR_E0B_PASS" if not errors else "TSGR_E0B_FAIL",
+        "errors": errors,
+        "h1_shallow_gradient_ratio": rho,
+        "h1_routed_nonzero_parameter_count": len(h1_allowed),
+        "h1_forbidden_nonzero_parameter_count": len(h1_forbidden),
+    }
+
+
 def compare_a0_repeats(reference: dict, repeat: dict) -> dict:
     if reference.get("arm") != "a0" or repeat.get("arm") != "a0-repeat":
         raise ValueError("repeatability arms must be a0 and a0-repeat")
@@ -465,6 +604,10 @@ def _capture_grouped_tensors(tensors: Mapping[str, torch.Tensor]) -> dict[str, d
         }
         for group in STOCK_GROUPS
     }
+
+
+def _signature_subset_l2(signatures: Mapping[str, Mapping[str, object]], predicate) -> float:
+    return sum(float(record.get("l2", 0.0)) ** 2 for name, record in signatures.items() if predicate(name)) ** 0.5
 
 
 def _nested_close(left: object, right: object, tolerance: float) -> bool:

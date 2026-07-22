@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import copy
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -31,6 +32,7 @@ LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
 QG_LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "qg_loss", "ebc_loss")
 EBC_QP_IMPLEMENTATION_VERSION = "1.0"
 QG_P2_IMPLEMENTATION_VERSION = "1.1-qg-p2"
+TSGR_P2_IMPLEMENTATION_VERSION = "2.0-tsgr-p2"
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,187 @@ class NormalizedUpdateMonitor:
         return record
 
 
+def _is_auxiliary_parameter_name(name: str) -> bool:
+    auxiliary_modules = ("p2_adapter.", "p2_bbox_head.", "p2_quality_head.")
+    return any(name.startswith(module) or f".{module}" in name for module in auxiliary_modules) or name.endswith(
+        "p2_fusion_gamma"
+    )
+
+
+def is_tsgr_shallow_parameter_name(name: str) -> bool:
+    parts = name.split(".")
+    return len(parts) >= 3 and parts[0] == "model" and parts[1] in {"0", "1"}
+
+
+def partition_optimizer_parameters(model, optimizer) -> tuple[list[torch.nn.Parameter], list[torch.nn.Parameter]]:
+    named_by_id = {id(parameter): name for name, parameter in model.named_parameters() if parameter.requires_grad}
+    optimizer_parameters = [
+        parameter
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+        if parameter.requires_grad
+    ]
+    optimizer_ids = [id(parameter) for parameter in optimizer_parameters]
+    if len(optimizer_ids) != len(set(optimizer_ids)):
+        raise RuntimeError("optimizer contains duplicate trainable parameters")
+    unknown_ids = set(optimizer_ids).difference(named_by_id)
+    if unknown_ids:
+        raise RuntimeError("optimizer contains trainable parameters that are not registered on the model")
+    missing_ids = set(named_by_id).difference(optimizer_ids)
+    if missing_ids:
+        missing_names = sorted(named_by_id[parameter_id] for parameter_id in missing_ids)
+        raise RuntimeError(f"trainable model parameters missing from optimizer: {missing_names[:5]}")
+
+    auxiliary_parameters = [
+        parameter for parameter in optimizer_parameters if _is_auxiliary_parameter_name(named_by_id[id(parameter)])
+    ]
+    auxiliary_ids = {id(parameter) for parameter in auxiliary_parameters}
+    stock_parameters = [parameter for parameter in optimizer_parameters if id(parameter) not in auxiliary_ids]
+    stock_ids = {id(parameter) for parameter in stock_parameters}
+    if stock_ids.intersection(auxiliary_ids) or stock_ids.union(auxiliary_ids) != set(optimizer_ids):
+        raise RuntimeError("stock/auxiliary optimizer parameter partition is not complete and disjoint")
+    return stock_parameters, auxiliary_parameters
+
+
+def _clip_coefficient(preclip_norm: float, max_norm: float) -> float:
+    if preclip_norm <= 0.0:
+        return 1.0
+    return min(1.0, float(max_norm) / (float(preclip_norm) + 1e-6))
+
+
+def add_clipped_gradient_contribution(
+    contributions: list[tuple[torch.nn.Parameter, torch.Tensor]],
+    *,
+    max_norm: float,
+) -> dict[str, float]:
+    if not contributions:
+        return {"preclip_norm": 0.0, "clip_coefficient": 1.0}
+    norms = torch.stack([gradient.detach().float().norm(2) for _parameter, gradient in contributions])
+    preclip_norm = float(norms.norm(2).item())
+    if not torch.isfinite(norms).all():
+        raise FloatingPointError("auxiliary gradient contribution is non-finite")
+    coefficient = _clip_coefficient(preclip_norm, max_norm)
+    for parameter, gradient in contributions:
+        clipped = gradient.detach().to(dtype=parameter.dtype).mul(coefficient)
+        if parameter.grad is None:
+            parameter.grad = clipped.clone()
+        else:
+            parameter.grad.add_(clipped)
+    return {"preclip_norm": preclip_norm, "clip_coefficient": coefficient}
+
+
+def prepare_contribution_separated_gradients(
+    model,
+    optimizer,
+    scaler,
+    stock_parameters: list[torch.nn.Parameter],
+    auxiliary_parameters: list[torch.nn.Parameter],
+    *,
+    max_norm: float,
+    capture_tensors: bool = False,
+) -> dict[str, Any]:
+    scaled_contributions, contribution_scale = model.pop_isolated_auxiliary_gradients()
+    scaler_scale = float(scaler.get_scale())
+    if contribution_scale != scaler_scale:
+        raise RuntimeError(
+            f"isolated auxiliary gradient scale mismatch: buffered {contribution_scale}, scaler {scaler_scale}"
+        )
+    named_parameters = dict(model.named_parameters())
+    parameter_names = {id(parameter): name for name, parameter in named_parameters.items()}
+    auxiliary_ids = {id(parameter) for parameter in auxiliary_parameters}
+    expected_names = {
+        name
+        for name, parameter in named_parameters.items()
+        if id(parameter) in auxiliary_ids or is_tsgr_shallow_parameter_name(name)
+    }
+    unexpected = set(scaled_contributions).difference(expected_names)
+    if unexpected:
+        raise RuntimeError(f"isolated P2 gradient escaped its allowed boundary: {sorted(unexpected)[:5]}")
+
+    shallow_scaled = {
+        name: gradient
+        for name, gradient in scaled_contributions.items()
+        if is_tsgr_shallow_parameter_name(name)
+    }
+    private_scaled = {
+        name: gradient
+        for name, gradient in scaled_contributions.items()
+        if name in expected_names and not is_tsgr_shallow_parameter_name(name)
+    }
+    shallow_scaled_finite = all(torch.isfinite(gradient).all() for gradient in shallow_scaled.values())
+
+    installed_private: list[torch.nn.Parameter] = []
+    for parameter in auxiliary_parameters:
+        name = parameter_names[id(parameter)]
+        gradient = private_scaled.get(name)
+        if gradient is None:
+            continue
+        if parameter.grad is not None:
+            raise RuntimeError(f"pure stock loss unexpectedly produced an auxiliary-private gradient: {name}")
+        parameter.grad = gradient.detach().clone()
+        installed_private.append(parameter)
+    if not shallow_scaled_finite:
+        if not installed_private:
+            raise RuntimeError("cannot expose a non-finite routed gradient to GradScaler")
+        installed_private[0].grad.reshape(-1)[0] = float("inf")
+
+    scaler.unscale_(optimizer)
+    private_unscaled: list[tuple[torch.nn.Parameter, torch.Tensor]] = []
+    for parameter in auxiliary_parameters:
+        if parameter.grad is not None:
+            private_unscaled.append((parameter, parameter.grad.detach().clone()))
+            parameter.grad = None
+    shallow_unscaled = [
+        (named_parameters[name], gradient.detach() / contribution_scale)
+        for name, gradient in shallow_scaled.items()
+    ]
+    auxiliary_finite = shallow_scaled_finite and all(
+        torch.isfinite(gradient).all() for _parameter, gradient in private_unscaled
+    )
+
+    captured: dict[str, Any] = {}
+    if capture_tensors:
+        captured["pure_stock_preclip"] = {
+            parameter_names[id(parameter)]: parameter.grad.detach().clone()
+            for parameter in stock_parameters
+            if parameter.grad is not None
+        }
+        captured["routed_shallow_preclip"] = {
+            parameter_names[id(parameter)]: gradient.detach().clone()
+            for parameter, gradient in shallow_unscaled
+        }
+        captured["aux_private_preclip"] = {
+            parameter_names[id(parameter)]: gradient.detach().clone()
+            for parameter, gradient in private_unscaled
+        }
+
+    stock_norm_tensor = torch.nn.utils.clip_grad_norm_(stock_parameters, max_norm=max_norm)
+    stock_norm = float(stock_norm_tensor.detach().float().item())
+    shallow_result = {"preclip_norm": float("nan"), "clip_coefficient": float("nan")}
+    private_result = {"preclip_norm": float("nan"), "clip_coefficient": float("nan")}
+    if auxiliary_finite:
+        shallow_result = add_clipped_gradient_contribution(shallow_unscaled, max_norm=max_norm)
+        private_result = add_clipped_gradient_contribution(private_unscaled, max_norm=max_norm)
+    if capture_tensors:
+        captured["merged_postclip"] = {
+            parameter_names[id(parameter)]: parameter.grad.detach().clone()
+            for parameter in [*stock_parameters, *auxiliary_parameters]
+            if parameter.grad is not None
+        }
+    return {
+        "gradient_clipping_mode": "contribution_separated",
+        "scaler_scale": scaler_scale,
+        "auxiliary_finite": auxiliary_finite,
+        "pure_stock_preclip_norm": stock_norm,
+        "pure_stock_clip_coefficient": _clip_coefficient(stock_norm, max_norm),
+        "routed_shallow_preclip_norm": shallow_result["preclip_norm"],
+        "routed_shallow_clip_coefficient": shallow_result["clip_coefficient"],
+        "aux_private_preclip_norm": private_result["preclip_norm"],
+        "aux_private_clip_coefficient": private_result["clip_coefficient"],
+        **captured,
+    }
+
+
 def _assert_source_lock() -> None:
     package_root = Path(ultralytics.__file__).parent
     assert_ultralytics_source_lock(
@@ -129,6 +312,9 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
     ):
         _assert_source_lock()
         self.ebc_config = ebc_config or EBCQPConfig()
+        self._isolated_auxiliary_gradient_scale = 1.0
+        self._isolated_auxiliary_gradient_buffer: dict[str, torch.Tensor] = {}
+        self._isolated_auxiliary_buffer_scale: float | None = None
         original_decoder = ultralytics_tasks.RTDETRDecoder
         register_ebc_qp_decoder()
         try:
@@ -149,18 +335,71 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
     def set_ebc_progress(self, epoch: int) -> None:
         self.ebc_head.set_progress(epoch)
 
+    def set_isolated_auxiliary_gradient_scale(self, scale: float) -> None:
+        scale = float(scale)
+        if scale <= 0.0:
+            raise ValueError("isolated auxiliary gradient scale must be positive")
+        if self._isolated_auxiliary_gradient_buffer and self._isolated_auxiliary_buffer_scale != scale:
+            raise RuntimeError("GradScaler scale changed inside an accumulated optimizer step")
+        self._isolated_auxiliary_gradient_scale = scale
+
+    def clear_isolated_auxiliary_gradients(self) -> None:
+        self._isolated_auxiliary_gradient_buffer.clear()
+        self._isolated_auxiliary_buffer_scale = None
+
+    def pop_isolated_auxiliary_gradients(self) -> tuple[dict[str, torch.Tensor], float]:
+        if not self._isolated_auxiliary_gradient_buffer or self._isolated_auxiliary_buffer_scale is None:
+            raise RuntimeError("isolated auxiliary gradient buffer is empty")
+        gradients = self._isolated_auxiliary_gradient_buffer
+        scale = self._isolated_auxiliary_buffer_scale
+        self._isolated_auxiliary_gradient_buffer = {}
+        self._isolated_auxiliary_buffer_scale = None
+        return gradients, scale
+
+    def _accumulate_isolated_p2_gradients(self, objective: torch.Tensor) -> None:
+        targets = [
+            (name, parameter)
+            for name, parameter in self.named_parameters()
+            if parameter.requires_grad
+            and (_is_auxiliary_parameter_name(name) or is_tsgr_shallow_parameter_name(name))
+        ]
+        scale = self._isolated_auxiliary_gradient_scale
+        gradients = torch.autograd.grad(
+            objective * scale,
+            [parameter for _name, parameter in targets],
+            retain_graph=True,
+            allow_unused=True,
+        )
+        if self._isolated_auxiliary_buffer_scale is None:
+            self._isolated_auxiliary_buffer_scale = scale
+        elif self._isolated_auxiliary_buffer_scale != scale:
+            raise RuntimeError("GradScaler scale changed inside an accumulated optimizer step")
+        for (name, _parameter), gradient in zip(targets, gradients):
+            if gradient is None:
+                continue
+            detached = gradient.detach()
+            previous = self._isolated_auxiliary_gradient_buffer.get(name)
+            self._isolated_auxiliary_gradient_buffer[name] = (
+                detached.clone() if previous is None else previous.add(detached)
+            )
+
     def loss(self, batch: dict, preds=None):
         stock_loss, stock_items = super().loss(batch, preds=preds)
         state = self.ebc_head.last_state
         if state is None:
             raise RuntimeError("EBC-QP forward state was not populated")
         ebc_loss = state.ebc_loss if state.competition_active else state.ebc_loss * 0.0
-        total = (
-            stock_loss.float()
-            + self.ebc_config.lambda_p2 * state.p2_loss.float()
-            + self.ebc_config.lambda_quality * state.quality_loss.float()
-            + self.ebc_config.lambda_ebc * ebc_loss.float()
-        )
+        p2_objective = self.ebc_config.lambda_p2 * state.p2_loss.float()
+        if self.ebc_config.contribution_separated_aux_gradients:
+            self._accumulate_isolated_p2_gradients(p2_objective)
+            total = stock_loss.float()
+        else:
+            total = (
+                stock_loss.float()
+                + p2_objective
+                + self.ebc_config.lambda_quality * state.quality_loss.float()
+                + self.ebc_config.lambda_ebc * ebc_loss.float()
+            )
         state.stock_loss = stock_loss.detach()
         side_items = [state.p2_loss.detach()[None]]
         if self.ebc_config.quality_gated_p2:
@@ -191,6 +430,8 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
     stored_config.setdefault("query_injection_enabled", True)
     stored_config.setdefault("quality_gated_p2", False)
     stored_config.setdefault("lambda_quality", 0.25)
+    stored_config.setdefault("p2_c2_grad_scale", 0.0)
+    stored_config.setdefault("contribution_separated_aux_gradients", False)
     if stored_config != config.as_dict():
         raise RuntimeError("EBC-QP config mismatch")
     if metadata.get("source_sha256") != SOURCE_SHA256:
@@ -198,6 +439,8 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
 
 
 def _implementation_version(config: EBCQPConfig) -> str:
+    if config.contribution_separated_aux_gradients:
+        return TSGR_P2_IMPLEMENTATION_VERSION
     return QG_P2_IMPLEMENTATION_VERSION if config.quality_gated_p2 else EBC_QP_IMPLEMENTATION_VERSION
 
 
@@ -304,6 +547,7 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         self.initial_state = _load_protocol_state(self.initial_state_path)
         super().__init__(*args, **kwargs)
         self.add_callback("on_train_epoch_start", self._set_ebc_progress)
+        self.add_callback("on_train_batch_start", self._set_isolated_auxiliary_gradient_scale)
 
     def get_model(self, cfg=None, weights=None, verbose: bool = True):
         model = EBCQPDetectionModel(
@@ -321,6 +565,11 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         return model
 
     def _build_train_pipeline(self):
+        model = getattr(self, "model", None)
+        if isinstance(model, torch.nn.Module):
+            unwrapped = unwrap_model(model)
+            if isinstance(unwrapped, EBCQPDetectionModel):
+                unwrapped.clear_isolated_auxiliary_gradients()
         _reset_paired_random_state(self.args.seed, self.args.deterministic)
         return super()._build_train_pipeline()
 
@@ -331,21 +580,22 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         if ema_model is not None:
             unwrap_model(ema_model).set_ebc_progress(epoch)
 
+    def _set_isolated_auxiliary_gradient_scale(self, _trainer=None) -> None:
+        if not self.ebc_config.contribution_separated_aux_gradients:
+            return
+        if RANK != -1:
+            raise RuntimeError("contribution-separated TSGR gradients currently require single-GPU training")
+        unwrap_model(self.model).set_isolated_auxiliary_gradient_scale(float(self.scaler.get_scale()))
+
     def get_validator(self):
         self.loss_names = QG_LOSS_NAMES if self.ebc_config.quality_gated_p2 else LOSS_NAMES
         return EBCQPValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
 
     def optimizer_step(self):
         if not hasattr(self, "update_monitor"):
-            p2_parameters = []
-            stock_parameters = []
-            for name, parameter in unwrap_model(self.model).named_parameters():
-                target = (
-                    p2_parameters
-                    if any(part in name for part in (".p2_adapter.", ".p2_bbox_head.", ".p2_quality_head."))
-                    else stock_parameters
-                )
-                target.append(parameter)
+            stock_parameters, p2_parameters = partition_optimizer_parameters(unwrap_model(self.model), self.optimizer)
+            self._p2_clip_parameters = p2_parameters
+            self._stock_clip_parameters = stock_parameters
             self.update_monitor = NormalizedUpdateMonitor(
                 p2_parameters,
                 stock_parameters,
@@ -358,8 +608,24 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         monitoring = self.update_monitor.step < self.update_monitor.max_steps
         if monitoring:
             self.update_monitor.snapshot()
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+        if self.ebc_config.contribution_separated_aux_gradients:
+            self.last_gradient_clip_diagnostics = prepare_contribution_separated_gradients(
+                unwrap_model(self.model),
+                self.optimizer,
+                self.scaler,
+                self._stock_clip_parameters,
+                self._p2_clip_parameters,
+                max_norm=10.0,
+            )
+        else:
+            self.scaler.unscale_(self.optimizer)
+            total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+            total_norm_value = float(total_norm.detach().float().item())
+            self.last_gradient_clip_diagnostics = {
+                "gradient_clipping_mode": "legacy_combined",
+                "combined_preclip_norm": total_norm_value,
+                "combined_clip_coefficient": _clip_coefficient(total_norm_value, 10.0),
+            }
         self.scaler.step(self.optimizer)
         self.scaler.update()
         record = self.update_monitor.observe() if monitoring else None

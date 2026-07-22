@@ -72,6 +72,45 @@ def test_p2_only_backward_isolates_stock_parameters_and_side_inputs():
     assert inputs[1].grad is None
 
 
+def test_tsg_p2_scales_only_c2_gradient_and_preserves_private_gradient():
+    heads = {
+        scale: _small_ebc_head_with_config(
+            EBCQPConfig(query_budget=8, p2_candidates=4, p2_c2_grad_scale=scale)
+        )
+        for scale in (0.0, 0.1, 1.0)
+    }
+    for scale in (0.1, 1.0):
+        heads[scale].load_state_dict(heads[0.0].state_dict(), strict=True)
+    inputs_by_scale = {
+        scale: _small_inputs(requires_grad=True)
+        for scale in heads
+    }
+    states = {}
+    private_gradients = {}
+    for scale, head in heads.items():
+        head.train()
+        states[scale] = head.forward_with_state(inputs_by_scale[scale], _single_tiny_batch())
+        states[scale].p2_loss.backward()
+        private_gradients[scale] = head.p2_adapter[0].weight.grad.detach().clone()
+
+    torch.testing.assert_close(states[0.1].p2_loss, states[0.0].p2_loss, rtol=0, atol=0)
+    torch.testing.assert_close(states[1.0].p2_loss, states[0.0].p2_loss, rtol=0, atol=0)
+    zero_grad = inputs_by_scale[0.0][0].grad
+    assert zero_grad is None or torch.count_nonzero(zero_grad) == 0
+    torch.testing.assert_close(
+        inputs_by_scale[0.1][0].grad,
+        inputs_by_scale[1.0][0].grad * 0.1,
+        rtol=1e-5,
+        atol=1e-8,
+    )
+    for scale in (0.0, 0.1):
+        torch.testing.assert_close(private_gradients[scale], private_gradients[1.0], rtol=0, atol=0)
+    for scale, head in heads.items():
+        assert inputs_by_scale[scale][1].grad is None
+        assert not _grad_nonzero(head.enc_output)
+        assert not _grad_nonzero(head.enc_score_head)
+
+
 def test_warmup_and_active_query_integrity():
     head = _small_ebc_head()
     head.train()

@@ -429,7 +429,8 @@ class EBCQPDecoder(RTDETRDecoder):
         )
 
     def _p2_features(self, c2: torch.Tensor, projected_p3: torch.Tensor) -> torch.Tensor:
-        lateral = self.p2_adapter(c2.detach())
+        routed_c2 = gradient_scale(c2, self.ebc_config.p2_c2_grad_scale)
+        lateral = self.p2_adapter(routed_c2)
         context = F.interpolate(projected_p3.detach(), size=lateral.shape[-2:], mode="nearest")
         if self.p2_fusion_gamma is not None:
             lateral = self.p2_fusion_gamma * lateral
@@ -447,6 +448,12 @@ class EBCQPDecoder(RTDETRDecoder):
 
     def _detached_stock_scores(self, p2_embed: torch.Tensor) -> torch.Tensor:
         return F.linear(p2_embed, self.enc_score_head.weight.detach(), self.enc_score_head.bias.detach())
+
+
+def gradient_scale(value: torch.Tensor, scale: float) -> torch.Tensor:
+    """Preserve the forward value exactly while scaling this branch's backward gradient."""
+    detached = value.detach()
+    return detached + float(scale) * (value - detached)
 
 
 def register_ebc_qp_decoder() -> None:

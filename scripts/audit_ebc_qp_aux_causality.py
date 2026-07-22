@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.ebc_qp_causal_audit import (  # noqa: E402
     capture_grouped_gradients,
+    capture_grouped_tensor_mapping,
     capture_grouped_parameter_deltas,
     capture_grouped_values,
     clone_named_parameters,
@@ -34,7 +35,7 @@ from src.ebc_qp_protocol import state_fingerprint  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one arm of the frozen 100-step A0/AUX E0 causal audit.")
-    parser.add_argument("--arm", required=True, choices=("a0", "a0-repeat", "aux-audit"))
+    parser.add_argument("--arm", required=True, choices=("a0", "a0-repeat", "aux-audit", "h0", "h1"))
     parser.add_argument("--initial-state", required=True, type=Path)
     parser.add_argument("--protocol-manifest", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
@@ -70,6 +71,32 @@ def controlled_amp_config(args: argparse.Namespace) -> dict[str, Any]:
         "growth_interval": 1000 if enabled else None,
         "require_zero_skips": enabled,
     }
+
+
+def build_audit_ebc_config(arm: str):
+    from src.ebc_qp_config import EBCQPConfig
+
+    if arm in {"a0", "a0-repeat"}:
+        return None
+    if arm == "aux-audit":
+        return EBCQPConfig(
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=True,
+            query_injection_enabled=False,
+            quality_gated_p2=False,
+        )
+    if arm in {"h0", "h1"}:
+        return EBCQPConfig(
+            lambda_p2=0.1,
+            lambda_quality=0.0,
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=False,
+            query_injection_enabled=False,
+            quality_gated_p2=False,
+            p2_c2_grad_scale=0.0 if arm == "h0" else 0.1,
+            contribution_separated_aux_gradients=True,
+        )
+    raise ValueError(f"unsupported audit arm: {arm}")
 
 
 def validate_controlled_amp_runtime(amp_enabled: bool, scaler: Any, config: Mapping[str, Any]) -> None:
@@ -270,7 +297,12 @@ def _make_trainers():
     from ultralytics.utils.torch_utils import unwrap_model
 
     from src.ebc_qp_config import EBCQPConfig
-    from src.rtdetr_ebc_qp import EBCQPTrainer, PairedControlTrainer
+    from src.rtdetr_ebc_qp import (
+        EBCQPTrainer,
+        PairedControlTrainer,
+        partition_optimizer_parameters,
+        prepare_contribution_separated_gradients,
+    )
 
     class CausalAuditMixin:
         def __init__(
@@ -292,6 +324,7 @@ def _make_trainers():
             self.audit_pending_rng: list[str] = []
             self.audit_probe_mode = False
             self.audit_p2_only_stock_grad_l2 = 0.0
+            self.audit_p2_only_stock_grad_grouped: dict[str, dict[str, float | int]] = {}
             self.audit_p2_only_stock_grad_parameters: dict[str, dict[str, float | int]] = {}
             self.audit_p2_only_aux_private_grad_l2 = 0.0
             self.audit_p2_only_aux_private_grad_parameters: dict[str, dict[str, float | int]] = {}
@@ -333,6 +366,10 @@ def _make_trainers():
             }
             self.audit_common_buffer_names = common_names & set(dict(model.named_buffers()))
             self.audit_optimizer_manifest = optimizer_common_manifest(self.optimizer, self.audit_common_parameters)
+            if getattr(getattr(self, "ebc_config", None), "contribution_separated_aux_gradients", False):
+                self.audit_stock_parameters, self.audit_auxiliary_parameters = partition_optimizer_parameters(
+                    model, self.optimizer
+                )
             self.audit_common_fingerprint = state_fingerprint(self.initial_state["common_state"])
             self.audit_initial_state_sha256 = _sha256(self.initial_state_path)
             self._write_audit_trace()
@@ -368,16 +405,18 @@ def _make_trainers():
 
             grad_norm = 0.0
             state = getattr(head, "last_state", None)
-            if self.audit_arm == "aux-audit":
+            if self.audit_arm in {"aux-audit", "h0", "h1"}:
                 if state is None:
                     raise RuntimeError("AUX probe did not populate EBC-QP state")
-                state.p2_loss.backward()
+                weight = self.ebc_config.lambda_p2 if self.audit_arm in {"h0", "h1"} else 1.0
+                (weight * state.p2_loss).backward()
             common_names = set(self.initial_state["common_state"])
             common = {name: parameter for name, parameter in probe.named_parameters() if name in common_names}
             auxiliary_private = {
                 name: parameter for name, parameter in probe.named_parameters() if name not in common_names
             }
             grouped = capture_grouped_gradients(common)
+            self.audit_p2_only_stock_grad_grouped = grouped
             self.audit_p2_only_stock_grad_parameters = capture_parameter_signatures(_gradient_tensors(common))
             auxiliary_private_gradients = _gradient_tensors(auxiliary_private)
             self.audit_p2_only_aux_private_grad_parameters = capture_parameter_signatures(
@@ -392,6 +431,9 @@ def _make_trainers():
                 "decoder_output_fingerprint": tensor_structure_fingerprint(output[:2]),
                 "stock_output_fingerprint": tensor_structure_fingerprint(output[2:4]),
                 "stock_loss": float((state.stock_loss if state is not None else total).detach().float().item()),
+                "p2_loss": float(state.p2_loss.detach().float().item()) if state is not None else None,
+                "p2_entry_count": int(state.p2_entry_count) if state is not None else 0,
+                "ordinary_query_count": int(state.ordinary_query_count) if state is not None else 300,
                 "stock_topk_shape": list(topk_indices.shape),
             }
             del probe, batch, raw_batch
@@ -413,35 +455,92 @@ def _make_trainers():
             model = unwrap_model(self.model)
             before = clone_named_parameters(self.audit_common_parameters)
             scale_before = float(self.scaler.get_scale())
-            self.scaler.unscale_(self.optimizer)
-            stock_grad_tensors = _gradient_tensors(self.audit_common_parameters)
-            stock_grad_preclip = capture_grouped_gradients(self.audit_common_parameters)
-            stock_grad_preclip_parameters = capture_parameter_signatures(stock_grad_tensors)
-            stock_grad_preclip_sha256 = capture_tensor_sha256(stock_grad_tensors)
-            stock_grad_preclip_finite = _tensor_mapping_all_finite(stock_grad_tensors)
-            stock_grad_total_norm = math.sqrt(sum(record["l2"] ** 2 for record in stock_grad_preclip.values()))
             all_named_parameters = dict(model.named_parameters())
             auxiliary_parameters = {
                 name: parameter for name, parameter in all_named_parameters.items() if name not in self.audit_common_parameters
             }
-            auxiliary_grad_tensors = _gradient_tensors(auxiliary_parameters)
-            aux_private_grad_total_norm = _tensor_mapping_l2(auxiliary_grad_tensors)
-            aux_private_grad_finite = _tensor_mapping_all_finite(auxiliary_grad_tensors)
-            all_grad_preclip_finite = stock_grad_preclip_finite and aux_private_grad_finite
-            stock_only_clip_coefficient = _clip_coefficient_from_norm(stock_grad_total_norm)
-            total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-            total_norm_value = float(total_norm.detach().float().item())
-            clip_total_norm_finite = math.isfinite(total_norm_value)
-            clip_coefficient = _clip_coefficient_from_norm(total_norm_value)
-            reconstructed_norm = math.sqrt(stock_grad_total_norm**2 + aux_private_grad_total_norm**2)
-            clip_norm_partition_relative_error = (
-                abs(total_norm_value - reconstructed_norm)
-                / max(total_norm_value, reconstructed_norm, 1e-12)
-                if math.isfinite(total_norm_value) and math.isfinite(reconstructed_norm)
-                else float("nan")
+            contribution_separated = bool(
+                getattr(getattr(self, "ebc_config", None), "contribution_separated_aux_gradients", False)
             )
-            stock_grad_postclip = capture_grouped_gradients(self.audit_common_parameters)
-            stock_grad_postclip_tensors = _gradient_tensors(self.audit_common_parameters)
+            routed_shallow_grad_tensors: dict[str, torch.Tensor] = {}
+            routed_shallow_grad_total_norm = 0.0
+            routed_shallow_clip_coefficient = 1.0
+            aux_private_clip_coefficient = 1.0
+            combined_hypothetical_clip_coefficient = None
+            if contribution_separated:
+                clip_diagnostics = prepare_contribution_separated_gradients(
+                    model,
+                    self.optimizer,
+                    self.scaler,
+                    self.audit_stock_parameters,
+                    self.audit_auxiliary_parameters,
+                    max_norm=10.0,
+                    capture_tensors=True,
+                )
+                stock_grad_tensors = {
+                    name: tensor
+                    for name, tensor in clip_diagnostics["pure_stock_preclip"].items()
+                    if name in self.audit_common_parameters
+                }
+                auxiliary_grad_tensors = dict(clip_diagnostics["aux_private_preclip"])
+                routed_shallow_grad_tensors = dict(clip_diagnostics["routed_shallow_preclip"])
+                stock_grad_preclip = capture_grouped_tensor_mapping(stock_grad_tensors)
+                stock_grad_total_norm = float(clip_diagnostics["pure_stock_preclip_norm"])
+                aux_private_grad_total_norm = float(clip_diagnostics["aux_private_preclip_norm"])
+                routed_shallow_grad_total_norm = float(clip_diagnostics["routed_shallow_preclip_norm"])
+                stock_only_clip_coefficient = float(clip_diagnostics["pure_stock_clip_coefficient"])
+                clip_coefficient = stock_only_clip_coefficient
+                routed_shallow_clip_coefficient = float(
+                    clip_diagnostics["routed_shallow_clip_coefficient"]
+                )
+                aux_private_clip_coefficient = float(clip_diagnostics["aux_private_clip_coefficient"])
+                total_norm_value = stock_grad_total_norm
+                clip_total_norm_finite = math.isfinite(total_norm_value)
+                clip_norm_partition_relative_error = 0.0 if clip_total_norm_finite else float("nan")
+                hypothetical_norm = math.sqrt(
+                    stock_grad_total_norm**2
+                    + routed_shallow_grad_total_norm**2
+                    + aux_private_grad_total_norm**2
+                )
+                combined_hypothetical_clip_coefficient = _clip_coefficient_from_norm(hypothetical_norm)
+                stock_grad_postclip_tensors = {
+                    name: tensor
+                    for name, tensor in clip_diagnostics["merged_postclip"].items()
+                    if name in self.audit_common_parameters
+                }
+            else:
+                self.scaler.unscale_(self.optimizer)
+                stock_grad_tensors = _gradient_tensors(self.audit_common_parameters)
+                stock_grad_preclip = capture_grouped_gradients(self.audit_common_parameters)
+                stock_grad_total_norm = math.sqrt(
+                    sum(record["l2"] ** 2 for record in stock_grad_preclip.values())
+                )
+                auxiliary_grad_tensors = _gradient_tensors(auxiliary_parameters)
+                aux_private_grad_total_norm = _tensor_mapping_l2(auxiliary_grad_tensors)
+                stock_only_clip_coefficient = _clip_coefficient_from_norm(stock_grad_total_norm)
+                total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+                total_norm_value = float(total_norm.detach().float().item())
+                clip_total_norm_finite = math.isfinite(total_norm_value)
+                clip_coefficient = _clip_coefficient_from_norm(total_norm_value)
+                reconstructed_norm = math.sqrt(stock_grad_total_norm**2 + aux_private_grad_total_norm**2)
+                clip_norm_partition_relative_error = (
+                    abs(total_norm_value - reconstructed_norm)
+                    / max(total_norm_value, reconstructed_norm, 1e-12)
+                    if math.isfinite(total_norm_value) and math.isfinite(reconstructed_norm)
+                    else float("nan")
+                )
+                stock_grad_postclip_tensors = _gradient_tensors(self.audit_common_parameters)
+            stock_grad_preclip_parameters = capture_parameter_signatures(stock_grad_tensors)
+            stock_grad_preclip_sha256 = capture_tensor_sha256(stock_grad_tensors)
+            stock_grad_preclip_finite = _tensor_mapping_all_finite(stock_grad_tensors)
+            aux_private_grad_finite = _tensor_mapping_all_finite(auxiliary_grad_tensors)
+            routed_shallow_grad_finite = _tensor_mapping_all_finite(routed_shallow_grad_tensors)
+            all_grad_preclip_finite = (
+                stock_grad_preclip_finite and aux_private_grad_finite and routed_shallow_grad_finite
+            )
+            routed_shallow_grad_parameters = capture_parameter_signatures(routed_shallow_grad_tensors)
+            routed_shallow_grad_sha256 = capture_tensor_sha256(routed_shallow_grad_tensors)
+            stock_grad_postclip = capture_grouped_tensor_mapping(stock_grad_postclip_tensors)
             stock_grad_postclip_parameters = capture_parameter_signatures(stock_grad_postclip_tensors)
             stock_grad_postclip_finite = _tensor_mapping_all_finite(stock_grad_postclip_tensors)
             self.scaler.step(self.optimizer)
@@ -487,12 +586,16 @@ def _make_trainers():
             if step_skipped:
                 clip_coefficient = None
                 stock_only_clip_coefficient = None
+                routed_shallow_clip_coefficient = None
+                aux_private_clip_coefficient = None
+                combined_hypothetical_clip_coefficient = None
                 clip_norm_partition_relative_error = None
 
             loss_value = float(self.loss.detach().float().item())
             loss_item_values = [
                 float(value) for value in self.loss_items.detach().float().cpu().reshape(-1)
             ]
+            forward_state = getattr(getattr(model, "ebc_head", None), "last_state", None)
 
             step = len(self.audit_steps) + 1
             record = {
@@ -510,6 +613,9 @@ def _make_trainers():
                     "stock_grad_postclip": stock_grad_postclip,
                     "stock_grad_postclip_parameters": stock_grad_postclip_parameters,
                     "stock_grad_postclip_finite": stock_grad_postclip_finite,
+                    "gradient_clipping_mode": (
+                        "contribution_separated" if contribution_separated else "legacy_combined"
+                    ),
                     "clip_total_norm": total_norm_value,
                     "clip_total_norm_finite": clip_total_norm_finite,
                     "clip_coefficient": clip_coefficient,
@@ -517,6 +623,13 @@ def _make_trainers():
                     "stock_grad_total_norm": stock_grad_total_norm,
                     "aux_private_grad_total_norm": aux_private_grad_total_norm,
                     "aux_private_grad_finite": aux_private_grad_finite,
+                    "aux_private_clip_coefficient": aux_private_clip_coefficient,
+                    "routed_shallow_grad_total_norm": routed_shallow_grad_total_norm,
+                    "routed_shallow_grad_parameters": routed_shallow_grad_parameters,
+                    "routed_shallow_grad_sha256": routed_shallow_grad_sha256,
+                    "routed_shallow_grad_finite": routed_shallow_grad_finite,
+                    "routed_shallow_clip_coefficient": routed_shallow_clip_coefficient,
+                    "combined_hypothetical_clip_coefficient": combined_hypothetical_clip_coefficient,
                     "all_grad_preclip_finite": all_grad_preclip_finite,
                     "clip_norm_partition_relative_error": clip_norm_partition_relative_error,
                     "amp_scale_before": scale_before,
@@ -545,6 +658,10 @@ def _make_trainers():
                     "loss_items": loss_item_values,
                     "loss_finite": math.isfinite(loss_value),
                     "loss_items_finite": all(math.isfinite(value) for value in loss_item_values),
+                    "p2_entry_count": int(forward_state.p2_entry_count) if forward_state is not None else 0,
+                    "ordinary_query_count": (
+                        int(forward_state.ordinary_query_count) if forward_state is not None else 300
+                    ),
                 }
             self.audit_steps.append(record)
             self.audit_pending_batches.clear()
@@ -582,10 +699,12 @@ def _make_trainers():
                 "optimizer_common_manifest": getattr(self, "audit_optimizer_manifest", {}),
                 "controlled_amp": self.audit_controlled_amp,
                 "p2_only_stock_grad_l2": self.audit_p2_only_stock_grad_l2,
+                "p2_only_stock_grad_grouped": self.audit_p2_only_stock_grad_grouped,
                 "p2_only_stock_grad_parameters": self.audit_p2_only_stock_grad_parameters,
                 "p2_only_aux_private_grad_l2": self.audit_p2_only_aux_private_grad_l2,
                 "p2_only_aux_private_grad_parameters": self.audit_p2_only_aux_private_grad_parameters,
                 "initial_probe": self.audit_initial_probe,
+                "ebc_config": getattr(getattr(self, "ebc_config", None), "as_dict", lambda: None)(),
                 "steps": self.audit_steps,
             }
             _atomic_write_json(self.audit_output, payload)
@@ -743,18 +862,11 @@ def main() -> None:
         "audit_metadata": evidence,
         "audit_controlled_amp": controlled_amp_config(args),
     }
-    if args.arm in {"a0", "a0-repeat"}:
+    ebc_config = build_audit_ebc_config(args.arm)
+    if ebc_config is None:
         trainer = ControlTrainer(**common)
     else:
-        trainer = AuxTrainer(
-            **common,
-            ebc_config=EBCQPConfig(
-                lambda_ebc=0.0,
-                learnable_fusion_gamma=True,
-                query_injection_enabled=False,
-                quality_gated_p2=False,
-            ),
-        )
+        trainer = AuxTrainer(**common, ebc_config=ebc_config)
     trainer.train()
     if trainer.audit_successful_updates != target_steps:
         raise RuntimeError(

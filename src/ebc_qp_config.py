@@ -28,12 +28,26 @@ class EBCQPConfig:
     learnable_fusion_gamma: bool = False
     query_injection_enabled: bool = True
     quality_gated_p2: bool = False
+    p2_c2_grad_scale: float = 0.0
+    contribution_separated_aux_gradients: bool = False
     lambda_quality: float = 0.25
     local_radius: int = 1
     update_ratio_limit: float = 10.0
     update_ratio_patience: int = 20
     update_monitor_steps: int = 200
     epsilon: float = 1e-12
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.p2_c2_grad_scale <= 1.0:
+            raise ValueError("p2_c2_grad_scale must be in [0, 1]")
+        if not self.contribution_separated_aux_gradients:
+            return
+        if self.query_injection_enabled:
+            raise ValueError("contribution-separated gradients require query injection to be disabled")
+        if self.lambda_ebc != 0.0 or self.lambda_quality != 0.0:
+            raise ValueError("contribution-separated gradients require zero EBC and quality loss weights")
+        if self.quality_gated_p2 or self.quality_weighted_ebc or self.learnable_fusion_gamma:
+            raise ValueError("contribution-separated gradients require the minimal P2-only branch")
 
     def as_dict(self) -> dict[str, int | float | bool]:
         return asdict(self)

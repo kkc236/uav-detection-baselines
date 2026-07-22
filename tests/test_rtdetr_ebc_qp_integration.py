@@ -139,6 +139,42 @@ def test_a1_single_batch_trains_p2_and_gamma_without_ebc_contribution():
     assert torch.count_nonzero(gamma_gradient) == 1
 
 
+def test_tsgr_loss_buffers_only_private_and_exact_shallow_gradients():
+    config = EBCQPConfig(
+        lambda_p2=0.1,
+        lambda_quality=0.0,
+        lambda_ebc=0.0,
+        query_injection_enabled=False,
+        p2_c2_grad_scale=0.1,
+        contribution_separated_aux_gradients=True,
+    )
+    model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False, ebc_config=config)
+    model.train()
+    model.set_isolated_auxiliary_gradient_scale(256.0)
+    batch = {
+        "img": torch.rand(1, 3, 160, 160),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+        "cls": torch.tensor([[1.0]]),
+        "batch_idx": torch.tensor([0.0]),
+    }
+
+    total, _items = model.loss(batch)
+    state = model.ebc_head.last_state
+    torch.testing.assert_close(total.detach(), state.stock_loss, rtol=0, atol=0)
+    total.backward()
+    buffered, scale = model.pop_isolated_auxiliary_gradients()
+
+    assert scale == 256.0
+    assert any(name.startswith("model.0.") or name.startswith("model.1.") for name in buffered)
+    assert any(".p2_adapter." in name or ".p2_bbox_head." in name for name in buffered)
+    assert not any(name.startswith("model.2.") for name in buffered)
+    assert all(
+        parameter.grad is None
+        for name, parameter in model.named_parameters()
+        if ".p2_adapter." in name or ".p2_bbox_head." in name
+    )
+
+
 def test_qg_p2_single_batch_adds_only_weighted_quality_loss_and_quality_parameters():
     config = EBCQPConfig(
         lambda_ebc=0.0,

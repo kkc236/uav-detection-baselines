@@ -9,6 +9,7 @@ from scripts.audit_ebc_qp_aux_causality import (
     _clip_coefficient_from_norm,
     _json_safe,
     batch_fingerprint,
+    build_audit_ebc_config,
     build_audit_settings,
     build_parser,
     controlled_amp_config,
@@ -24,9 +25,11 @@ from src.ebc_qp_causal_audit import (
     capture_parameter_signatures,
     capture_tensor_sha256,
     classify_stock_parameter,
+    classify_tsgr_gradient_boundary,
     clone_named_parameters,
     compare_a0_repeats,
     compare_audit_runs,
+    compare_tsgr_audit_runs,
     validate_audit_attempt,
 )
 
@@ -50,6 +53,14 @@ def test_classify_stock_parameter_covers_required_audit_boundaries():
     assert classify_stock_parameter("model.28.enc_score_head.weight") == "stock_score_head"
     assert classify_stock_parameter("model.28.enc_bbox_head.layers.0.weight") == "stock_box_head"
     assert classify_stock_parameter("model.28.decoder.layers.0.weight") == "decoder"
+
+
+def test_classify_tsgr_gradient_boundary_allows_only_model_zero_and_one():
+    assert classify_tsgr_gradient_boundary("model.0.conv.weight") == "routed_shallow"
+    assert classify_tsgr_gradient_boundary("model.1.block.weight") == "routed_shallow"
+    assert classify_tsgr_gradient_boundary("model.2.conv.weight") == "forbidden_common"
+    assert classify_tsgr_gradient_boundary("model.28.decoder.weight") == "forbidden_common"
+    assert classify_tsgr_gradient_boundary("model.28.p2_adapter.0.weight") == "auxiliary_private"
 
 
 def test_gradient_and_delta_summaries_detect_group_local_changes():
@@ -305,6 +316,80 @@ def test_compare_audit_runs_prioritizes_direct_gradient_or_amp_coupling():
     assert compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), amp)["classification"] == "AMP_STEP_COUPLING"
 
 
+def _tsgr_run(arm: str) -> dict:
+    is_auxiliary = arm in {"h0", "h1"}
+    eta = 0.0 if arm == "h0" else 0.1
+    p2_signatures = {
+        "model.0.weight": {"l2": 0.03 if arm == "h1" else 0.0, "max_abs": 0.03 if arm == "h1" else 0.0},
+        "model.1.weight": {"l2": 0.04 if arm == "h1" else 0.0, "max_abs": 0.04 if arm == "h1" else 0.0},
+        "model.2.weight": {"l2": 0.0, "max_abs": 0.0},
+    }
+    return {
+        "arm": arm,
+        "target_optimizer_steps": 1,
+        "completed_successful_updates": 1,
+        "common_initial_fingerprint": "COMMON",
+        "initial_state_sha256": "INITIAL",
+        "optimizer_common_manifest": {"model.0.weight": {"param_group": "muon"}},
+        "controlled_amp": {"enabled": True},
+        "ebc_config": (
+            {
+                "p2_c2_grad_scale": eta,
+                "lambda_p2": 0.1,
+                "lambda_ebc": 0.0,
+                "query_injection_enabled": False,
+                "contribution_separated_aux_gradients": True,
+            }
+            if is_auxiliary
+            else None
+        ),
+        "p2_only_stock_grad_parameters": p2_signatures if is_auxiliary else {},
+        "p2_only_aux_private_grad_l2": 1.0 if is_auxiliary else 0.0,
+        "initial_probe": {
+            "batch_fingerprint": "B",
+            "rng_before_forward": "R",
+            "stock_topk_fingerprint": "T",
+            "decoder_output_fingerprint": "D",
+            "stock_output_fingerprint": "S",
+            "p2_loss": 2.0 if is_auxiliary else None,
+            "p2_entry_count": 0,
+            "ordinary_query_count": 300,
+        },
+        "steps": [
+            {
+                "amp_step_skipped": False,
+                "gradient_clipping_mode": "contribution_separated" if is_auxiliary else "legacy_combined",
+                "clip_coefficient": 1.0,
+                "stock_only_clip_coefficient": 1.0,
+                "p2_entry_count": 0,
+                "ordinary_query_count": 300,
+                "stock_grad_preclip_parameters": {
+                    "model.0.weight": {"l2": 0.6},
+                    "model.1.weight": {"l2": 0.8},
+                    "model.2.weight": {"l2": 2.0},
+                },
+                "stock_delta_sha256": {
+                    "model.0.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
+                    "model.1.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
+                    "model.2.weight": "DEEP",
+                },
+            }
+        ],
+    }
+
+
+def test_tsgr_e0b_comparator_enforces_exact_gradient_boundary_and_ratio():
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), _tsgr_run("h1"))
+    assert result["passed"] is True
+    assert result["h1_shallow_gradient_ratio"] == pytest.approx(0.05)
+
+    leaked = _tsgr_run("h1")
+    leaked["p2_only_stock_grad_parameters"]["model.2.weight"] = {"l2": 0.1, "max_abs": 0.1}
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), leaked)
+    assert result["passed"] is False
+    assert any("escaped" in error for error in result["errors"])
+
+
 def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
     parser = build_parser()
     common = [
@@ -319,6 +404,8 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
     ]
     a0 = parser.parse_args(["--arm", "a0", *common])
     auxiliary = parser.parse_args(["--arm", "aux-audit", *common])
+    h0 = parser.parse_args(["--arm", "h0", *common])
+    h1 = parser.parse_args(["--arm", "h1", *common])
 
     assert a0.steps == auxiliary.steps == 100
     assert resolved_audit_steps(a0) == 100
@@ -326,6 +413,13 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
     assert build_audit_settings(a0)["amp"] is True
     assert build_audit_settings(a0)["batch"] == 8
     assert build_audit_settings(a0)["optimizer"] == "auto"
+    assert resolved_run_name(h0) == "e0-h0-seed0"
+    assert resolved_run_name(h1) == "e0-h1-seed0"
+    assert build_audit_ebc_config(h0.arm).p2_c2_grad_scale == 0.0
+    assert build_audit_ebc_config(h1.arm).p2_c2_grad_scale == 0.1
+    assert build_audit_ebc_config(h1.arm).lambda_p2 == 0.1
+    assert build_audit_ebc_config(h1.arm).query_injection_enabled is False
+    assert build_audit_ebc_config(h1.arm).contribution_separated_aux_gradients is True
 
     smoke = parser.parse_args(["--arm", "a0", *common, "--smoke"])
     assert resolved_audit_steps(smoke) == 1
