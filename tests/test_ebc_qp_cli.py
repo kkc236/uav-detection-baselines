@@ -12,7 +12,7 @@ def test_d2_defaults_are_frozen_ten_epoch_ten_percent_scratch_settings():
 
     settings = build_settings(args)
 
-    assert settings["model"].endswith("configs\\rtdetr-l-ebc-qp.yaml")
+    assert Path(settings["model"]).name == "rtdetr-l-ebc-qp.yaml"
     assert settings["epochs"] == 10
     assert settings["fraction"] == 1.0
     assert settings["pretrained"] is False
