@@ -66,6 +66,28 @@ def test_quality_weighted_ebc_is_an_explicit_opt_in():
     assert args.quality_weighted_ebc is True
 
 
+def test_fusion_gamma_is_explicit_and_mutually_exclusive_with_quality_ebc():
+    args = build_parser().parse_args(
+        ["--stage", "d2", "--arm", "a2", "--initial-state", "init.pt", "--learnable-fusion-gamma"]
+    )
+    assert args.learnable_fusion_gamma is True
+
+    conflicting = build_parser().parse_args(
+        [
+            "--stage",
+            "d2",
+            "--arm",
+            "a2",
+            "--initial-state",
+            "init.pt",
+            "--quality-weighted-ebc",
+            "--learnable-fusion-gamma",
+        ]
+    )
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        validate_protocol(conflicting)
+
+
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
     assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
     assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)

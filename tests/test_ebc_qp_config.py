@@ -16,6 +16,7 @@ def test_v1_defaults_are_the_frozen_values():
     assert cfg.lambda_p2 == 0.25
     assert cfg.lambda_ebc == 0.05
     assert cfg.quality_weighted_ebc is False
+    assert cfg.learnable_fusion_gamma is False
     assert cfg.local_radius == 1
 
 

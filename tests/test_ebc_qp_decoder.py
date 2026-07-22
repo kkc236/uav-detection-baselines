@@ -90,6 +90,31 @@ def test_warmup_and_active_query_integrity():
     assert active.encoder_aux_source_is_stock
 
 
+def test_fusion_gamma_adds_one_trainable_scalar_and_receives_p2_gradient():
+    config = EBCQPConfig(query_budget=8, p2_candidates=4, learnable_fusion_gamma=True)
+    head = EBCQPDecoder(
+        nc=3,
+        ch=(4, 8, 8, 8),
+        hd=16,
+        nq=8,
+        ndp=2,
+        nh=4,
+        ndl=1,
+        d_ffn=32,
+        nd=0,
+        ebc_config=config,
+    )
+    head.train()
+
+    state = head.forward_with_state(_small_inputs(requires_grad=False), _single_tiny_batch())
+    state.p2_loss.backward()
+
+    assert head.p2_fusion_gamma.shape == torch.Size([])
+    assert head.p2_fusion_gamma.item() == 1.0
+    assert head.p2_fusion_gamma.grad is not None
+    assert torch.count_nonzero(head.p2_fusion_gamma.grad) == 1
+
+
 def _small_ebc_head() -> EBCQPDecoder:
     config = EBCQPConfig(query_budget=8, p2_candidates=4)
     return EBCQPDecoder(

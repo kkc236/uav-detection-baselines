@@ -101,6 +101,14 @@ def test_v1_checkpoint_metadata_without_quality_flag_remains_loadable():
     validate_ebc_qp_checkpoint_metadata(metadata, config)
 
 
+def test_full_model_configures_gamma_after_yaml_construction():
+    config = EBCQPConfig(learnable_fusion_gamma=True)
+
+    model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False, ebc_config=config)
+
+    assert isinstance(model.ebc_head.p2_fusion_gamma, torch.nn.Parameter)
+
+
 def _small_head() -> EBCQPDecoder:
     return EBCQPDecoder(
         nc=3,

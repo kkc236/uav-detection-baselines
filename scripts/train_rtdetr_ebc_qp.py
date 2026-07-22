@@ -101,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "ebc-qp")
     parser.add_argument("--name")
     parser.add_argument("--quality-weighted-ebc", action="store_true")
+    parser.add_argument("--learnable-fusion-gamma", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     return parser
 
@@ -171,6 +172,10 @@ def validate_protocol(args: argparse.Namespace) -> None:
         raise SystemExit("formal arm must be a1 or a2")
     if args.quality_weighted_ebc and not (args.arm == "a2" and args.stage in {"d2", "formal"}):
         raise SystemExit("quality-weighted EBC is only valid for the A2 arm")
+    if args.learnable_fusion_gamma and not (args.arm == "a2" and args.stage in {"d2", "formal"}):
+        raise SystemExit("learnable fusion gamma is only valid for the A2 arm")
+    if args.quality_weighted_ebc and args.learnable_fusion_gamma:
+        raise SystemExit("quality-weighted EBC and fusion gamma are mutually exclusive")
 
     if args.stage == "d3":
         manifest = _read_json(args.d2_manifest, "passing D2 manifest")
@@ -218,6 +223,7 @@ def main() -> None:
         config = EBCQPConfig(
             lambda_ebc=stage.lambda_ebc,
             quality_weighted_ebc=args.quality_weighted_ebc,
+            learnable_fusion_gamma=args.learnable_fusion_gamma,
         )
         trainer = EBCQPTrainer(
             overrides=settings,

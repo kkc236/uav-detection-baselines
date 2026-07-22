@@ -112,6 +112,16 @@ def test_initial_state_rejects_non_p2_method_parameters():
         build_initial_state(control.state_dict(), method.state_dict(), metadata={})
 
 
+def test_initial_state_allows_the_preregistered_p2_fusion_gamma():
+    control = _Control()
+    method = _Method()
+    method.register_parameter("p2_fusion_gamma", nn.Parameter(torch.ones(())))
+
+    artifact = build_initial_state(control.state_dict(), method.state_dict(), metadata={})
+
+    torch.testing.assert_close(artifact["innovation_state"]["p2_fusion_gamma"], torch.tensor(1.0))
+
+
 def test_state_fingerprint_accepts_scalar_long_buffers():
     first = state_fingerprint({"num_batches_tracked": torch.tensor(0, dtype=torch.long)})
     second = state_fingerprint({"num_batches_tracked": torch.tensor(1, dtype=torch.long)})

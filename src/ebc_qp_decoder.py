@@ -62,6 +62,8 @@ class EBCQPDecoder(RTDETRDecoder):
             nn.BatchNorm2d(self.hidden_dim),
         )
         self.p2_bbox_head = deepcopy(self.enc_bbox_head)
+        self.register_parameter("p2_fusion_gamma", None)
+        self.configure_ebc_config(self.ebc_config)
         self.ebc_epoch = 0
         self.ebc_enabled = True
         self.diagnostics_enabled = False
@@ -71,6 +73,14 @@ class EBCQPDecoder(RTDETRDecoder):
     @property
     def competition_active(self) -> bool:
         return self.ebc_enabled and self.ebc_epoch >= self.ebc_config.warmup_epochs
+
+    def configure_ebc_config(self, config: EBCQPConfig) -> None:
+        self.ebc_config = config
+        if config.learnable_fusion_gamma and self.p2_fusion_gamma is None:
+            initial = self.p2_adapter[0].weight.new_ones(())
+            self.p2_fusion_gamma = nn.Parameter(initial)
+        elif not config.learnable_fusion_gamma and self.p2_fusion_gamma is not None:
+            self.p2_fusion_gamma = None
 
     def set_progress(self, epoch: int) -> None:
         self.ebc_epoch = int(epoch)
@@ -362,6 +372,8 @@ class EBCQPDecoder(RTDETRDecoder):
     def _p2_features(self, c2: torch.Tensor, projected_p3: torch.Tensor) -> torch.Tensor:
         lateral = self.p2_adapter(c2.detach())
         context = F.interpolate(projected_p3.detach(), size=lateral.shape[-2:], mode="nearest")
+        if self.p2_fusion_gamma is not None:
+            lateral = self.p2_fusion_gamma * lateral
         if self.diagnostics_enabled:
             dimensions = tuple(range(1, lateral.ndim))
             lateral_rms = lateral.detach().float().square().mean(dim=dimensions).sqrt()

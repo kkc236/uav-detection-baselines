@@ -133,7 +133,7 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
             super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
         finally:
             ultralytics_tasks.RTDETRDecoder = original_decoder
-        self.ebc_head.ebc_config = self.ebc_config
+        self.ebc_head.configure_ebc_config(self.ebc_config)
         self.nc = self.ebc_head.nc
         self.loss_names = LOSS_NAMES
 
@@ -180,6 +180,7 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
         raise RuntimeError("EBC-QP Ultralytics version mismatch")
     stored_config = dict(metadata.get("config", {}))
     stored_config.setdefault("quality_weighted_ebc", False)
+    stored_config.setdefault("learnable_fusion_gamma", False)
     if stored_config != config.as_dict():
         raise RuntimeError("EBC-QP config mismatch")
     if metadata.get("source_sha256") != SOURCE_SHA256:
