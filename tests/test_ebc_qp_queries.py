@@ -5,6 +5,7 @@ from src.ebc_qp_queries import (
     QuerySet,
     compete_queries,
     p2_diversity_statistics,
+    quality_gated_ranking,
     replacement_statistics,
     stable_rank_indices,
 )
@@ -69,6 +70,18 @@ def test_stable_ranking_does_not_copy_scores_to_cpu():
     selected = stable_rank_indices(scores, source, source_index, k=4)
 
     assert selected.tolist() == [[3, 1, 2, 0]]
+
+
+def test_quality_gated_ranking_uses_joint_class_quality_probability():
+    class_logits = torch.tensor([[[2.0, -1.0], [0.0, 0.0]]])
+    quality_logits = torch.tensor([[0.0, -2.0]])
+
+    ranking = quality_gated_ranking(class_logits, quality_logits, epsilon=1e-6)
+    expected_probability = class_logits.max(-1).values.sigmoid() * quality_logits.sigmoid()
+
+    torch.testing.assert_close(ranking, torch.logit(expected_probability.clamp(1e-6, 1 - 1e-6)))
+    assert ranking[0, 0] < class_logits[0, 0].max()
+    assert ranking[0, 1] < ranking[0, 0]
 
 
 def _make_query_set(scores: list[float], source: int) -> QuerySet:

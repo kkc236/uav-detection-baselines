@@ -180,6 +180,37 @@ def test_a1_no_injection_trains_p2_but_keeps_all_final_queries_stock():
     assert torch.count_nonzero(head.p2_fusion_gamma.grad) == 1
 
 
+def test_qg_p2_zero_initializes_quality_head_and_isolates_quality_gradient():
+    head = _small_ebc_head_with_config(
+        EBCQPConfig(
+            query_budget=8,
+            p2_candidates=4,
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=True,
+            quality_gated_p2=True,
+        )
+    )
+    head.train()
+    head.set_progress(epoch=2)
+    warm = head.forward_with_state(_small_inputs(requires_grad=False), _single_tiny_batch())
+
+    assert torch.count_nonzero(head.p2_quality_head.weight) == 0
+    assert torch.count_nonzero(head.p2_quality_head.bias) == 0
+    assert warm.p2_entry_count == 0
+    assert torch.count_nonzero(warm.final_sources) == 0
+
+    head.set_progress(epoch=3)
+    active = head.forward_with_state(_small_inputs(requires_grad=False), _single_tiny_batch())
+    active.quality_loss.backward()
+
+    assert active.ordinary_query_count == 8
+    assert 0 <= active.p2_entry_count <= 4
+    assert _grad_nonzero(head.p2_quality_head)
+    assert not _grad_nonzero(head.p2_adapter)
+    assert not _grad_nonzero(head.p2_bbox_head)
+    assert head.p2_fusion_gamma.grad is None
+
+
 def _small_ebc_head() -> EBCQPDecoder:
     config = EBCQPConfig(query_budget=8, p2_candidates=4)
     return _small_ebc_head_with_config(config)

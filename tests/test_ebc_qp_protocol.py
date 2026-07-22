@@ -122,6 +122,17 @@ def test_initial_state_allows_the_preregistered_p2_fusion_gamma():
     torch.testing.assert_close(artifact["innovation_state"]["p2_fusion_gamma"], torch.tensor(1.0))
 
 
+def test_initial_state_allows_qg_p2_quality_head():
+    control = _Control()
+    method = _Method()
+    method.p2_quality_head = nn.Linear(2, 1)
+
+    artifact = build_initial_state(control.state_dict(), method.state_dict(), metadata={})
+
+    assert "p2_quality_head.weight" in artifact["innovation_state"]
+    assert "p2_quality_head.bias" in artifact["innovation_state"]
+
+
 def test_state_fingerprint_accepts_scalar_long_buffers():
     first = state_fingerprint({"num_batches_tracked": torch.tensor(0, dtype=torch.long)})
     second = state_fingerprint({"num_batches_tracked": torch.tensor(1, dtype=torch.long)})

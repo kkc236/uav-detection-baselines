@@ -35,6 +35,20 @@ class P2DiversityStats:
     background_rate_at_50: float
 
 
+def quality_gated_ranking(
+    class_logits: torch.Tensor,
+    quality_logits: torch.Tensor,
+    *,
+    epsilon: float,
+) -> torch.Tensor:
+    if class_logits.shape[:2] != quality_logits.shape:
+        raise ValueError("class and quality logits must share batch and candidate dimensions")
+    class_probability = class_logits.max(-1).values.float().sigmoid()
+    quality_probability = quality_logits.float().sigmoid()
+    joint_probability = (class_probability * quality_probability).clamp(epsilon, 1.0 - epsilon)
+    return torch.logit(joint_probability).to(dtype=class_logits.dtype)
+
+
 def stable_rank_indices(
     scores: torch.Tensor,
     source: torch.Tensor,

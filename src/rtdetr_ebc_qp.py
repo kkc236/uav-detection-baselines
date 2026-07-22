@@ -28,7 +28,9 @@ from src.ebc_qp_protocol import load_initial_state
 
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
+QG_LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "qg_loss", "ebc_loss")
 EBC_QP_IMPLEMENTATION_VERSION = "1.0"
+QG_P2_IMPLEMENTATION_VERSION = "1.1-qg-p2"
 
 
 @dataclass(frozen=True)
@@ -135,7 +137,7 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
             ultralytics_tasks.RTDETRDecoder = original_decoder
         self.ebc_head.configure_ebc_config(self.ebc_config)
         self.nc = self.ebc_head.nc
-        self.loss_names = LOSS_NAMES
+        self.loss_names = QG_LOSS_NAMES if self.ebc_config.quality_gated_p2 else LOSS_NAMES
 
     @property
     def ebc_head(self) -> EBCQPDecoder:
@@ -156,16 +158,21 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
         total = (
             stock_loss.float()
             + self.ebc_config.lambda_p2 * state.p2_loss.float()
+            + self.ebc_config.lambda_quality * state.quality_loss.float()
             + self.ebc_config.lambda_ebc * ebc_loss.float()
         )
         state.stock_loss = stock_loss.detach()
-        items = torch.cat((stock_items, state.p2_loss.detach()[None], ebc_loss.detach()[None]))
+        side_items = [state.p2_loss.detach()[None]]
+        if self.ebc_config.quality_gated_p2:
+            side_items.append(state.quality_loss.detach()[None])
+        side_items.append(ebc_loss.detach()[None])
+        items = torch.cat((stock_items, *side_items))
         return total, items
 
 
 def build_ebc_qp_checkpoint_metadata(config: EBCQPConfig, ebc_epoch: int) -> dict:
     return {
-        "implementation_version": EBC_QP_IMPLEMENTATION_VERSION,
+        "implementation_version": _implementation_version(config),
         "ultralytics_version": ULTRALYTICS_VERSION,
         "ebc_epoch": int(ebc_epoch),
         "config": config.as_dict(),
@@ -174,7 +181,7 @@ def build_ebc_qp_checkpoint_metadata(config: EBCQPConfig, ebc_epoch: int) -> dic
 
 
 def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> None:
-    if metadata.get("implementation_version") != EBC_QP_IMPLEMENTATION_VERSION:
+    if metadata.get("implementation_version") != _implementation_version(config):
         raise RuntimeError("EBC-QP implementation version mismatch")
     if metadata.get("ultralytics_version") != ULTRALYTICS_VERSION:
         raise RuntimeError("EBC-QP Ultralytics version mismatch")
@@ -182,10 +189,16 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
     stored_config.setdefault("quality_weighted_ebc", False)
     stored_config.setdefault("learnable_fusion_gamma", False)
     stored_config.setdefault("query_injection_enabled", True)
+    stored_config.setdefault("quality_gated_p2", False)
+    stored_config.setdefault("lambda_quality", 0.25)
     if stored_config != config.as_dict():
         raise RuntimeError("EBC-QP config mismatch")
     if metadata.get("source_sha256") != SOURCE_SHA256:
         raise RuntimeError("EBC-QP source lock mismatch")
+
+
+def _implementation_version(config: EBCQPConfig) -> str:
+    return QG_P2_IMPLEMENTATION_VERSION if config.quality_gated_p2 else EBC_QP_IMPLEMENTATION_VERSION
 
 
 class EBCQPValidator(RTDETRValidator):
@@ -319,7 +332,7 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
             unwrap_model(ema_model).set_ebc_progress(epoch)
 
     def get_validator(self):
-        self.loss_names = LOSS_NAMES
+        self.loss_names = QG_LOSS_NAMES if self.ebc_config.quality_gated_p2 else LOSS_NAMES
         return EBCQPValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
 
     def optimizer_step(self):
@@ -327,7 +340,11 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
             p2_parameters = []
             stock_parameters = []
             for name, parameter in unwrap_model(self.model).named_parameters():
-                target = p2_parameters if ".p2_adapter." in name or ".p2_bbox_head." in name else stock_parameters
+                target = (
+                    p2_parameters
+                    if any(part in name for part in (".p2_adapter.", ".p2_bbox_head.", ".p2_quality_head."))
+                    else stock_parameters
+                )
                 target.append(parameter)
             self.update_monitor = NormalizedUpdateMonitor(
                 p2_parameters,

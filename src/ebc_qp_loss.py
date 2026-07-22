@@ -38,6 +38,14 @@ class P2LossResult:
 
 
 @dataclass(frozen=True)
+class QualityLossResult:
+    total: torch.Tensor
+    positive_count: torch.Tensor
+    classification_indices: list[torch.Tensor]
+    targets: torch.Tensor
+
+
+@dataclass(frozen=True)
 class _ImageP2Targets:
     gt_boxes: torch.Tensor
     gt_classes: torch.Tensor
@@ -94,6 +102,62 @@ def compute_sparse_p2_loss(
     )
 
 
+def compute_sparse_quality_loss(
+    quality_logits: torch.Tensor,
+    boxes_xywh: torch.Tensor,
+    targets: P2Targets,
+) -> QualityLossResult:
+    if quality_logits.ndim != 2:
+        raise ValueError("quality logits must have shape [batch, candidates]")
+    if quality_logits.shape != boxes_xywh.shape[:2]:
+        raise ValueError("quality logits and boxes must share batch and candidate dimensions")
+    if len(targets.gt_boxes) != quality_logits.shape[0] or len(targets.assigned_pairs) != quality_logits.shape[0]:
+        raise ValueError("targets must contain one entry per image")
+
+    image_losses = []
+    image_positive_counts = []
+    image_indices = []
+    image_targets = []
+    for image_index in range(quality_logits.shape[0]):
+        image = targets.image(image_index)
+        gt_boxes = image.gt_boxes.to(device=quality_logits.device, dtype=torch.float32)
+        pairs = image.assigned_pairs.to(device=quality_logits.device, dtype=torch.long)
+        assigned_indices = pairs[:, 1] if pairs.numel() else torch.empty(0, dtype=torch.long, device=quality_logits.device)
+        classification_indices = _classification_indices(
+            anchor_centers=image.anchor_centers.to(device=quality_logits.device, dtype=torch.float32),
+            gt_boxes=gt_boxes,
+            topk_indices=image.topk_indices.to(device=quality_logits.device, dtype=torch.long),
+            assigned_indices=assigned_indices,
+        )
+        selected_logits = quality_logits[image_index, classification_indices]
+        quality_targets = torch.zeros_like(selected_logits, dtype=torch.float32)
+        if pairs.numel():
+            gt_indices = pairs[:, 0]
+            predicted = boxes_xywh[image_index, assigned_indices].float()
+            expected = gt_boxes[gt_indices]
+            with torch.autocast(device_type=quality_logits.device.type, enabled=False):
+                iou_targets = bbox_iou(predicted, expected, xywh=True).squeeze(-1).clamp(0, 1).detach()
+            selected_rows = torch.searchsorted(classification_indices, assigned_indices)
+            quality_targets[selected_rows] = iou_targets
+
+        if classification_indices.numel():
+            raw_loss = F.binary_cross_entropy_with_logits(selected_logits.float(), quality_targets, reduction="sum")
+        else:
+            raw_loss = differentiable_zero(quality_logits[image_index])
+        positive_count = quality_logits.new_tensor(float(len(pairs)))
+        image_losses.append(raw_loss / max(len(pairs), 1))
+        image_positive_counts.append(positive_count)
+        image_indices.append(classification_indices)
+        image_targets.append(quality_targets.detach())
+
+    return QualityLossResult(
+        total=torch.stack(image_losses).mean().float(),
+        positive_count=torch.stack(image_positive_counts).sum(),
+        classification_indices=image_indices,
+        targets=torch.cat(image_targets).detach(),
+    )
+
+
 def compute_ebc_loss(
     p2_logits: torch.Tensor,
     assigned_pairs: list[torch.Tensor],
@@ -146,12 +210,11 @@ def _compute_image_p2_loss(
     anchor_centers = targets.anchor_centers.to(device=device, dtype=torch.float32)
 
     assigned_indices = pairs[:, 1] if pairs.numel() else torch.empty(0, dtype=torch.long, device=device)
-    inside_any_gt = _centers_inside_any_box(anchor_centers, gt_boxes)
-    topk_assigned = torch.isin(topk_indices, assigned_indices)
-    eligible_topk = topk_indices[topk_assigned | ~inside_any_gt[topk_indices]]
-    classification_indices = torch.unique(
-        torch.cat((eligible_topk, assigned_indices)),
-        sorted=True,
+    classification_indices = _classification_indices(
+        anchor_centers=anchor_centers,
+        gt_boxes=gt_boxes,
+        topk_indices=topk_indices,
+        assigned_indices=assigned_indices,
     )
 
     selected_logits = logits[classification_indices]
@@ -208,3 +271,16 @@ def _centers_inside_any_box(centers: torch.Tensor, boxes: torch.Tensor) -> torch
     half = boxes[:, None, 2:] / 2
     delta = (centers[None] - boxes[:, None, :2]).abs()
     return (delta <= half).all(-1).any(0)
+
+
+def _classification_indices(
+    *,
+    anchor_centers: torch.Tensor,
+    gt_boxes: torch.Tensor,
+    topk_indices: torch.Tensor,
+    assigned_indices: torch.Tensor,
+) -> torch.Tensor:
+    inside_any_gt = _centers_inside_any_box(anchor_centers, gt_boxes)
+    topk_assigned = torch.isin(topk_indices, assigned_indices)
+    eligible_topk = topk_indices[topk_assigned | ~inside_any_gt[topk_indices]]
+    return torch.unique(torch.cat((eligible_topk, assigned_indices)), sorted=True)

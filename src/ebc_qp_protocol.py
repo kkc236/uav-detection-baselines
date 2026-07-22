@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 
-INNOVATION_MODULES = frozenset({"p2_adapter", "p2_bbox_head", "p2_fusion_gamma"})
+INNOVATION_MODULES = frozenset({"p2_adapter", "p2_bbox_head", "p2_fusion_gamma", "p2_quality_head"})
 
 
 def select_hashed_subset(

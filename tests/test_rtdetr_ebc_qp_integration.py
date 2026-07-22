@@ -98,6 +98,8 @@ def test_v1_checkpoint_metadata_without_later_optional_flags_remains_loadable():
     metadata = build_ebc_qp_checkpoint_metadata(config, ebc_epoch=3)
     metadata["config"].pop("quality_weighted_ebc")
     metadata["config"].pop("query_injection_enabled")
+    metadata["config"].pop("quality_gated_p2")
+    metadata["config"].pop("lambda_quality")
 
     validate_ebc_qp_checkpoint_metadata(metadata, config)
 
@@ -135,6 +137,39 @@ def test_a1_single_batch_trains_p2_and_gamma_without_ebc_contribution():
     assert gamma_gradient is not None
     assert torch.isfinite(gamma_gradient)
     assert torch.count_nonzero(gamma_gradient) == 1
+
+
+def test_qg_p2_single_batch_adds_only_weighted_quality_loss_and_quality_parameters():
+    config = EBCQPConfig(
+        lambda_ebc=0.0,
+        learnable_fusion_gamma=True,
+        quality_gated_p2=True,
+    )
+    model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False, ebc_config=config)
+    model.train()
+    model.set_ebc_progress(3)
+    batch = {
+        "img": torch.rand(1, 3, 160, 160),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+        "cls": torch.tensor([[1.0]]),
+        "batch_idx": torch.tensor([0.0]),
+    }
+
+    total, items = model.loss(batch)
+    state = model.ebc_head.last_state
+    expected = (
+        state.stock_loss
+        + config.lambda_p2 * state.p2_loss.detach()
+        + config.lambda_quality * state.quality_loss.detach()
+    )
+    torch.testing.assert_close(total.detach(), expected)
+    total.backward()
+
+    assert items.shape == (6,)
+    assert state.ordinary_query_count == config.query_budget
+    assert _has_finite_nonzero_gradient(model.ebc_head.p2_quality_head)
+    assert _has_finite_nonzero_gradient(model.ebc_head.p2_adapter)
+    assert _has_finite_nonzero_gradient(model.ebc_head.p2_bbox_head)
 
 
 def _small_head() -> EBCQPDecoder:

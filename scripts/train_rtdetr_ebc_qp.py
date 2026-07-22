@@ -30,6 +30,7 @@ STAGES = {
     "d3": Stage(epochs=10, fraction=0.10, scratch=True, stock_frozen=False, lambda_ebc=0.0, inject_p2=True),
     "a1": Stage(epochs=100, fraction=1.00, scratch=True, stock_frozen=False, lambda_ebc=0.0, inject_p2=True),
     "a2": Stage(epochs=100, fraction=1.00, scratch=True, stock_frozen=False, lambda_ebc=0.05, inject_p2=True),
+    "qg-p2": Stage(epochs=10, fraction=0.10, scratch=True, stock_frozen=False, lambda_ebc=0.0, inject_p2=True),
 }
 
 DIAGNOSTIC_FIELDS = frozenset(
@@ -86,7 +87,7 @@ class CompactDiagnosticsWriter:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the frozen EBC-QP D1-D3 and formal screening protocol.")
     parser.add_argument("--stage", required=True, choices=("d1", "d2", "d3", "formal"))
-    parser.add_argument("--arm", choices=("control", "a1", "a2"), default="a2")
+    parser.add_argument("--arm", choices=("control", "a1", "a2", "qg-p2"), default="a2")
     parser.add_argument("--initial-state", type=Path)
     parser.add_argument("--create-initial-state", type=Path)
     parser.add_argument("--weights", type=Path)
@@ -167,21 +168,28 @@ def build_settings(args: argparse.Namespace) -> dict:
 
 
 def build_ebc_config(args: argparse.Namespace) -> EBCQPConfig:
-    stage_key = args.arm if args.stage == "formal" or (args.stage == "d2" and args.arm == "a1") else args.stage
+    stage_key = (
+        args.arm
+        if args.stage == "formal" or (args.stage == "d2" and args.arm in {"a1", "qg-p2"})
+        else args.stage
+    )
     stage = STAGES[stage_key]
     return EBCQPConfig(
         lambda_ebc=stage.lambda_ebc,
         quality_weighted_ebc=args.quality_weighted_ebc,
-        learnable_fusion_gamma=args.learnable_fusion_gamma,
+        learnable_fusion_gamma=args.learnable_fusion_gamma or args.arm == "qg-p2",
         query_injection_enabled=not args.disable_query_injection,
+        quality_gated_p2=args.arm == "qg-p2",
     )
 
 
 def validate_protocol(args: argparse.Namespace) -> None:
-    if args.stage == "d2" and args.arm not in {"control", "a1", "a2"}:
-        raise SystemExit("D2 arm must be control, a1, or a2")
+    if args.stage == "d2" and args.arm not in {"control", "a1", "a2", "qg-p2"}:
+        raise SystemExit("D2 arm must be control, a1, a2, or qg-p2")
     if args.stage == "formal" and args.arm not in {"a1", "a2"}:
         raise SystemExit("formal arm must be a1 or a2")
+    if args.arm == "qg-p2" and args.stage != "d2":
+        raise SystemExit("qg-p2 is only valid for D2")
     if args.quality_weighted_ebc and not (args.arm == "a2" and args.stage in {"d2", "formal"}):
         raise SystemExit("quality-weighted EBC is only valid for the A2 arm")
     if args.learnable_fusion_gamma and not (args.arm in {"a1", "a2"} and args.stage in {"d2", "formal"}):

@@ -160,6 +160,51 @@ def test_no_injection_flag_is_restricted_to_d2_a1():
         validate_protocol(args)
 
 
+def test_qg_p2_is_a_frozen_d2_arm_with_zero_ebc_and_fusion_gamma():
+    args = build_parser().parse_args(
+        ["--stage", "d2", "--arm", "qg-p2", "--initial-state", "init.pt", "--name", "paired"]
+    )
+
+    validate_protocol(args)
+    config = build_ebc_config(args)
+
+    assert config.quality_gated_p2 is True
+    assert config.lambda_ebc == 0.0
+    assert config.learnable_fusion_gamma is True
+    assert config.query_injection_enabled is True
+    assert build_settings(args)["epochs"] == 10
+
+
+def test_qg_p2_rejects_other_quality_or_injection_switches():
+    quality_ebc = build_parser().parse_args(
+        [
+            "--stage",
+            "d2",
+            "--arm",
+            "qg-p2",
+            "--initial-state",
+            "init.pt",
+            "--quality-weighted-ebc",
+        ]
+    )
+    no_injection = build_parser().parse_args(
+        [
+            "--stage",
+            "d2",
+            "--arm",
+            "qg-p2",
+            "--initial-state",
+            "init.pt",
+            "--disable-query-injection",
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="only valid for the A2 arm"):
+        validate_protocol(quality_ebc)
+    with pytest.raises(SystemExit, match="only valid for the D2 A1 arm"):
+        validate_protocol(no_injection)
+
+
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
     assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
     assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)
