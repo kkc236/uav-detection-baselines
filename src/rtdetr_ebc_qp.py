@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import ultralytics
 import ultralytics.nn.modules.head as ultralytics_head
 import ultralytics.nn.tasks as ultralytics_tasks
@@ -21,6 +22,7 @@ from src.ebc_qp_config import (
     assert_ultralytics_source_lock,
 )
 from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
+from src.ebc_qp_metrics import TinyDetectionMetrics, validation_xy_gain
 
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
@@ -180,6 +182,46 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
         raise RuntimeError("EBC-QP source lock mismatch")
 
 
+class EBCQPValidator(RTDETRValidator):
+    def init_metrics(self, model) -> None:
+        super().init_metrics(model)
+        self.tiny_metrics = TinyDetectionMetrics(self.iouv.cpu())
+
+    def update_metrics(self, preds, batch) -> None:
+        super().update_metrics(preds, batch)
+        for image_index, prediction in enumerate(preds):
+            prepared = self._prepare_batch(image_index, batch)
+            prepared_prediction = self._prepare_pred(prediction)
+            gain = validation_xy_gain(prepared["ori_shape"], prepared["imgsz"], prepared["ratio_pad"])
+            self.tiny_metrics.update_from_prepared(prepared_prediction, prepared, gain)
+
+    def get_stats(self) -> dict:
+        results = super().get_stats()
+        tiny = self.tiny_metrics.compute()
+        results.update(
+            {
+                "metrics/AP-tiny": tiny.map,
+                "metrics/Recall-tiny": tiny.recall,
+                "metrics/AP-r<8": tiny.extreme_map,
+                "metrics/AP-8<=r<=16": tiny.tiny_8_16_map,
+            }
+        )
+        self.tiny_metrics.clear()
+        return results
+
+    def gather_stats(self) -> None:
+        super().gather_stats()
+        if RANK == 0:
+            gathered = [None] * dist.get_world_size()
+            dist.gather_object(self.tiny_metrics.state_dict(), gathered, dst=0)
+            self.tiny_metrics.clear()
+            for state in gathered:
+                self.tiny_metrics.merge_state_dict(state)
+        elif RANK > 0:
+            dist.gather_object(self.tiny_metrics.state_dict(), None, dst=0)
+            self.tiny_metrics.clear()
+
+
 class EBCQPTrainer(UltralyticsRTDETRTrainer):
     def __init__(self, *args, ebc_config: EBCQPConfig | None = None, **kwargs):
         self.ebc_config = ebc_config or EBCQPConfig()
@@ -203,7 +245,7 @@ class EBCQPTrainer(UltralyticsRTDETRTrainer):
 
     def get_validator(self):
         self.loss_names = LOSS_NAMES
-        return RTDETRValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
+        return EBCQPValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
 
     def optimizer_step(self):
         if not hasattr(self, "update_monitor"):
