@@ -53,6 +53,15 @@ def test_scaler_skipped_step_records_zero_deltas_without_abort():
     assert record.abort is False
 
 
+def test_snapshot_keeps_parameter_copies_on_the_training_device():
+    parameter = _DeviceKeepingParameter()
+    monitor = NormalizedUpdateMonitor([parameter], [], limit=10.0, patience=1, max_steps=1)
+
+    monitor.snapshot()
+
+    assert monitor._before_p2 == [parameter]
+
+
 def _make_monitor(
     limit: float = 10.0,
     patience: int = 20,
@@ -69,3 +78,19 @@ def _observe_ratio(monitor: NormalizedUpdateMonitor, ratio: float):
         monitor.p2[0].mul_(1.0 + ratio * 0.001)
         monitor.stock[0].mul_(1.001)
     return monitor.observe()
+
+
+class _DeviceKeepingParameter:
+    requires_grad = True
+
+    def detach(self):
+        return self
+
+    def float(self):
+        return self
+
+    def clone(self):
+        return self
+
+    def to(self, *args, **kwargs):
+        raise AssertionError("snapshot must not transfer parameters to the host")

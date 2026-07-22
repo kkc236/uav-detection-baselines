@@ -63,10 +63,8 @@ class NormalizedUpdateMonitor:
         self._before_stock: list[torch.Tensor] | None = None
 
     def snapshot(self) -> None:
-        self._before_p2 = [parameter.detach().to(device="cpu", dtype=torch.float32).clone() for parameter in self.p2]
-        self._before_stock = [
-            parameter.detach().to(device="cpu", dtype=torch.float32).clone() for parameter in self.stock
-        ]
+        self._before_p2 = [parameter.detach().float().clone() for parameter in self.p2]
+        self._before_stock = [parameter.detach().float().clone() for parameter in self.stock]
 
     @staticmethod
     def _relative(
@@ -74,12 +72,14 @@ class NormalizedUpdateMonitor:
         after: list[torch.nn.Parameter],
         eps: float,
     ) -> float:
-        delta_squared = sum(
-            float((parameter.detach().float().cpu() - old).square().sum())
-            for old, parameter in zip(before, after)
-        )
-        theta_squared = sum(float(old.square().sum()) for old in before)
-        return delta_squared**0.5 / (theta_squared**0.5 + eps)
+        if not before:
+            return 0.0
+        delta_squared = torch.stack(
+            [(parameter.detach().float() - old).square().sum() for old, parameter in zip(before, after)]
+        ).sum()
+        theta_squared = torch.stack([old.square().sum() for old in before]).sum()
+        relative = delta_squared.sqrt() / (theta_squared.sqrt() + eps)
+        return float(relative.item())
 
     def observe(self) -> UpdateRecord:
         if self._before_p2 is None or self._before_stock is None:
