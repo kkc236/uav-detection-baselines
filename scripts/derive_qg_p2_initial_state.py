@@ -43,6 +43,28 @@ def derive_qg_initial_state(
         name: value.detach().cpu().clone()
         for name, value in innovation.items()
     }
+    derived_innovation.update(
+        {
+            name: value.detach().cpu().clone()
+            for name, value in quality_state.items()
+        }
+    )
+    metadata = {
+        **dict(parent.get("metadata", {})),
+        "variant": "qg-p2-v1",
+        "parent_initial_state_sha256": parent_sha256,
+        "quality_head_initialization": "zeros",
+    }
+    return {
+        "format_version": 1,
+        "common_state": {name: value.detach().cpu().clone() for name, value in common.items()},
+        "innovation_state": derived_innovation,
+        "metadata": metadata,
+        "fingerprints": {
+            "common": fingerprints["common"],
+            "innovation": state_fingerprint(derived_innovation),
+        },
+    }
 
 
 def derive_qg_protocol_manifest(
@@ -74,28 +96,6 @@ def derive_qg_protocol_manifest(
     }
     manifest["signature"] = _json_sha256(manifest)
     return manifest
-    derived_innovation.update(
-        {
-            name: value.detach().cpu().clone()
-            for name, value in quality_state.items()
-        }
-    )
-    metadata = {
-        **dict(parent.get("metadata", {})),
-        "variant": "qg-p2-v1",
-        "parent_initial_state_sha256": parent_sha256,
-        "quality_head_initialization": "zeros",
-    }
-    return {
-        "format_version": 1,
-        "common_state": {name: value.detach().cpu().clone() for name, value in common.items()},
-        "innovation_state": derived_innovation,
-        "metadata": metadata,
-        "fingerprints": {
-            "common": fingerprints["common"],
-            "innovation": state_fingerprint(derived_innovation),
-        },
-    }
 
 
 def build_parser() -> argparse.ArgumentParser:
