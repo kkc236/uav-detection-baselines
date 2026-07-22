@@ -238,6 +238,9 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
             first_divergence = first_divergence or expected_step
 
     p2_only_stock_grad = float(auxiliary.get("p2_only_stock_grad_l2", 0.0))
+    p2_only_aux_private_grad = float(auxiliary.get("p2_only_aux_private_grad_l2", 0.0))
+    if p2_only_aux_private_grad <= tolerance:
+        raise ValueError("AUX probe produced no auxiliary-private gradient")
     mechanisms = []
     if p2_only_stock_grad > tolerance:
         mechanisms.append("direct_gradient")
@@ -297,6 +300,7 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
         "first_ema_divergence_step": ema_divergence,
         "first_optimizer_state_divergence_step": optimizer_state_divergence,
         "p2_only_stock_grad_l2": p2_only_stock_grad,
+        "p2_only_aux_private_grad_l2": p2_only_aux_private_grad,
     }
 
 

@@ -248,15 +248,19 @@ def _make_trainers():
             self.audit_probe_mode = False
             self.audit_p2_only_stock_grad_l2 = 0.0
             self.audit_p2_only_stock_grad_parameters: dict[str, dict[str, float | int]] = {}
+            self.audit_p2_only_aux_private_grad_l2 = 0.0
+            self.audit_p2_only_aux_private_grad_parameters: dict[str, dict[str, float | int]] = {}
             self.audit_initial_probe: dict[str, Any] = {}
             self.audit_metadata = audit_metadata
             super().__init__(*trainer_args, **trainer_kwargs)
 
         def _setup_train(self):
             super()._setup_train()
-            self.audit_initial_probe, self.audit_p2_only_stock_grad_l2 = self._run_initial_probe(
-                unwrap_model(self.model)
-            )
+            (
+                self.audit_initial_probe,
+                self.audit_p2_only_stock_grad_l2,
+                self.audit_p2_only_aux_private_grad_l2,
+            ) = self._run_initial_probe(unwrap_model(self.model))
             for loader in (self.train_loader, self.test_loader):
                 if hasattr(loader, "close"):
                     loader.close()
@@ -279,7 +283,7 @@ def _make_trainers():
             self.audit_initial_state_sha256 = _sha256(self.initial_state_path)
             self._write_audit_trace()
 
-        def _run_initial_probe(self, model) -> tuple[dict[str, Any], float]:
+        def _run_initial_probe(self, model) -> tuple[dict[str, Any], float, float]:
             self.audit_probe_mode = True
             raw_batch = next(iter(self.train_loader))
             raw_fingerprint = batch_fingerprint(raw_batch)
@@ -316,9 +320,17 @@ def _make_trainers():
                 state.p2_loss.backward()
             common_names = set(self.initial_state["common_state"])
             common = {name: parameter for name, parameter in probe.named_parameters() if name in common_names}
+            auxiliary_private = {
+                name: parameter for name, parameter in probe.named_parameters() if name not in common_names
+            }
             grouped = capture_grouped_gradients(common)
             self.audit_p2_only_stock_grad_parameters = capture_parameter_signatures(_gradient_tensors(common))
+            auxiliary_private_gradients = _gradient_tensors(auxiliary_private)
+            self.audit_p2_only_aux_private_grad_parameters = capture_parameter_signatures(
+                auxiliary_private_gradients
+            )
             grad_norm = math.sqrt(sum(record["l2"] ** 2 for record in grouped.values()))
+            auxiliary_private_grad_norm = _tensor_mapping_l2(auxiliary_private_gradients)
             probe_record = {
                 "batch_fingerprint": raw_fingerprint,
                 "rng_before_forward": random_state,
@@ -333,7 +345,7 @@ def _make_trainers():
             self.audit_probe_mode = False
             self.audit_pending_batches.clear()
             self.audit_pending_rng.clear()
-            return probe_record, grad_norm
+            return probe_record, grad_norm, auxiliary_private_grad_norm
 
         def preprocess_batch(self, batch):
             fingerprint = batch_fingerprint(batch)
@@ -482,6 +494,8 @@ def _make_trainers():
                 "optimizer_common_manifest": getattr(self, "audit_optimizer_manifest", {}),
                 "p2_only_stock_grad_l2": self.audit_p2_only_stock_grad_l2,
                 "p2_only_stock_grad_parameters": self.audit_p2_only_stock_grad_parameters,
+                "p2_only_aux_private_grad_l2": self.audit_p2_only_aux_private_grad_l2,
+                "p2_only_aux_private_grad_parameters": self.audit_p2_only_aux_private_grad_parameters,
                 "initial_probe": self.audit_initial_probe,
                 "steps": self.audit_steps,
             }

@@ -72,6 +72,7 @@ def _run(arm: str, *, clip: float, stock_delta: float, batch: str = "B", skipped
         "common_initial_fingerprint": "COMMON",
         "optimizer_common_manifest": {"model.0.weight": {"param_group": "muon"}},
         "p2_only_stock_grad_l2": 0.0,
+        "p2_only_aux_private_grad_l2": 1.0 if arm == "aux-audit" else 0.0,
         "initial_probe": {
             "batch_fingerprint": "INITIAL-BATCH",
             "rng_before_forward": "INITIAL-RNG",
@@ -161,6 +162,13 @@ def test_compare_audit_runs_rejects_invalid_gradient_norm_partition():
     auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05)
     auxiliary["steps"][0]["clip_norm_partition_relative_error"] = 0.01
     with pytest.raises(ValueError, match="gradient norm partition"):
+        compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)
+
+
+def test_compare_audit_runs_rejects_aux_probe_without_private_gradient():
+    auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05)
+    auxiliary["p2_only_aux_private_grad_l2"] = 0.0
+    with pytest.raises(ValueError, match="AUX probe produced no auxiliary-private gradient"):
         compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)
 
 
