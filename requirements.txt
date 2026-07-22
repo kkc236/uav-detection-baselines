@@ -1,3 +1,4 @@
 pytest
 requests
+scipy
 ultralytics==8.4.90
