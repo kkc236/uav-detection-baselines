@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import copy
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
@@ -24,6 +25,80 @@ from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
 EBC_QP_IMPLEMENTATION_VERSION = "1.0"
+
+
+@dataclass(frozen=True)
+class UpdateRecord:
+    u_p2: float
+    u_stock: float
+    ratio: float
+    step: int
+    monitored: bool
+    abort: bool
+
+
+class NormalizedUpdateMonitor:
+    def __init__(
+        self,
+        p2: list[torch.nn.Parameter],
+        stock: list[torch.nn.Parameter],
+        limit: float = 10.0,
+        patience: int = 20,
+        max_steps: int = 200,
+        eps: float = 1e-12,
+    ):
+        self.p2 = [parameter for parameter in p2 if parameter.requires_grad]
+        self.stock = [parameter for parameter in stock if parameter.requires_grad]
+        self.limit = float(limit)
+        self.patience = int(patience)
+        self.max_steps = int(max_steps)
+        self.eps = float(eps)
+        self.step = 0
+        self.consecutive = 0
+        self.trace: list[UpdateRecord] = []
+        self._before_p2: list[torch.Tensor] | None = None
+        self._before_stock: list[torch.Tensor] | None = None
+
+    def snapshot(self) -> None:
+        self._before_p2 = [parameter.detach().to(device="cpu", dtype=torch.float32).clone() for parameter in self.p2]
+        self._before_stock = [
+            parameter.detach().to(device="cpu", dtype=torch.float32).clone() for parameter in self.stock
+        ]
+
+    @staticmethod
+    def _relative(
+        before: list[torch.Tensor],
+        after: list[torch.nn.Parameter],
+        eps: float,
+    ) -> float:
+        delta_squared = sum(
+            float((parameter.detach().float().cpu() - old).square().sum())
+            for old, parameter in zip(before, after)
+        )
+        theta_squared = sum(float(old.square().sum()) for old in before)
+        return delta_squared**0.5 / (theta_squared**0.5 + eps)
+
+    def observe(self) -> UpdateRecord:
+        if self._before_p2 is None or self._before_stock is None:
+            raise RuntimeError("snapshot must be called before observe")
+        self.step += 1
+        if self.step > self.max_steps:
+            return UpdateRecord(0.0, 0.0, 0.0, self.step, False, False)
+
+        u_p2 = self._relative(self._before_p2, self.p2, self.eps)
+        u_stock = self._relative(self._before_stock, self.stock, self.eps)
+        ratio = u_p2 / (u_stock + self.eps)
+        self.consecutive = self.consecutive + 1 if ratio > self.limit else 0
+        record = UpdateRecord(
+            u_p2=u_p2,
+            u_stock=u_stock,
+            ratio=ratio,
+            step=self.step,
+            monitored=True,
+            abort=self.consecutive >= self.patience,
+        )
+        self.trace.append(record)
+        return record
 
 
 def _assert_source_lock() -> None:
@@ -129,6 +204,37 @@ class EBCQPTrainer(UltralyticsRTDETRTrainer):
     def get_validator(self):
         self.loss_names = LOSS_NAMES
         return RTDETRValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
+
+    def optimizer_step(self):
+        if not hasattr(self, "update_monitor"):
+            p2_parameters = []
+            stock_parameters = []
+            for name, parameter in unwrap_model(self.model).named_parameters():
+                target = p2_parameters if ".p2_adapter." in name or ".p2_bbox_head." in name else stock_parameters
+                target.append(parameter)
+            self.update_monitor = NormalizedUpdateMonitor(
+                p2_parameters,
+                stock_parameters,
+                limit=self.ebc_config.update_ratio_limit,
+                patience=self.ebc_config.update_ratio_patience,
+                max_steps=self.ebc_config.update_monitor_steps,
+                eps=self.ebc_config.epsilon,
+            )
+
+        monitoring = self.update_monitor.step < self.update_monitor.max_steps
+        if monitoring:
+            self.update_monitor.snapshot()
+        self.scaler.unscale_(self.optimizer)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        record = self.update_monitor.observe() if monitoring else None
+        self.optimizer.zero_grad()
+        if self.ema:
+            self.ema.update(self.model)
+        if record is not None and record.abort:
+            trace = [asdict(item) for item in self.update_monitor.trace[-self.update_monitor.patience :]]
+            raise RuntimeError(f"EBC-QP normalized update ratio exceeded its limit: {trace}")
 
     def save_model(self):
         saved = super().save_model()
