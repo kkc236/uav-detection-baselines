@@ -24,13 +24,14 @@ class EBCQPConfig:
     p2_anchor_size: float = 0.025
     lambda_p2: float = 0.25
     lambda_ebc: float = 0.05
+    quality_weighted_ebc: bool = False
     local_radius: int = 1
     update_ratio_limit: float = 10.0
     update_ratio_patience: int = 20
     update_monitor_steps: int = 200
     epsilon: float = 1e-12
 
-    def as_dict(self) -> dict[str, int | float]:
+    def as_dict(self) -> dict[str, int | float | bool]:
         return asdict(self)
 
 

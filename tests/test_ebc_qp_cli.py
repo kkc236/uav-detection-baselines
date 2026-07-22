@@ -58,6 +58,14 @@ def test_fixed_batch_and_workers_cannot_be_overridden_from_cli():
     assert "workers" not in options
 
 
+def test_quality_weighted_ebc_is_an_explicit_opt_in():
+    args = build_parser().parse_args(
+        ["--stage", "d2", "--arm", "a2", "--initial-state", "init.pt", "--quality-weighted-ebc"]
+    )
+
+    assert args.quality_weighted_ebc is True
+
+
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
     assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
     assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)

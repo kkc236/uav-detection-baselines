@@ -93,6 +93,14 @@ def test_resume_rejects_changed_frozen_config():
         validate_ebc_qp_checkpoint_metadata(metadata, config)
 
 
+def test_v1_checkpoint_metadata_without_quality_flag_remains_loadable():
+    config = EBCQPConfig()
+    metadata = build_ebc_qp_checkpoint_metadata(config, ebc_epoch=3)
+    metadata["config"].pop("quality_weighted_ebc")
+
+    validate_ebc_qp_checkpoint_metadata(metadata, config)
+
+
 def _small_head() -> EBCQPDecoder:
     return EBCQPDecoder(
         nc=3,

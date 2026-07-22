@@ -332,6 +332,9 @@ class EBCQPDecoder(RTDETRDecoder):
             gt_classes=classes_by_image,
             uncovered=uncovered,
             stock_boundary=stock_boundary,
+            gt_boxes=boxes_by_image,
+            p2_boxes=p2_all.boxes,
+            quality_weighted=self.ebc_config.quality_weighted_ebc,
         )
         return p2_loss, ebc_loss, assigned_pairs, uncovered
 

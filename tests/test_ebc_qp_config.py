@@ -15,6 +15,7 @@ def test_v1_defaults_are_the_frozen_values():
     assert cfg.p2_anchor_size == 0.025
     assert cfg.lambda_p2 == 0.25
     assert cfg.lambda_ebc == 0.05
+    assert cfg.quality_weighted_ebc is False
     assert cfg.local_radius == 1
 
 

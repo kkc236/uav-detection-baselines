@@ -178,7 +178,9 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
         raise RuntimeError("EBC-QP implementation version mismatch")
     if metadata.get("ultralytics_version") != ULTRALYTICS_VERSION:
         raise RuntimeError("EBC-QP Ultralytics version mismatch")
-    if metadata.get("config") != config.as_dict():
+    stored_config = dict(metadata.get("config", {}))
+    stored_config.setdefault("quality_weighted_ebc", False)
+    if stored_config != config.as_dict():
         raise RuntimeError("EBC-QP config mismatch")
     if metadata.get("source_sha256") != SOURCE_SHA256:
         raise RuntimeError("EBC-QP source lock mismatch")

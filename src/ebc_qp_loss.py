@@ -100,7 +100,12 @@ def compute_ebc_loss(
     gt_classes: list[torch.Tensor],
     uncovered: list[torch.Tensor],
     stock_boundary: torch.Tensor,
+    gt_boxes: list[torch.Tensor] | None = None,
+    p2_boxes: torch.Tensor | None = None,
+    quality_weighted: bool = False,
 ) -> torch.Tensor:
+    if quality_weighted and (gt_boxes is None or p2_boxes is None):
+        raise ValueError("quality-weighted EBC requires GT and P2 boxes")
     eligible_scores = []
     for batch_index, pairs in enumerate(assigned_pairs):
         pairs = pairs.to(device=p2_logits.device, dtype=torch.long)
@@ -115,7 +120,13 @@ def compute_ebc_loss(
         classes = gt_classes[batch_index].to(device=p2_logits.device, dtype=torch.long)[gt_index[eligible]]
         scores = p2_logits[batch_index, candidate_index[eligible], classes].float()
         boundary = stock_boundary[batch_index].detach().float()
-        eligible_scores.append(torch.relu(boundary - scores))
+        hinge = torch.relu(boundary - scores)
+        if quality_weighted:
+            predicted = p2_boxes[batch_index, candidate_index[eligible]].float()
+            target = gt_boxes[batch_index].to(device=p2_logits.device, dtype=torch.float32)[gt_index[eligible]]
+            quality = bbox_iou(predicted, target, xywh=True).squeeze(-1).clamp(0, 1).detach()
+            hinge = hinge * quality
+        eligible_scores.append(hinge)
 
     if not eligible_scores:
         return differentiable_zero(p2_logits)

@@ -88,3 +88,26 @@ def test_ebc_without_eligible_targets_returns_differentiable_zero():
     assert loss.item() == 0.0
     assert logits.grad is not None
     assert torch.count_nonzero(logits.grad) == 0
+
+
+def test_quality_weighted_ebc_uses_detached_iou_without_renormalizing_quality():
+    logits = torch.tensor([[[0.4], [0.4]]], requires_grad=True)
+    boxes = torch.tensor(
+        [[[0.5, 0.5, 0.2, 0.2], [0.5, 0.5, 0.1, 0.1]]],
+        requires_grad=True,
+    )
+
+    loss = compute_ebc_loss(
+        p2_logits=logits,
+        assigned_pairs=[torch.tensor([[0, 0], [1, 1]])],
+        gt_classes=[torch.tensor([0, 0])],
+        gt_boxes=[torch.tensor([[0.5, 0.5, 0.2, 0.2], [0.5, 0.5, 0.2, 0.2]])],
+        p2_boxes=boxes,
+        uncovered=[torch.tensor([True, True])],
+        stock_boundary=torch.tensor([1.0]),
+        quality_weighted=True,
+    )
+    loss.backward()
+
+    torch.testing.assert_close(loss.detach(), torch.tensor(0.375))
+    assert boxes.grad is None
