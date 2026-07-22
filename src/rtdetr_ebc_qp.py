@@ -361,6 +361,10 @@ class PairedControlTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTraine
         _reset_paired_random_state(self.args.seed, self.args.deterministic)
         return super()._build_train_pipeline()
 
+    def get_validator(self):
+        self.loss_names = LOSS_NAMES[:3]
+        return EBCQPValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
+
 
 def _load_protocol_state(path: Path | None) -> dict | None:
     if path is None:

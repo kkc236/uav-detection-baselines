@@ -2,18 +2,24 @@ from pathlib import Path
 
 import pytest
 import torch
+from ultralytics.models.rtdetr.train import RTDETRTrainer as UltralyticsRTDETRTrainer
 
 from src.ebc_qp_config import EBCQPConfig
 from src.ebc_qp_decoder import EBCQPDecoder
 from src.rtdetr_ebc_qp import (
     EBCQPDetectionModel,
     EBCQPTrainer,
+    PairedControlTrainer,
     build_ebc_qp_checkpoint_metadata,
     validate_ebc_qp_checkpoint_metadata,
 )
 
 
 CONFIG = Path(__file__).parents[1] / "configs" / "rtdetr-l-ebc-qp.yaml"
+
+
+def test_control_overrides_stock_validator_to_use_the_shared_tiny_metric_code():
+    assert PairedControlTrainer.get_validator is not UltralyticsRTDETRTrainer.get_validator
 
 
 def test_model_adds_weighted_losses_but_keeps_stock_encoder_auxiliary_output():
