@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+import torch.nn.functional as F
+from ultralytics.utils.loss import VarifocalLoss
+from ultralytics.utils.metrics import bbox_iou
+
+
+@dataclass(frozen=True)
+class P2Targets:
+    gt_boxes: list[torch.Tensor]
+    gt_classes: list[torch.Tensor]
+    assigned_pairs: list[torch.Tensor]
+    topk_indices: torch.Tensor
+    anchor_centers: torch.Tensor
+
+    def image(self, index: int) -> _ImageP2Targets:
+        return _ImageP2Targets(
+            gt_boxes=self.gt_boxes[index],
+            gt_classes=self.gt_classes[index],
+            assigned_pairs=self.assigned_pairs[index],
+            topk_indices=self.topk_indices[index],
+            anchor_centers=self.anchor_centers,
+        )
+
+
+@dataclass(frozen=True)
+class P2LossResult:
+    total: torch.Tensor
+    vfl: torch.Tensor
+    l1: torch.Tensor
+    giou: torch.Tensor
+    positive_count: torch.Tensor
+    classification_indices: list[torch.Tensor]
+    vfl_target: torch.Tensor
+
+
+@dataclass(frozen=True)
+class _ImageP2Targets:
+    gt_boxes: torch.Tensor
+    gt_classes: torch.Tensor
+    assigned_pairs: torch.Tensor
+    topk_indices: torch.Tensor
+    anchor_centers: torch.Tensor
+
+
+@dataclass(frozen=True)
+class _ImageP2Loss:
+    total: torch.Tensor
+    vfl: torch.Tensor
+    l1: torch.Tensor
+    giou: torch.Tensor
+    positive_count: torch.Tensor
+    classification_indices: torch.Tensor
+    vfl_target: torch.Tensor
+
+
+_VARIFOCAL_LOSS = VarifocalLoss()
+
+
+def differentiable_zero(*tensors: torch.Tensor) -> torch.Tensor:
+    if not tensors:
+        raise ValueError("at least one tensor is required")
+    zero = tensors[0].sum() * 0.0
+    for tensor in tensors[1:]:
+        zero = zero + tensor.sum() * 0.0
+    return zero.float()
+
+
+def compute_sparse_p2_loss(
+    logits: torch.Tensor,
+    boxes_xywh: torch.Tensor,
+    targets: P2Targets,
+) -> P2LossResult:
+    if logits.shape[:2] != boxes_xywh.shape[:2]:
+        raise ValueError("logits and boxes must share batch and candidate dimensions")
+    if len(targets.gt_boxes) != logits.shape[0] or len(targets.assigned_pairs) != logits.shape[0]:
+        raise ValueError("targets must contain one entry per image")
+
+    images = [
+        _compute_image_p2_loss(logits[index], boxes_xywh[index], targets.image(index))
+        for index in range(logits.shape[0])
+    ]
+    return P2LossResult(
+        total=torch.stack([image.total for image in images]).mean().float(),
+        vfl=torch.stack([image.vfl for image in images]).mean().float(),
+        l1=torch.stack([image.l1 for image in images]).mean().float(),
+        giou=torch.stack([image.giou for image in images]).mean().float(),
+        positive_count=torch.stack([image.positive_count for image in images]).sum(),
+        classification_indices=[image.classification_indices for image in images],
+        vfl_target=torch.cat([image.vfl_target for image in images], dim=0).detach(),
+    )
+
+
+def compute_ebc_loss(
+    p2_logits: torch.Tensor,
+    assigned_pairs: list[torch.Tensor],
+    gt_classes: list[torch.Tensor],
+    uncovered: list[torch.Tensor],
+    stock_boundary: torch.Tensor,
+) -> torch.Tensor:
+    eligible_scores = []
+    for batch_index, pairs in enumerate(assigned_pairs):
+        pairs = pairs.to(device=p2_logits.device, dtype=torch.long)
+        if pairs.numel() == 0:
+            continue
+        gt_index = pairs[:, 0]
+        candidate_index = pairs[:, 1]
+        image_uncovered = uncovered[batch_index].to(device=p2_logits.device, dtype=torch.bool).detach()
+        eligible = image_uncovered[gt_index]
+        if not eligible.any():
+            continue
+        classes = gt_classes[batch_index].to(device=p2_logits.device, dtype=torch.long)[gt_index[eligible]]
+        scores = p2_logits[batch_index, candidate_index[eligible], classes].float()
+        boundary = stock_boundary[batch_index].detach().float()
+        eligible_scores.append(torch.relu(boundary - scores))
+
+    if not eligible_scores:
+        return differentiable_zero(p2_logits)
+    return torch.cat(eligible_scores).mean().float()
+
+
+def _compute_image_p2_loss(
+    logits: torch.Tensor,
+    boxes_xywh: torch.Tensor,
+    targets: _ImageP2Targets,
+) -> _ImageP2Loss:
+    device = logits.device
+    gt_boxes = targets.gt_boxes.to(device=device, dtype=torch.float32)
+    gt_classes = targets.gt_classes.to(device=device, dtype=torch.long)
+    pairs = targets.assigned_pairs.to(device=device, dtype=torch.long)
+    topk_indices = targets.topk_indices.to(device=device, dtype=torch.long)
+    anchor_centers = targets.anchor_centers.to(device=device, dtype=torch.float32)
+
+    assigned_indices = pairs[:, 1] if pairs.numel() else torch.empty(0, dtype=torch.long, device=device)
+    inside_any_gt = _centers_inside_any_box(anchor_centers, gt_boxes)
+    topk_assigned = torch.isin(topk_indices, assigned_indices)
+    eligible_topk = topk_indices[topk_assigned | ~inside_any_gt[topk_indices]]
+    classification_indices = torch.unique(
+        torch.cat((eligible_topk, assigned_indices)),
+        sorted=True,
+    )
+
+    selected_logits = logits[classification_indices]
+    vfl_target = torch.zeros_like(selected_logits, dtype=torch.float32)
+    labels = torch.zeros_like(selected_logits, dtype=torch.float32)
+
+    if pairs.numel():
+        gt_index = pairs[:, 0]
+        candidate_index = pairs[:, 1]
+        positive_boxes = boxes_xywh[candidate_index]
+        target_boxes = gt_boxes[gt_index]
+        with torch.autocast(device_type=device.type, enabled=False):
+            positive_boxes_fp32 = positive_boxes.float()
+            target_boxes_fp32 = target_boxes.float()
+            iou_target = bbox_iou(positive_boxes_fp32, target_boxes_fp32, xywh=True).squeeze(-1).clamp(0, 1)
+            l1_raw = F.l1_loss(positive_boxes_fp32, target_boxes_fp32, reduction="sum")
+            giou_raw = (
+                1.0 - bbox_iou(positive_boxes_fp32, target_boxes_fp32, xywh=True, GIoU=True).squeeze(-1)
+            ).sum()
+
+        selected_rows = torch.searchsorted(classification_indices, candidate_index)
+        positive_classes = gt_classes[gt_index]
+        vfl_target[selected_rows, positive_classes] = iou_target.detach()
+        labels[selected_rows, positive_classes] = 1.0
+    else:
+        l1_raw = differentiable_zero(boxes_xywh)
+        giou_raw = differentiable_zero(boxes_xywh)
+
+    if classification_indices.numel():
+        vfl_raw = _VARIFOCAL_LOSS(selected_logits, vfl_target, labels)
+    else:
+        vfl_raw = differentiable_zero(logits)
+
+    positive_count = logits.new_tensor(float(len(pairs)))
+    denominator = max(len(pairs), 1)
+    vfl = vfl_raw / denominator
+    l1 = l1_raw / denominator
+    giou = giou_raw / denominator
+    total = vfl + 5.0 * l1 + 2.0 * giou
+    return _ImageP2Loss(
+        total=total.float(),
+        vfl=vfl.float(),
+        l1=l1.float(),
+        giou=giou.float(),
+        positive_count=positive_count,
+        classification_indices=classification_indices,
+        vfl_target=vfl_target.detach(),
+    )
+
+
+def _centers_inside_any_box(centers: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
+    if boxes.numel() == 0:
+        return torch.zeros(len(centers), dtype=torch.bool, device=centers.device)
+    half = boxes[:, None, 2:] / 2
+    delta = (centers[None] - boxes[:, None, :2]).abs()
+    return (delta <= half).all(-1).any(0)
