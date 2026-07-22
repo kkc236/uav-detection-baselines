@@ -17,7 +17,7 @@ from ultralytics.utils import YAML
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.ebc_qp_config import SOURCE_SHA256
+from src.ebc_qp_config import EBCQPConfig, SOURCE_SHA256
 from src.ebc_qp_protocol import build_initial_state, dataset_signature, write_d2_subset
 from src.rtdetr_ebc_qp import EBCQPDetectionModel
 
@@ -56,14 +56,65 @@ def prepare_protocol(data_file: str | Path, *, output_dir: Path, seed: int) -> d
 
     dataset = dataset_signature(dataset_root)
     mapping_sha = _json_sha256(data["names"])
+    environment = _environment_record()
+    git_commit = _git_commit()
+    experiment_payload = {
+        "dataset": dataset,
+        "category_mapping_sha256": mapping_sha,
+        "subset": subset,
+        "data_sha256": _file_sha256(d2_data_file),
+        "source_sha256": SOURCE_SHA256,
+        "git_commit": git_commit,
+        "environment": environment,
+        "e1_training": {
+            "epochs": 10,
+            "fraction": 1.0,
+            "imgsz": 640,
+            "batch": 8,
+            "workers": 8,
+            "device": "0",
+            "amp": True,
+            "controlled_amp_scale": 256.0,
+            "controlled_amp_growth_interval": 2**31 - 1,
+            "deterministic": True,
+            "nbs": 64,
+            "nms": False,
+            "max_det": 300,
+            "optimizer": "MuSGD",
+            "lr0": 0.01,
+            "lrf": 0.01,
+            "momentum": 0.937,
+            "weight_decay": 0.0005,
+            "warmup_epochs": 3.0,
+        },
+        "tsgr_config": EBCQPConfig(
+            lambda_p2=0.1,
+            lambda_ebc=0.0,
+            lambda_quality=0.0,
+            query_injection_enabled=False,
+            p2_c2_grad_scale=0.1,
+            contribution_separated_aux_gradients=True,
+        ).as_dict(),
+    }
+    experiment_signature = _json_sha256(experiment_payload)
+    frozen_experiment = {
+        "format_version": 1,
+        "experiment_signature": experiment_signature,
+        "payload": experiment_payload,
+    }
+    _write_locked_text(
+        output_dir / "e1-experiment-signature.json",
+        json.dumps(frozen_experiment, indent=2, sort_keys=True) + "\n",
+    )
     metadata = {
         "seed": seed,
         "dataset": dataset,
         "category_mapping_sha256": mapping_sha,
         "subset": subset,
         "source_sha256": SOURCE_SHA256,
-        "git_commit": _git_commit(),
-        "environment": _environment_record(),
+        "git_commit": git_commit,
+        "environment": environment,
+        "experiment_signature": experiment_signature,
     }
     initial_state_file = output_dir / f"initial-state-seed{seed}.pt"
     artifact = _create_initial_state(seed=seed, nc=data["nc"], channels=data["channels"], metadata=metadata)
@@ -72,6 +123,7 @@ def prepare_protocol(data_file: str | Path, *, output_dir: Path, seed: int) -> d
     manifest = {
         "format_version": 1,
         "seed": seed,
+        "experiment_signature": experiment_signature,
         "dataset": dataset,
         "category_mapping_sha256": mapping_sha,
         "subset": {**subset, "path": str(subset_file)},

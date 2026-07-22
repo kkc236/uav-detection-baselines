@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import copy
 from dataclasses import asdict, dataclass
+import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
 from src.ebc_qp_diagnostics import MechanismDiagnosticsAccumulator
 from src.ebc_qp_metrics import TinyDetectionMetrics, validation_xy_gain
 from src.ebc_qp_protocol import load_initial_state
+from src.ebc_qp_stock_diagnostics import StockQueryProbe, StockTinyQueryAccumulator
 
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "p2_loss", "ebc_loss")
@@ -263,6 +266,14 @@ def prepare_contribution_separated_gradients(
             for parameter, gradient in private_unscaled
         }
 
+    shallow_stock_values = [
+        parameter.grad.detach().float().norm(2)
+        for parameter in stock_parameters
+        if parameter.grad is not None and is_tsgr_shallow_parameter_name(parameter_names[id(parameter)])
+    ]
+    shallow_stock_norm = (
+        float(torch.stack(shallow_stock_values).norm(2).item()) if shallow_stock_values else 0.0
+    )
     stock_norm_tensor = torch.nn.utils.clip_grad_norm_(stock_parameters, max_norm=max_norm)
     stock_norm = float(stock_norm_tensor.detach().float().item())
     shallow_result = {"preclip_norm": float("nan"), "clip_coefficient": float("nan")}
@@ -281,6 +292,7 @@ def prepare_contribution_separated_gradients(
         "scaler_scale": scaler_scale,
         "auxiliary_finite": auxiliary_finite,
         "pure_stock_preclip_norm": stock_norm,
+        "pure_stock_shallow_preclip_norm": shallow_stock_norm,
         "pure_stock_clip_coefficient": _clip_coefficient(stock_norm, max_norm),
         "routed_shallow_preclip_norm": shallow_result["preclip_norm"],
         "routed_shallow_clip_coefficient": shallow_result["clip_coefficient"],
@@ -388,6 +400,12 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
         state = self.ebc_head.last_state
         if state is None:
             raise RuntimeError("EBC-QP forward state was not populated")
+        if self.ebc_config.contribution_separated_aux_gradients:
+            if state.p2_entry_count != 0 or state.ordinary_query_count != self.ebc_config.query_budget:
+                raise RuntimeError(
+                    "TSGR query isolation failed for a training/validation batch: "
+                    f"entries={state.p2_entry_count}, queries={state.ordinary_query_count}"
+                )
         ebc_loss = state.ebc_loss if state.competition_active else state.ebc_loss * 0.0
         p2_objective = self.ebc_config.lambda_p2 * state.p2_loss.float()
         if self.ebc_config.contribution_separated_aux_gradients:
@@ -516,7 +534,50 @@ class EBCQPDiagnosticsValidator(EBCQPValidator):
         return results
 
 
+class StockQueryDiagnosticsValidator(EBCQPValidator):
+    """Shared read-only stock Top-K coverage and rank diagnostics for A0 and TSGR."""
+
+    def attach_diagnostic_model(self, model) -> None:
+        heads = [module for module in model.modules() if hasattr(module, "enc_score_head") and hasattr(module, "anchors")]
+        if len(heads) != 1:
+            raise RuntimeError(f"expected one RT-DETR decoder during stock diagnostics, found {len(heads)}")
+        self.stock_query_probe = StockQueryProbe(heads[0])
+
+    def init_metrics(self, model) -> None:
+        super().init_metrics(model)
+        if not hasattr(self, "stock_query_probe"):
+            self.attach_diagnostic_model(model)
+        self.stock_query_accumulator = StockTinyQueryAccumulator(query_budget=300, tiny_radius=16.0)
+        self.stock_query_stats: dict[str, float | int | list[int]] = {}
+
+    def update_metrics(self, preds, batch) -> None:
+        super().update_metrics(preds, batch)
+        scores, centers = self.stock_query_probe.consume()
+        self.stock_query_accumulator.update(scores, centers, batch)
+
+    def get_stats(self) -> dict:
+        results = super().get_stats()
+        self.stock_query_stats = self.stock_query_accumulator.compute()
+        return results
+
+
 class PairedProtocolOptimizerMixin:
+    controlled_amp_scale: float | None = None
+
+    def _setup_train(self):
+        super()._setup_train()
+        if self.controlled_amp_scale is not None:
+            if not bool(self.amp) or not torch.cuda.is_available():
+                raise RuntimeError("controlled AMP requires CUDA AMP")
+            self.scaler = torch.amp.GradScaler(
+                "cuda",
+                enabled=True,
+                init_scale=float(self.controlled_amp_scale),
+                growth_interval=2**31 - 1,
+            )
+            if float(self.scaler.get_scale()) != float(self.controlled_amp_scale):
+                raise RuntimeError("controlled AMP scale initialization failed")
+
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
         name, lr, momentum = resolve_protocol_optimizer(name, lr=lr, momentum=momentum)
         return super().build_optimizer(
@@ -526,6 +587,70 @@ class PairedProtocolOptimizerMixin:
             momentum=momentum,
             decay=decay,
             iterations=iterations,
+        )
+
+    def _initialize_optimizer_evidence(self) -> None:
+        self.optimizer_attempt = 0
+        self.optimizer_evidence_path = Path(self.save_dir) / "optimizer-evidence.jsonl"
+        if self.optimizer_evidence_path.exists():
+            raise FileExistsError(f"refusing to append changed optimizer evidence: {self.optimizer_evidence_path}")
+
+    def _record_optimizer_evidence(self, record: dict[str, Any]) -> None:
+        if self.controlled_amp_scale is None:
+            return
+        self.optimizer_attempt += 1
+        payload = {"optimizer_attempt": self.optimizer_attempt, **record}
+        nonfinite_fields = sorted(
+            key for key, value in payload.items() if isinstance(value, float) and not math.isfinite(value)
+        )
+        for key in nonfinite_fields:
+            payload[key] = None
+        payload["nonfinite_fields"] = nonfinite_fields
+        self.optimizer_evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.optimizer_evidence_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+        if payload["amp_step_skipped"]:
+            raise RuntimeError(f"controlled AMP skipped optimizer attempt {self.optimizer_attempt}")
+        if nonfinite_fields:
+            raise FloatingPointError(
+                f"optimizer attempt {self.optimizer_attempt} contains non-finite fields: {nonfinite_fields}"
+            )
+        if payload.get("runtime_violation"):
+            raise RuntimeError(
+                f"optimizer attempt {self.optimizer_attempt} violated the E1 protocol: "
+                f"{payload['runtime_violation']}"
+            )
+
+    def optimizer_step(self):
+        scale_before = float(self.scaler.get_scale())
+        self.scaler.unscale_(self.optimizer)
+        stock_norm_tensor = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+        stock_norm = float(stock_norm_tensor.detach().float().item())
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        scale_after = float(self.scaler.get_scale())
+        self.optimizer.zero_grad()
+        if self.ema:
+            self.ema.update(self.model)
+        self._record_optimizer_evidence(
+            {
+                "amp_scale_before": scale_before,
+                "amp_scale_after": scale_after,
+                "amp_step_skipped": scale_after < scale_before,
+                "gradient_clipping_mode": "pure_stock",
+                "pure_stock_preclip_norm": stock_norm,
+                "pure_stock_clip_coefficient": _clip_coefficient(stock_norm, 10.0),
+                "routed_shallow_preclip_norm": 0.0,
+                "routed_shallow_clip_coefficient": 1.0,
+                "aux_private_preclip_norm": 0.0,
+                "aux_private_clip_coefficient": 1.0,
+                "shallow_applied_ratio": 0.0,
+                "p2_entry_count": None,
+                "ordinary_query_count": None,
+                "protocol_expected_p2_entry_count": 0,
+                "protocol_expected_ordinary_query_count": 300,
+                "runtime_violation": None,
+            }
         )
 
 
@@ -541,12 +666,16 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         *args,
         ebc_config: EBCQPConfig | None = None,
         initial_state_path: str | Path | None = None,
+        controlled_amp_scale: float | None = None,
         **kwargs,
     ):
         self.ebc_config = ebc_config or EBCQPConfig()
         self.initial_state_path = Path(initial_state_path) if initial_state_path is not None else None
         self.initial_state = _load_protocol_state(self.initial_state_path)
+        self.controlled_amp_scale = controlled_amp_scale
         super().__init__(*args, **kwargs)
+        if self.controlled_amp_scale is not None:
+            self._initialize_optimizer_evidence()
         self.add_callback("on_train_epoch_start", self._set_ebc_progress)
         self.add_callback("on_train_batch_start", self._set_isolated_auxiliary_gradient_scale)
 
@@ -619,6 +748,7 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         monitoring = self.update_monitor.step < self.update_monitor.max_steps
         if monitoring:
             self.update_monitor.snapshot()
+        scale_before = float(self.scaler.get_scale())
         if self.ebc_config.contribution_separated_aux_gradients:
             self.last_gradient_clip_diagnostics = prepare_contribution_separated_gradients(
                 unwrap_model(self.model),
@@ -639,10 +769,55 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
             }
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        scale_after = float(self.scaler.get_scale())
         record = self.update_monitor.observe() if monitoring else None
         self.optimizer.zero_grad()
         if self.ema:
             self.ema.update(self.model)
+        state = unwrap_model(self.model).ebc_head.last_state
+        diagnostics = self.last_gradient_clip_diagnostics
+        shallow_stock = float(diagnostics.get("pure_stock_shallow_preclip_norm", 0.0))
+        shallow_route = float(diagnostics.get("routed_shallow_preclip_norm", 0.0))
+        stock_coefficient = float(diagnostics.get("pure_stock_clip_coefficient", 1.0))
+        route_coefficient = float(diagnostics.get("routed_shallow_clip_coefficient", 1.0))
+        applied_ratio = (
+            shallow_route * route_coefficient / (shallow_stock * stock_coefficient)
+            if shallow_stock * stock_coefficient > 0.0
+            else 0.0
+        )
+        violations = []
+        if state is None:
+            violations.append("missing_forward_state")
+        else:
+            if int(state.p2_entry_count) != 0:
+                violations.append(f"p2_entry_count={int(state.p2_entry_count)}")
+            if int(state.ordinary_query_count) != 300:
+                violations.append(f"ordinary_query_count={int(state.ordinary_query_count)}")
+        if not bool(diagnostics["auxiliary_finite"]):
+            violations.append("nonfinite_auxiliary_gradient")
+        self._record_optimizer_evidence(
+            {
+                "amp_scale_before": scale_before,
+                "amp_scale_after": scale_after,
+                "amp_step_skipped": scale_after < scale_before,
+                "gradient_clipping_mode": diagnostics["gradient_clipping_mode"],
+                "pure_stock_preclip_norm": float(diagnostics["pure_stock_preclip_norm"]),
+                "pure_stock_shallow_preclip_norm": shallow_stock,
+                "pure_stock_clip_coefficient": stock_coefficient,
+                "routed_shallow_preclip_norm": shallow_route,
+                "routed_shallow_clip_coefficient": route_coefficient,
+                "aux_private_preclip_norm": float(diagnostics["aux_private_preclip_norm"]),
+                "aux_private_clip_coefficient": float(diagnostics["aux_private_clip_coefficient"]),
+                "shallow_applied_ratio": applied_ratio,
+                "auxiliary_finite": bool(diagnostics["auxiliary_finite"]),
+                "update_monitor_ratio": float(record.ratio) if record is not None else None,
+                "update_monitor_consecutive": int(self.update_monitor.consecutive),
+                "update_monitor_abort": bool(record.abort) if record is not None else False,
+                "p2_entry_count": int(state.p2_entry_count) if state is not None else -1,
+                "ordinary_query_count": int(state.ordinary_query_count) if state is not None else -1,
+                "runtime_violation": ";".join(violations) if violations else None,
+            }
+        )
         if record is not None and record.abort:
             trace = [asdict(item) for item in self.update_monitor.trace[-self.update_monitor.patience :]]
             raise RuntimeError(f"EBC-QP normalized update ratio exceeded its limit: {trace}")
@@ -673,10 +848,19 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
 
 
 class PairedControlTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
-    def __init__(self, *args, initial_state_path: str | Path, **kwargs):
+    def __init__(
+        self,
+        *args,
+        initial_state_path: str | Path,
+        controlled_amp_scale: float | None = None,
+        **kwargs,
+    ):
         self.initial_state_path = Path(initial_state_path)
         self.initial_state = _load_protocol_state(self.initial_state_path)
+        self.controlled_amp_scale = controlled_amp_scale
         super().__init__(*args, **kwargs)
+        if self.controlled_amp_scale is not None:
+            self._initialize_optimizer_evidence()
 
     def get_model(self, cfg=None, weights=None, verbose: bool = True):
         model = RTDETRDetectionModel(

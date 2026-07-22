@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +22,36 @@ CONFIG = Path(__file__).parents[1] / "configs" / "rtdetr-l-ebc-qp.yaml"
 
 def test_control_overrides_stock_validator_to_use_the_shared_tiny_metric_code():
     assert PairedControlTrainer.get_validator is not UltralyticsRTDETRTrainer.get_validator
+
+
+def test_controlled_optimizer_evidence_persists_nonfinite_and_skip_before_failing(tmp_path: Path):
+    trainer = object.__new__(PairedControlTrainer)
+    trainer.controlled_amp_scale = 256.0
+    trainer.save_dir = tmp_path
+    trainer._initialize_optimizer_evidence()
+
+    trainer._record_optimizer_evidence(
+        {
+            "amp_step_skipped": False,
+            "amp_scale_before": 256.0,
+            "amp_scale_after": 256.0,
+            "pure_stock_preclip_norm": 3.0,
+        }
+    )
+    with pytest.raises(RuntimeError, match="skipped optimizer attempt 2"):
+        trainer._record_optimizer_evidence(
+            {
+                "amp_step_skipped": True,
+                "amp_scale_before": 256.0,
+                "amp_scale_after": 128.0,
+                "pure_stock_preclip_norm": float("inf"),
+            }
+        )
+
+    records = [json.loads(line) for line in trainer.optimizer_evidence_path.read_text().splitlines()]
+    assert [record["optimizer_attempt"] for record in records] == [1, 2]
+    assert records[1]["pure_stock_preclip_norm"] is None
+    assert records[1]["nonfinite_fields"] == ["pure_stock_preclip_norm"]
 
 
 def test_model_adds_weighted_losses_but_keeps_stock_encoder_auxiliary_output():

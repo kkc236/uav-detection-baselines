@@ -205,6 +205,100 @@ def test_qg_p2_rejects_other_quality_or_injection_switches():
         validate_protocol(no_injection)
 
 
+def test_tsgr_p2_is_the_frozen_minimal_contribution_separated_e1_arm():
+    args = build_parser().parse_args(
+        [
+            "--stage",
+            "e1",
+            "--arm",
+            "tsgr-p2",
+            "--initial-state",
+            "init.pt",
+            "--name",
+            "paired",
+            "--controlled-amp-scale",
+            "256",
+        ]
+    )
+
+    validate_protocol(args)
+    config = build_ebc_config(args)
+
+    assert config.lambda_p2 == 0.1
+    assert config.lambda_ebc == 0.0
+    assert config.lambda_quality == 0.0
+    assert config.query_injection_enabled is False
+    assert config.quality_gated_p2 is False
+    assert config.quality_weighted_ebc is False
+    assert config.learnable_fusion_gamma is False
+    assert config.p2_c2_grad_scale == 0.1
+    assert config.contribution_separated_aux_gradients is True
+    settings = build_settings(args)
+    assert settings["epochs"] == 10
+    assert settings["fraction"] == 1.0
+    assert Path(settings["model"]).name == "rtdetr-l-ebc-qp.yaml"
+
+
+def test_e1_control_uses_the_stock_model_and_frozen_controlled_amp():
+    args = build_parser().parse_args(
+        [
+            "--stage",
+            "e1",
+            "--arm",
+            "control",
+            "--initial-state",
+            "init.pt",
+            "--controlled-amp-scale",
+            "256",
+        ]
+    )
+
+    validate_protocol(args)
+    settings = build_settings(args)
+
+    assert settings["model"] == "rtdetr-l.yaml"
+    assert settings["epochs"] == 10
+    assert settings["fraction"] == 1.0
+    assert settings["name"] == "e1-control-seed0"
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ("--quality-weighted-ebc", "--learnable-fusion-gamma", "--disable-query-injection"),
+)
+def test_tsgr_p2_rejects_legacy_feature_switches(flag: str):
+    args = build_parser().parse_args(
+        [
+            "--stage",
+            "e1",
+            "--arm",
+            "tsgr-p2",
+            "--initial-state",
+            "init.pt",
+            "--controlled-amp-scale",
+            "256",
+            flag,
+        ]
+    )
+
+    with pytest.raises(SystemExit):
+        validate_protocol(args)
+
+
+def test_e1_rejects_non_e1_arms_and_missing_controlled_amp():
+    wrong_arm = build_parser().parse_args(
+        ["--stage", "e1", "--arm", "a2", "--initial-state", "init.pt", "--controlled-amp-scale", "256"]
+    )
+    missing_amp = build_parser().parse_args(
+        ["--stage", "e1", "--arm", "tsgr-p2", "--initial-state", "init.pt"]
+    )
+
+    with pytest.raises(SystemExit, match="E1 arm"):
+        validate_protocol(wrong_arm)
+    with pytest.raises(SystemExit, match="controlled AMP scale 256"):
+        validate_protocol(missing_amp)
+
+
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
     assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
     assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)

@@ -166,6 +166,7 @@ def test_contribution_separated_prepare_keeps_deep_stock_clip_independent():
     torch.testing.assert_close(model.model[2].weight.grad, torch.tensor([[0.0, 4.0]]), atol=0, rtol=0)
     torch.testing.assert_close(model.p2_adapter.weight.grad, torch.tensor([[0.0, 10.0]]), atol=1e-5, rtol=0)
     assert diagnostics["pure_stock_preclip_norm"] == pytest.approx(5.0)
+    assert diagnostics["pure_stock_shallow_preclip_norm"] == pytest.approx(3.0)
     assert diagnostics["pure_stock_clip_coefficient"] == pytest.approx(1.0)
     assert diagnostics["routed_shallow_preclip_norm"] == pytest.approx(20.0)
     assert diagnostics["aux_private_preclip_norm"] == pytest.approx(20.0)
