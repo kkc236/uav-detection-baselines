@@ -34,6 +34,9 @@ class MechanismDiagnosticsAccumulator:
     quality_scores: list[float] = field(default_factory=list)
     quality_ious: list[float] = field(default_factory=list)
     quality_nwds: list[float] = field(default_factory=list)
+    quality_head_logits: list[float] = field(default_factory=list)
+    quality_head_ious: list[float] = field(default_factory=list)
+    quality_head_nwds: list[float] = field(default_factory=list)
     c2_p3_rms_ratio_sum: float = 0.0
     c2_p3_rms_ratio_count: int = 0
 
@@ -135,6 +138,11 @@ class MechanismDiagnosticsAccumulator:
             self.quality_scores.extend(scores.tolist())
             self.quality_ious.extend(ious.tolist())
             self.quality_nwds.extend(nwds.tolist())
+            if state.p2_all_quality_logits is not None:
+                quality_logits = state.p2_all_quality_logits[image_index, candidate_indices].float()
+                self.quality_head_logits.extend(quality_logits.tolist())
+                self.quality_head_ious.extend(ious.tolist())
+                self.quality_head_nwds.extend(nwds.tolist())
 
         assignment = {int(candidate): int(gt) for gt, candidate in pairs.tolist()}
         entry_indices = state.final_source_indices[image_index][entered].tolist()
@@ -186,6 +194,9 @@ class MechanismDiagnosticsAccumulator:
             "score_iou_spearman": _spearman(self.quality_scores, self.quality_ious),
             "score_nwd_spearman": _spearman(self.quality_scores, self.quality_nwds),
             "score_quality_sample_count": len(self.quality_scores),
+            "quality_logit_iou_spearman": _spearman(self.quality_head_logits, self.quality_head_ious),
+            "quality_logit_nwd_spearman": _spearman(self.quality_head_logits, self.quality_head_nwds),
+            "quality_logit_sample_count": len(self.quality_head_logits),
             "assigned_entry_mean_iou": _ratio(self.assigned_entry_iou_sum, self.assigned_entry_count),
             "assigned_entry_mean_nwd": _ratio(self.assigned_entry_nwd_sum, self.assigned_entry_count),
             "unassigned_entry_rate": unassigned_entry_rate,

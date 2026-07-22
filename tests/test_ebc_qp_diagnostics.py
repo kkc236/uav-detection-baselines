@@ -97,3 +97,50 @@ def test_mechanism_diagnostics_ignore_inactive_competition_batches():
     )
 
     assert diagnostics.compute()["active_images"] == 0
+
+
+def test_mechanism_diagnostics_report_quality_head_calibration_separately():
+    centers = torch.tensor([[1 / 6, 0.5], [0.5, 0.5], [5 / 6, 0.5]])
+    target_boxes = torch.cat((centers, torch.full((3, 2), 0.1)), dim=1)
+    predicted_boxes = target_boxes.clone()
+    predicted_boxes[:, 2:] = torch.tensor([[0.1, 0.1], [0.08, 0.08], [0.05, 0.05]])
+    state = EBCQPForwardState(
+        stock_topk_indices=torch.tensor([[0, 1, 2]]),
+        p2_topk_indices=torch.tensor([[0, 1, 2]]),
+        stock_centers=centers[None],
+        final_centers=centers[None],
+        final_boxes=predicted_boxes[None],
+        p2_top_centers=centers[None],
+        final_ranking_score=torch.tensor([[0.9, 0.8, 0.7]]),
+        final_sources=torch.zeros((1, 3), dtype=torch.long),
+        final_source_indices=torch.tensor([[0, 1, 2]]),
+        p2_loss=torch.tensor(0.0),
+        ebc_loss=torch.tensor(0.0),
+        p2_entry_count=0,
+        ordinary_query_count=3,
+        encoder_aux_source_is_stock=True,
+        competition_active=True,
+        ebc_active=False,
+        stock_boundary=torch.tensor([0.6]),
+        assigned_pairs=[],
+        uncovered=[],
+        p2_all_boxes=predicted_boxes[None],
+        p2_all_logits=torch.tensor([[[1.0], [1.0], [1.0]]]),
+        p2_all_quality_logits=torch.tensor([[3.0, 2.0, 1.0]]),
+        p2_shape=(1, 3),
+        p2_valid_mask=torch.ones(1, 3, 1, dtype=torch.bool),
+    )
+    batch = {
+        "batch_idx": torch.tensor([0, 0, 0]),
+        "bboxes": target_boxes,
+        "cls": torch.zeros((3, 1)),
+        "img": torch.zeros(1, 3, 160, 160),
+    }
+    diagnostics = MechanismDiagnosticsAccumulator(tiny_radius=16.0)
+
+    diagnostics.update(state, batch)
+    result = diagnostics.compute()
+
+    assert result["quality_logit_sample_count"] == 3
+    assert result["quality_logit_iou_spearman"] == pytest.approx(1.0)
+    assert result["quality_logit_nwd_spearman"] == pytest.approx(1.0)
