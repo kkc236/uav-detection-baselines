@@ -24,14 +24,16 @@ from src.ebc_qp_causal_audit import (  # noqa: E402
     capture_grouped_values,
     clone_named_parameters,
     capture_parameter_delta_signatures,
+    capture_parameter_delta_sha256,
     capture_parameter_signatures,
+    capture_tensor_sha256,
 )
 from src.ebc_qp_protocol import state_fingerprint  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one arm of the frozen 100-step A0/AUX E0 causal audit.")
-    parser.add_argument("--arm", required=True, choices=("a0", "aux-audit"))
+    parser.add_argument("--arm", required=True, choices=("a0", "a0-repeat", "aux-audit"))
     parser.add_argument("--initial-state", required=True, type=Path)
     parser.add_argument("--protocol-manifest", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
@@ -46,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolved_audit_steps(args: argparse.Namespace) -> int:
     return 1 if args.smoke else int(args.steps)
+
+
+def resolved_run_name(args: argparse.Namespace) -> str:
+    suffix = "-smoke" if args.smoke else ""
+    return f"e0-{args.arm}-seed0{suffix}"
 
 
 def build_audit_settings(args: argparse.Namespace) -> dict[str, Any]:
@@ -345,6 +352,7 @@ def _make_trainers():
             stock_grad_preclip_parameters = capture_parameter_signatures(
                 _gradient_tensors(self.audit_common_parameters)
             )
+            stock_grad_preclip_sha256 = capture_tensor_sha256(_gradient_tensors(self.audit_common_parameters))
             stock_grad_total_norm = math.sqrt(sum(record["l2"] ** 2 for record in stock_grad_preclip.values()))
             all_named_parameters = dict(model.named_parameters())
             auxiliary_parameters = {
@@ -355,6 +363,12 @@ def _make_trainers():
             total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
             total_norm_value = float(total_norm.detach().float().item())
             clip_coefficient = min(1.0, 10.0 / (total_norm_value + 1e-6)) if math.isfinite(total_norm_value) else 0.0
+            reconstructed_norm = math.sqrt(stock_grad_total_norm**2 + aux_private_grad_total_norm**2)
+            clip_norm_partition_relative_error = abs(total_norm_value - reconstructed_norm) / max(
+                total_norm_value,
+                reconstructed_norm,
+                1e-12,
+            )
             stock_grad_postclip = capture_grouped_gradients(self.audit_common_parameters)
             stock_grad_postclip_parameters = capture_parameter_signatures(
                 _gradient_tensors(self.audit_common_parameters)
@@ -367,6 +381,7 @@ def _make_trainers():
                 self.audit_successful_updates += 1
             stock_delta = capture_grouped_parameter_deltas(before, self.audit_common_parameters)
             stock_delta_parameters = capture_parameter_delta_signatures(before, self.audit_common_parameters)
+            stock_delta_sha256 = capture_parameter_delta_sha256(before, self.audit_common_parameters)
             self.optimizer.zero_grad()
             if self.ema:
                 self.ema.update(self.model)
@@ -380,6 +395,13 @@ def _make_trainers():
                 }
             )
             stock_bn_parameters = capture_parameter_signatures(
+                {
+                    name: buffers[name]
+                    for name in sorted(self.audit_common_buffer_names)
+                    if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
+                }
+            )
+            stock_bn_sha256 = capture_tensor_sha256(
                 {
                     name: buffers[name]
                     for name in sorted(self.audit_common_buffer_names)
@@ -411,6 +433,7 @@ def _make_trainers():
                     "rng_before_forward": list(self.audit_pending_rng),
                     "stock_grad_preclip": stock_grad_preclip,
                     "stock_grad_preclip_parameters": stock_grad_preclip_parameters,
+                    "stock_grad_preclip_sha256": stock_grad_preclip_sha256,
                     "stock_grad_postclip": stock_grad_postclip,
                     "stock_grad_postclip_parameters": stock_grad_postclip_parameters,
                     "clip_total_norm": total_norm_value,
@@ -418,15 +441,18 @@ def _make_trainers():
                     "stock_only_clip_coefficient": stock_only_clip_coefficient,
                     "stock_grad_total_norm": stock_grad_total_norm,
                     "aux_private_grad_total_norm": aux_private_grad_total_norm,
+                    "clip_norm_partition_relative_error": clip_norm_partition_relative_error,
                     "amp_scale_before": scale_before,
                     "amp_scale_after": scale_after,
                     "amp_step_skipped": step_skipped,
                     "stock_delta": stock_delta,
                     "stock_delta_parameters": stock_delta_parameters,
+                    "stock_delta_sha256": stock_delta_sha256,
                     "stock_state": stock_state,
                     "stock_state_parameters": stock_state_parameters,
                     "stock_bn": stock_bn,
                     "stock_bn_parameters": stock_bn_parameters,
+                    "stock_bn_sha256": stock_bn_sha256,
                     "stock_ema": stock_ema,
                     "stock_ema_parameters": stock_ema_parameters,
                     "optimizer_state": optimizer_state,
@@ -573,8 +599,12 @@ def main() -> None:
         raise SystemExit(f"refusing to overwrite existing audit trace: {args.output}")
 
     settings = build_audit_settings(args)
-    settings["name"] = f"e0-{args.arm}-seed0"
-    settings["model"] = "rtdetr-l.yaml" if args.arm == "a0" else str(ROOT / "configs" / "rtdetr-l-ebc-qp.yaml")
+    settings["name"] = resolved_run_name(args)
+    settings["model"] = (
+        "rtdetr-l.yaml"
+        if args.arm in {"a0", "a0-repeat"}
+        else str(ROOT / "configs" / "rtdetr-l-ebc-qp.yaml")
+    )
     evidence = _build_evidence_metadata(args, settings, manifest)
     target_steps = resolved_audit_steps(args)
     ControlTrainer, AuxTrainer, EBCQPConfig = _make_trainers()
@@ -586,7 +616,7 @@ def main() -> None:
         "audit_steps": target_steps,
         "audit_metadata": evidence,
     }
-    if args.arm == "a0":
+    if args.arm in {"a0", "a0-repeat"}:
         trainer = ControlTrainer(**common)
     else:
         trainer = AuxTrainer(

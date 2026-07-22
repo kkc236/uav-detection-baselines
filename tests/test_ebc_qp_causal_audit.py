@@ -8,14 +8,17 @@ from scripts.audit_ebc_qp_aux_causality import (
     build_parser,
     optimizer_common_manifest,
     resolved_audit_steps,
+    resolved_run_name,
     tensor_structure_fingerprint,
 )
 from src.ebc_qp_causal_audit import (
     capture_grouped_gradients,
     capture_grouped_parameter_deltas,
     capture_parameter_signatures,
+    capture_tensor_sha256,
     classify_stock_parameter,
     clone_named_parameters,
+    compare_a0_repeats,
     compare_audit_runs,
 )
 
@@ -88,17 +91,21 @@ def _run(arm: str, *, clip: float, stock_delta: float, batch: str = "B", skipped
                 "stock_only_clip_coefficient": 1.0,
                 "stock_grad_total_norm": 3.0,
                 "aux_private_grad_total_norm": 20.0 if arm == "aux-audit" else 0.0,
+                "clip_norm_partition_relative_error": 0.0,
                 "amp_step_skipped": skipped,
                 "amp_scale_before": 65536.0,
                 "amp_scale_after": 32768.0 if skipped else 65536.0,
                 "stock_grad_preclip": {"backbone_c2": {"l2": 3.0, "max_abs": 2.0}},
                 "stock_grad_preclip_parameters": {"model.3.weight": {"l2": 3.0, "sum": 1.0, "max_abs": 2.0}},
+                "stock_grad_preclip_sha256": {"model.3.weight": "GRAD"},
                 "stock_delta": {"backbone_c2": {"l2": stock_delta, "max_abs": stock_delta}},
                 "stock_delta_parameters": {
                     "model.3.weight": {"l2": stock_delta, "sum": stock_delta, "max_abs": stock_delta}
                 },
+                "stock_delta_sha256": {"model.3.weight": f"DELTA-{stock_delta}"},
                 "stock_bn": {"l2": 1.0, "sum": 1.0},
                 "stock_bn_parameters": {"model.3.running_mean": {"l2": 1.0, "sum": 1.0, "max_abs": 1.0}},
+                "stock_bn_sha256": {"model.3.running_mean": "BN"},
                 "stock_ema": {"l2": 2.0, "sum": 2.0},
                 "stock_ema_parameters": {"model.3.weight": {"l2": 2.0, "sum": 2.0, "max_abs": 2.0}},
                 "optimizer_groups": [{"param_group": "weight", "lr": 0.1}],
@@ -127,6 +134,7 @@ def test_compare_audit_runs_preserves_first_clip_cause_after_later_gradient_dive
     control = _run("a0", clip=1.0, stock_delta=0.1)
     auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05)
     auxiliary["steps"][1]["stock_grad_preclip_parameters"]["model.3.weight"]["sum"] = 1.5
+    auxiliary["steps"][1]["stock_grad_preclip_sha256"]["model.3.weight"] = "GRAD-DIFFERENT"
 
     result = compare_audit_runs(control, auxiliary)
 
@@ -139,6 +147,7 @@ def test_compare_audit_runs_uses_within_aux_counterfactual_clip_evidence():
     control = _run("a0", clip=1.0, stock_delta=0.1)
     auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05)
     auxiliary["steps"][0]["stock_grad_preclip_parameters"]["model.3.weight"]["sum"] = 1.25
+    auxiliary["steps"][0]["stock_grad_preclip_sha256"]["model.3.weight"] = "GRAD-DIFFERENT"
 
     result = compare_audit_runs(control, auxiliary)
 
@@ -146,6 +155,13 @@ def test_compare_audit_runs_uses_within_aux_counterfactual_clip_evidence():
     assert result["first_counterfactual_clip_effect_step"] == 1
     assert result["classification"] == "GLOBAL_CLIP_COUPLING"
     assert "global_clip_counterfactual" in result["mechanisms_detected"]
+
+
+def test_compare_audit_runs_rejects_invalid_gradient_norm_partition():
+    auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05)
+    auxiliary["steps"][0]["clip_norm_partition_relative_error"] = 0.01
+    with pytest.raises(ValueError, match="gradient norm partition"):
+        compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)
 
 
 def test_compare_audit_runs_rejects_batch_or_optimizer_mismatch():
@@ -199,6 +215,11 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
 
     smoke = parser.parse_args(["--arm", "a0", *common, "--smoke"])
     assert resolved_audit_steps(smoke) == 1
+    assert resolved_run_name(smoke) == "e0-a0-seed0-smoke"
+
+    repeat = parser.parse_args(["--arm", "a0-repeat", *common])
+    assert build_audit_settings(repeat) == build_audit_settings(a0)
+    assert resolved_run_name(repeat) == "e0-a0-repeat-seed0"
 
 
 def test_batch_and_optimizer_manifests_are_stable_and_common_only():
@@ -238,3 +259,29 @@ def test_tensor_structure_fingerprint_covers_nested_decoder_outputs():
 
     assert tensor_structure_fingerprint(first) == tensor_structure_fingerprint(same)
     assert tensor_structure_fingerprint(first) != tensor_structure_fingerprint(changed)
+
+
+def test_full_tensor_sha256_detects_changes_outside_the_64_point_sample():
+    first = torch.arange(1000, dtype=torch.float32)
+    second = first.clone()
+    second[101], second[102] = second[102].clone(), second[101].clone()
+
+    assert capture_parameter_signatures({"model.3.weight": first}) == capture_parameter_signatures(
+        {"model.3.weight": second}
+    )
+    assert capture_tensor_sha256({"model.3.weight": first}) != capture_tensor_sha256(
+        {"model.3.weight": second}
+    )
+
+
+def test_a0_repeatability_report_calibrates_first_exact_divergence():
+    reference = _run("a0", clip=1.0, stock_delta=0.1)
+    repeat = _run("a0", clip=1.0, stock_delta=0.1)
+    repeat["arm"] = "a0-repeat"
+    exact = compare_a0_repeats(reference, repeat)
+    assert exact["first_preclip_hash_divergence_step"] is None
+    assert exact["first_delta_hash_divergence_step"] is None
+
+    repeat["steps"][1]["stock_grad_preclip_sha256"]["model.3.weight"] = "NOISE"
+    noisy = compare_a0_repeats(reference, repeat)
+    assert noisy["first_preclip_hash_divergence_step"] == 2

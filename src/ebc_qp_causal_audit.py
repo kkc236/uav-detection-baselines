@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from math import isclose
 from typing import Mapping
 
@@ -124,6 +125,31 @@ def capture_parameter_delta_signatures(
     )
 
 
+def capture_tensor_sha256(tensors: Mapping[str, torch.Tensor]) -> dict[str, str]:
+    result = {}
+    for name in sorted(tensors):
+        tensor = tensors[name].detach().cpu().contiguous()
+        digest = hashlib.sha256()
+        digest.update(str(tensor.dtype).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(tuple(tensor.shape)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+        result[name] = digest.hexdigest().upper()
+    return result
+
+
+def capture_parameter_delta_sha256(
+    before: Mapping[str, torch.Tensor],
+    after: Mapping[str, torch.nn.Parameter],
+) -> dict[str, str]:
+    if set(before) != set(after):
+        raise ValueError("parameter snapshot names changed")
+    return capture_tensor_sha256(
+        {name: after[name].detach().float() - before[name] for name in sorted(before)}
+    )
+
+
 def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-8) -> dict:
     """Validate two E0 traces and identify the earliest supported stock-coupling mechanism."""
     if control.get("arm") != "a0" or auxiliary.get("arm") != "aux-audit":
@@ -172,6 +198,8 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
             raise ValueError(f"batch sequence mismatch at optimizer step {expected_step}")
         if left.get("rng_before_forward") != right.get("rng_before_forward"):
             raise ValueError(f"random-state sequence mismatch at optimizer step {expected_step}")
+        if float(right.get("clip_norm_partition_relative_error", 0.0)) > 1e-4:
+            raise ValueError(f"gradient norm partition mismatch at optimizer step {expected_step}")
 
         if left.get("optimizer_groups") != right.get("optimizer_groups"):
             raise ValueError(f"optimizer runtime-group mismatch at optimizer step {expected_step}")
@@ -272,6 +300,45 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
     }
 
 
+def compare_a0_repeats(reference: dict, repeat: dict) -> dict:
+    if reference.get("arm") != "a0" or repeat.get("arm") != "a0-repeat":
+        raise ValueError("repeatability arms must be a0 and a0-repeat")
+    for field, label in (
+        ("target_optimizer_steps", "target optimizer-step count"),
+        ("common_initial_fingerprint", "common initial-state fingerprint"),
+        ("optimizer_common_manifest", "optimizer common-parameter manifest"),
+        ("initial_probe", "initial forward/query probe"),
+    ):
+        if reference.get(field) != repeat.get(field):
+            raise ValueError(f"A0 repeat {label} mismatch")
+    left_steps = reference.get("steps", [])
+    right_steps = repeat.get("steps", [])
+    if len(left_steps) != len(right_steps):
+        raise ValueError("A0 repeat optimizer-attempt count mismatch")
+
+    first_preclip = None
+    first_delta = None
+    first_bn = None
+    for index, (left, right) in enumerate(zip(left_steps, right_steps), start=1):
+        if left.get("batch_fingerprints") != right.get("batch_fingerprints"):
+            raise ValueError(f"A0 repeat batch sequence mismatch at optimizer step {index}")
+        if left.get("rng_before_forward") != right.get("rng_before_forward"):
+            raise ValueError(f"A0 repeat random-state sequence mismatch at optimizer step {index}")
+        if left.get("stock_grad_preclip_sha256") != right.get("stock_grad_preclip_sha256"):
+            first_preclip = first_preclip or index
+        if left.get("stock_delta_sha256") != right.get("stock_delta_sha256"):
+            first_delta = first_delta or index
+        if left.get("stock_bn_sha256") != right.get("stock_bn_sha256"):
+            first_bn = first_bn or index
+    return {
+        "pairing_valid": True,
+        "first_preclip_hash_divergence_step": first_preclip,
+        "first_delta_hash_divergence_step": first_delta,
+        "first_bn_hash_divergence_step": first_bn,
+        "bitwise_repeatable": first_preclip is None and first_delta is None and first_bn is None,
+    }
+
+
 def _model_layer_index(parts: list[str]) -> int | None:
     if len(parts) >= 2 and parts[0] == "model" and parts[1].isdigit():
         return int(parts[1])
@@ -312,4 +379,4 @@ def _nested_close(left: object, right: object, tolerance: float) -> bool:
 
 
 def _detail(step: dict, field: str) -> object:
-    return step.get(f"{field}_parameters", step.get(field, {}))
+    return step.get(f"{field}_sha256", step.get(f"{field}_parameters", step.get(field, {})))
