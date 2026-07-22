@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts.train_rtdetr_ebc_qp import CompactDiagnosticsWriter, build_parser, build_settings, validate_protocol
+from src.rtdetr_ebc_qp import resolve_protocol_optimizer
 
 
 def test_d2_defaults_are_frozen_ten_epoch_ten_percent_scratch_settings():
@@ -55,6 +56,11 @@ def test_fixed_batch_and_workers_cannot_be_overridden_from_cli():
 
     assert "batch" not in options
     assert "workers" not in options
+
+
+def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
+    assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
+    assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)
 
 
 def test_d2_control_uses_stock_yaml_and_the_same_initial_state():

@@ -223,7 +223,26 @@ class EBCQPValidator(RTDETRValidator):
             self.tiny_metrics.clear()
 
 
-class EBCQPTrainer(UltralyticsRTDETRTrainer):
+class PairedProtocolOptimizerMixin:
+    def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
+        name, lr, momentum = resolve_protocol_optimizer(name, lr=lr, momentum=momentum)
+        return super().build_optimizer(
+            model,
+            name=name,
+            lr=lr,
+            momentum=momentum,
+            decay=decay,
+            iterations=iterations,
+        )
+
+
+def resolve_protocol_optimizer(name: str, *, lr: float, momentum: float) -> tuple[str, float, float]:
+    if name.lower() == "auto":
+        return "MuSGD", lr, momentum
+    return name, lr, momentum
+
+
+class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
     def __init__(
         self,
         *args,
@@ -319,7 +338,7 @@ class EBCQPTrainer(UltralyticsRTDETRTrainer):
             unwrap_model(self.model).set_ebc_progress(int(checkpoint["ebc_qp"]["ebc_epoch"]))
 
 
-class PairedControlTrainer(UltralyticsRTDETRTrainer):
+class PairedControlTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
     def __init__(self, *args, initial_state_path: str | Path, **kwargs):
         self.initial_state_path = Path(initial_state_path)
         self.initial_state = _load_protocol_state(self.initial_state_path)
