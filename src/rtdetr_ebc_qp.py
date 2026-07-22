@@ -391,7 +391,8 @@ class EBCQPDetectionModel(RTDETRDetectionModel):
         ebc_loss = state.ebc_loss if state.competition_active else state.ebc_loss * 0.0
         p2_objective = self.ebc_config.lambda_p2 * state.p2_loss.float()
         if self.ebc_config.contribution_separated_aux_gradients:
-            self._accumulate_isolated_p2_gradients(p2_objective)
+            if self.training and torch.is_grad_enabled():
+                self._accumulate_isolated_p2_gradients(p2_objective)
             total = stock_loss.float()
         else:
             total = (

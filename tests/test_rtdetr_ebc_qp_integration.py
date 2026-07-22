@@ -174,6 +174,15 @@ def test_tsgr_loss_buffers_only_private_and_exact_shallow_gradients():
         if ".p2_adapter." in name or ".p2_bbox_head." in name
     )
 
+    model.clear_isolated_auxiliary_gradients()
+    model.eval()
+    with torch.no_grad():
+        validation_total, _validation_items = model.loss(batch)
+    validation_state = model.ebc_head.last_state
+    torch.testing.assert_close(validation_total.detach(), validation_state.stock_loss, rtol=0, atol=0)
+    with pytest.raises(RuntimeError, match="buffer is empty"):
+        model.pop_isolated_auxiliary_gradients()
+
 
 def test_qg_p2_single_batch_adds_only_weighted_quality_loss_and_quality_parameters():
     config = EBCQPConfig(
