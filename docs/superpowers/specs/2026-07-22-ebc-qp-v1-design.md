@@ -302,18 +302,29 @@ token rank, and final decoder failure.
 ### D2: 10-epoch full screen
 
 Run scratch v1.0 and scratch stock control on the same fixed 10% subset with
-identical common initialization, seed, data order, and augmentation order. Warm-up
-for three epochs; activate EBC/global competition at epoch 4.
+identical common initialization, seed, data order, and augmentation order. All
+common stock parameters are loaded element-by-element from the same saved initial
+state. A2-only P2 parameters do not exist in the control and are initialized from
+the frozen v1.0 rules with a separate fixed seed. Warm-up for three epochs; activate
+EBC/global competition at epoch 4.
 
-Proceed only when P2 coverage, tiny recall, and effective P2 entries improve;
-displaced effective stock count remains lower than gained coverage; P2 count does
-not saturate at 50; final-three-epoch mean mAP50-95 is not below control; and no
-sustained late decline appears.
+Proceed only when P2 coverage and tiny recall improve; `N_gain > N_loss`;
+effective P2 entry rate is positive; P2 count does not saturate at 50;
+final-three-epoch mean mAP50-95 is not below control; and no sustained late
+decline appears.
 
-### D3: no-EBC ablation
+### D3: 10-epoch no-EBC screening
 
 Only after D2 shows a positive trend, rerun the same scratch 10% protocol with
-`lambda_EBC=0`.
+`lambda_EBC=0`. D3 is a screening experiment and never substitutes for the formal
+100-epoch A1 ablation.
+
+### Formal 100-epoch ablation
+
+After the full A2 method passes its 100-epoch seed-0 experiment, run A1 from
+scratch using A2's saved common initial stock state, complete training set, seed,
+data order, augmentation order, and frozen 100-epoch protocol. The completed A2
+run and this matched A1 run form the formal seed-0 ablation:
 
 | ID | P2 queries | EBC |
 | --- | ---: | ---: |
@@ -321,27 +332,55 @@ Only after D2 shows a positive trend, rerun the same scratch 10% protocol with
 | A1 | yes | no |
 | A2 | yes | yes |
 
-Only a frozen D2 configuration that passes may start 100-epoch seed-0 scratch
-training. Additional baseline/EBC seeds follow only after positive seed-0 evidence.
+The 10-epoch D3 result is not placed in this table. Only a frozen D2 configuration
+that passes may start 100-epoch seed-0 scratch training. After seed 0 passes, freeze
+the code commit, configuration, parameters, dataset signature, and evaluation code
+before starting seeds 1 and 2. Results from seed 0 must not trigger further tuning;
+any later change creates a new version and requires a new seed-0 run.
 
 ## 9. Persistent logs
 
 Keep only:
 
-- AP-tiny and tiny Recall for resized `r<=16` GTs;
+- custom AP-tiny and tiny Recall for validation-preprocessed `r<=16` GTs;
 - stock Top-300 center coverage;
 - LocalAssignRate;
 - P2 entry count;
+- `N_gain`, `N_loss`, and `V_replace`;
 - effective P2 entry rate;
-- displaced effective stock count;
 - boundary-gap mean and positive ratio;
 - `L_P2` and `L_EBC`;
 - overall Precision, Recall, mAP50, and mAP50-95.
 
-An entered P2 candidate is effective when its anchor center covers a tiny GT not
-covered by stock Top-300. A displaced stock candidate is effective when it was in
-the frozen stock-to-GT center matching. Both use the same detached one-to-one
-coverage definition.
+For replacement statistics, independently match the stock Top-300 and final mixed
+Top-300 against all labeled GTs using the same detached maximum-cardinality,
+minimum-distance center assignment. Let `M_stock` and `M_final` be the uniquely
+covered GT-index sets:
+
+```text
+N_gain = count(tiny GT indices in M_final but not M_stock)
+N_loss = count(all GT indices in M_stock but not M_final)
+V_replace = N_gain - N_loss
+effective_p2_entry_rate = N_gain / max(p2_entry_count, 1)
+```
+
+Statistics count unique GT indices, never candidate multiplicity. `N_loss` includes
+non-tiny GTs so tiny recovery cannot hide damage to larger objects.
+
+For custom AP-tiny, compute box size after the actual validation resize and before
+padding translation:
+
+```text
+w_resized = w_original * actual_width_gain
+h_resized = h_original * actual_height_gain
+r = sqrt(w_resized * h_resized)
+```
+
+Padding does not change width or height. The fixed groups are `r<8` and
+`8<=r<=16`, with training/custom AP-tiny using `r<=16`. GTs outside the custom
+range are ignored rather than converted into false positives during AP-tiny
+matching. This is a project-specific AP-tiny metric and must not be called or
+compared directly with COCO AP-small.
 
 Do not persist full P2 maps, large percentile tables, or repeated per-stage
 complexity traces. Gradient and finite-value diagnostics are test outputs only.
@@ -367,9 +406,24 @@ Abort instead of editing an active run when:
 
 - NaN/Inf or disabled-path mismatch occurs;
 - P2 adapter has no gradient;
-- P2 auxiliary gradient exceeds stock gradient by over 10x in the first 200 steps;
 - P2 scores completely dominate stock or entry count saturates at 50;
 - matching is nondeterministic or encoder auxiliary outputs contain P2.
+
+Do not compare raw gradient norms. For parameter group `G`, measure the actual
+optimizer-step update after AMP unscaling, accumulation, optimizer state, and
+weight decay:
+
+```text
+U_G(t) = ||theta_G(t+1) - theta_G(t)||_2
+         / (||theta_G(t)||_2 + 1e-12)
+
+R_update(t) = U_P2(t) / (U_stock(t) + 1e-12)
+```
+
+`theta_P2` contains the trainable P2 adapter/BN/box-head parameters. `theta_stock`
+contains all trainable non-P2 detector parameters. Abort for excessive P2 updates
+only when `R_update > 10` for 20 consecutive optimizer steps within the first 200
+optimizer steps. A single spike never triggers this rule.
 
 Any change creates v1.1 and starts from a clean checkpoint. v1.0/v1.1 trajectories
 must not be spliced.
