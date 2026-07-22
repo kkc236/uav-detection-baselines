@@ -1,7 +1,13 @@
 import pytest
 import torch
 
-from src.ebc_qp_queries import QuerySet, compete_queries, p2_diversity_statistics, replacement_statistics
+from src.ebc_qp_queries import (
+    QuerySet,
+    compete_queries,
+    p2_diversity_statistics,
+    replacement_statistics,
+    stable_rank_indices,
+)
 
 
 def test_competition_keeps_budget_prefers_stock_on_ties_and_gathers_complete_records():
@@ -55,6 +61,16 @@ def test_p2_diversity_separates_duplicates_from_background():
     assert stats.background_rate_at_50 == pytest.approx(1 / 3)
 
 
+def test_stable_ranking_does_not_copy_scores_to_cpu():
+    scores = torch.tensor([[0.5, 0.9, 0.5, 0.9]]).as_subclass(_NoCpuTensor)
+    source = torch.tensor([[1, 1, 0, 0]])
+    source_index = torch.tensor([[1, 0, 1, 0]])
+
+    selected = stable_rank_indices(scores, source, source_index, k=4)
+
+    assert selected.tolist() == [[3, 1, 2, 0]]
+
+
 def _make_query_set(scores: list[float], source: int) -> QuerySet:
     count = len(scores)
     offset = 100.0 * source
@@ -70,3 +86,8 @@ def _make_query_set(scores: list[float], source: int) -> QuerySet:
         source_level=torch.full((1, count), 2 if source else 3, dtype=torch.long),
         source_index=torch.arange(count, dtype=torch.long).reshape(1, count),
     )
+
+
+class _NoCpuTensor(torch.Tensor):
+    def cpu(self, *args, **kwargs):
+        raise AssertionError("stable ranking must remain on the training device")

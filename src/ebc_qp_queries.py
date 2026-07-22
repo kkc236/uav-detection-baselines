@@ -46,21 +46,13 @@ def stable_rank_indices(
     if scores.ndim != 2:
         raise ValueError("ranking inputs must have shape [batch, candidates]")
 
-    scores_cpu = scores.detach().cpu()
-    source_cpu = source.detach().cpu()
-    source_index_cpu = source_index.detach().cpu()
-    selected = []
-    for batch_index in range(scores.shape[0]):
-        order = sorted(
-            range(scores.shape[1]),
-            key=lambda index: (
-                -float(scores_cpu[batch_index, index]),
-                int(source_cpu[batch_index, index]),
-                int(source_index_cpu[batch_index, index]),
-            ),
-        )[:k]
-        selected.append(order)
-    return torch.tensor(selected, dtype=torch.long, device=scores.device)
+    order = torch.argsort(source_index, dim=1, stable=True)
+    ordered_source = torch.gather(source, 1, order)
+    by_source = torch.argsort(ordered_source, dim=1, stable=True)
+    order = torch.gather(order, 1, by_source)
+    ordered_scores = torch.gather(scores.detach(), 1, order)
+    by_score = torch.argsort(ordered_scores, dim=1, descending=True, stable=True)
+    return torch.gather(order, 1, by_score)[:, :k]
 
 
 def compete_queries(stock: QuerySet, p2: QuerySet, budget: int = 300) -> QuerySet:
