@@ -148,7 +148,7 @@ def build_settings(args: argparse.Namespace) -> dict:
         "nms": False,
         "max_det": 300,
         "save": True,
-        "save_period": 1,
+        "save_period": -1 if args.stage == "e1" else 1,
         "optimizer": "auto",
         "lr0": 0.01,
         "lrf": 0.01,
@@ -370,6 +370,31 @@ def _assert_tracked_worktree_clean() -> None:
             raise SystemExit("E1 requires a tracked-clean Git worktree")
 
 
+def _validate_e1_tail_checkpoints(weights_dir: Path, *, arm: str) -> list[Path]:
+    expected = [weights_dir / f"epoch{epoch}.pt" for epoch in (7, 8, 9)]
+    actual = set(weights_dir.glob("epoch*.pt"))
+    if actual != set(expected):
+        found = ", ".join(sorted(path.name for path in actual)) or "none"
+        raise RuntimeError(f"E1 requires exactly epoch7/8/9 checkpoints, found: {found}")
+    for expected_epoch, path in zip((7, 8, 9), expected, strict=True):
+        try:
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as error:
+            raise RuntimeError(f"invalid E1 tail checkpoint {path.name}: {error}") from error
+        if not isinstance(checkpoint, dict) or checkpoint.get("epoch") != expected_epoch:
+            raise RuntimeError(f"E1 tail checkpoint epoch mismatch in {path.name}")
+        required_resume_state = ("ema", "optimizer", "scaler", "updates")
+        if any(key not in checkpoint or checkpoint[key] is None for key in required_resume_state):
+            raise RuntimeError(f"E1 tail checkpoint resume state is incomplete in {path.name}")
+        if not isinstance(checkpoint["optimizer"], dict) or not checkpoint["optimizer"]:
+            raise RuntimeError(f"E1 tail checkpoint resume state has an invalid optimizer in {path.name}")
+        if not isinstance(checkpoint["scaler"], dict) or not isinstance(checkpoint["updates"], int):
+            raise RuntimeError(f"E1 tail checkpoint resume state has invalid scaler/updates in {path.name}")
+        if arm == "tsgr-p2" and not isinstance(checkpoint.get("ebc_qp"), dict):
+            raise RuntimeError(f"E1 TSGR tail checkpoint is missing EBC-QP metadata in {path.name}")
+    return expected
+
+
 def write_e1_run_manifest(args: argparse.Namespace, settings: dict, trainer) -> dict:
     run_dir = Path(trainer.save_dir).resolve()
     expected_dir = (Path(settings["project"]) / settings["name"]).resolve()
@@ -421,9 +446,7 @@ def write_e1_run_manifest(args: argparse.Namespace, settings: dict, trainer) -> 
     required_checkpoints = [weights_dir / "last.pt", weights_dir / "best.pt"]
     if not all(path.is_file() for path in required_checkpoints):
         raise RuntimeError("E1 last/best checkpoints are incomplete")
-    epoch_checkpoints = sorted(weights_dir.glob("epoch*.pt"))
-    if len(epoch_checkpoints) < 10:
-        raise RuntimeError(f"E1 requires 10 epoch checkpoints, found {len(epoch_checkpoints)}")
+    epoch_checkpoints = _validate_e1_tail_checkpoints(weights_dir, arm=args.arm)
 
     route_ratios = [float(record["shallow_applied_ratio"]) for record in records]
     protocol = _read_json(args.protocol_manifest, "paired protocol manifest")

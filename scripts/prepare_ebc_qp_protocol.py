@@ -76,6 +76,8 @@ def prepare_protocol(data_file: str | Path, *, output_dir: Path, seed: int) -> d
             "amp": True,
             "controlled_amp_scale": 256.0,
             "controlled_amp_growth_interval": 2**31 - 1,
+            "save_period": -1,
+            "retained_zero_based_epoch_checkpoints": [7, 8, 9],
             "deterministic": True,
             "nbs": 64,
             "nms": False,

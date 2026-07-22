@@ -22,6 +22,7 @@ def test_d2_defaults_are_frozen_ten_epoch_ten_percent_scratch_settings():
     assert Path(settings["model"]).name == "rtdetr-l-ebc-qp.yaml"
     assert settings["epochs"] == 10
     assert settings["fraction"] == 1.0
+    assert settings["save_period"] == 1
     assert settings["pretrained"] is False
     assert settings["seed"] == 0
     assert settings["imgsz"] == 640
@@ -236,6 +237,7 @@ def test_tsgr_p2_is_the_frozen_minimal_contribution_separated_e1_arm():
     settings = build_settings(args)
     assert settings["epochs"] == 10
     assert settings["fraction"] == 1.0
+    assert settings["save_period"] == -1
     assert Path(settings["model"]).name == "rtdetr-l-ebc-qp.yaml"
 
 

@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 import json
 import math
 from pathlib import Path
+import shutil
 from typing import Any
 
 import torch
@@ -653,6 +654,23 @@ class PairedProtocolOptimizerMixin:
             }
         )
 
+    def _retain_e1_tail_checkpoint(self) -> Path | None:
+        if self.controlled_amp_scale is None or int(self.args.epochs) != 10 or int(self.epoch) not in {7, 8, 9}:
+            return None
+        if int(self.args.save_period) != -1:
+            raise RuntimeError("E1 tail checkpoint retention requires save_period=-1")
+        if not self.last.is_file():
+            raise RuntimeError("E1 last checkpoint is missing before tail retention")
+        destination = self.wdir / f"epoch{self.epoch}.pt"
+        if destination.exists():
+            raise FileExistsError(f"refusing to replace retained E1 checkpoint: {destination}")
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        if temporary.exists():
+            raise FileExistsError(f"refusing to replace partial retained E1 checkpoint: {temporary}")
+        shutil.copyfile(self.last, temporary)
+        temporary.replace(destination)
+        return destination
+
 
 def resolve_protocol_optimizer(name: str, *, lr: float, momentum: float) -> tuple[str, float, float]:
     if name.lower() == "auto":
@@ -834,6 +852,7 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
                 checkpoint = torch.load(path, map_location="cpu", weights_only=False)
                 checkpoint["ebc_qp"] = metadata
                 torch.save(checkpoint, path)
+        self._retain_e1_tail_checkpoint()
         return saved
 
     def resume_training(self, checkpoint):
@@ -882,6 +901,11 @@ class PairedControlTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTraine
     def get_validator(self):
         self.loss_names = LOSS_NAMES[:3]
         return EBCQPValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
+
+    def save_model(self):
+        saved = super().save_model()
+        self._retain_e1_tail_checkpoint()
+        return saved
 
 
 def _load_protocol_state(path: Path | None) -> dict | None:

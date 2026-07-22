@@ -54,6 +54,26 @@ def test_controlled_optimizer_evidence_persists_nonfinite_and_skip_before_failin
     assert records[1]["nonfinite_fields"] == ["pure_stock_preclip_norm"]
 
 
+def test_e1_retains_only_the_three_zero_based_tail_checkpoints(tmp_path: Path):
+    trainer = object.__new__(PairedControlTrainer)
+    trainer.controlled_amp_scale = 256.0
+    trainer.args = SimpleNamespace(epochs=10, save_period=-1)
+    trainer.wdir = tmp_path
+    trainer.last = tmp_path / "last.pt"
+    trainer.last.write_bytes(b"resumable-checkpoint")
+
+    trainer.epoch = 6
+    assert trainer._retain_e1_tail_checkpoint() is None
+    trainer.epoch = 7
+    retained = trainer._retain_e1_tail_checkpoint()
+
+    assert retained == tmp_path / "epoch7.pt"
+    assert retained.read_bytes() == trainer.last.read_bytes()
+    assert not (tmp_path / "epoch7.pt.tmp").exists()
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        trainer._retain_e1_tail_checkpoint()
+
+
 def test_model_adds_weighted_losses_but_keeps_stock_encoder_auxiliary_output():
     config = EBCQPConfig()
     model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False, ebc_config=config)

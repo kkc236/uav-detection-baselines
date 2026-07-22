@@ -115,8 +115,19 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
         "ordinary_query_count": None,
     }
     (run_dir / "optimizer-evidence.jsonl").write_text(json.dumps(evidence) + "\n", encoding="utf-8")
-    for name in ("last.pt", "best.pt", *(f"epoch{epoch}.pt" for epoch in range(10))):
+    for name in ("last.pt", "best.pt"):
         (weights / name).write_bytes(name.encode())
+    for epoch in (7, 8, 9):
+        torch.save(
+            {
+                "epoch": epoch,
+                "ema": {"weight": torch.tensor([float(epoch)])},
+                "optimizer": {"state": {0: {"step": epoch}}},
+                "scaler": {"scale": 256.0},
+                "updates": epoch + 1,
+            },
+            weights / f"epoch{epoch}.pt",
+        )
 
     protocol = {
         "signature": "protocol",
@@ -148,3 +159,42 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
     assert result["results"]["epochs"] == 10
     assert result["controlled_amp"]["skipped_attempts"] == 0
     assert (run_dir / "e1-run-manifest.json").is_file()
+
+
+def test_e1_tail_checkpoint_validation_rejects_extra_or_non_resumable_files(tmp_path: Path):
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    checkpoint = {
+        "epoch": 7,
+        "ema": {"weight": torch.tensor([1.0])},
+        "optimizer": {"state": {0: {"step": 1}}},
+        "scaler": {"scale": 256.0},
+        "updates": 1,
+    }
+    for epoch in (7, 8, 9):
+        torch.save({**checkpoint, "epoch": epoch}, weights / f"epoch{epoch}.pt")
+
+    launcher._validate_e1_tail_checkpoints(weights, arm="control")
+
+    torch.save({**checkpoint, "epoch": 6}, weights / "epoch6.pt")
+    with pytest.raises(RuntimeError, match="exactly epoch7/8/9"):
+        launcher._validate_e1_tail_checkpoints(weights, arm="control")
+    (weights / "epoch6.pt").unlink()
+
+    torch.save({"epoch": 8, "ema": {}}, weights / "epoch8.pt")
+    with pytest.raises(RuntimeError, match="resume state"):
+        launcher._validate_e1_tail_checkpoints(weights, arm="control")
+
+
+def test_e1_tsgr_tail_checkpoint_requires_ebc_metadata(tmp_path: Path):
+    checkpoint = {
+        "ema": {"weight": torch.tensor([1.0])},
+        "optimizer": {"state": {0: {"step": 1}}},
+        "scaler": {"scale": 256.0},
+        "updates": 1,
+    }
+    for epoch in (7, 8, 9):
+        torch.save({**checkpoint, "epoch": epoch}, tmp_path / f"epoch{epoch}.pt")
+
+    with pytest.raises(RuntimeError, match="EBC-QP metadata"):
+        launcher._validate_e1_tail_checkpoints(tmp_path, arm="tsgr-p2")
