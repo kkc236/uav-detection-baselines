@@ -267,7 +267,7 @@ class EBCQPDecoder(RTDETRDecoder):
         uncovered = []
         height, width = p2_shape
         valid_mask = p2_valid_mask.reshape(-1)
-        image_height, image_width = batch["img"].shape[-2:]
+        image_height, image_width = height * 4, width * 4
 
         for image_index, boxes in enumerate(boxes_by_image):
             radius = ((boxes[:, 2] * image_width) * (boxes[:, 3] * image_height)).clamp_min(0).sqrt()
