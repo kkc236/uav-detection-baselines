@@ -473,13 +473,37 @@ def replacement_statistics(stock_centers, final_centers, gt_boxes, tiny_mask) ->
     gain = len((final_gt - stock_gt) & tiny_gt)
     loss = len(stock_gt - final_gt)
     return ReplacementStats(gain, loss, gain - loss)
+
+
+@dataclass(frozen=True)
+class P2DiversityStats:
+    foreground_at_50: int
+    unique_gt_at_50: int
+    duplicate_rate_at_50: float
+    background_rate_at_50: float
+
+
+def p2_diversity_statistics(p2_centers: torch.Tensor, tiny_boxes: torch.Tensor) -> P2DiversityStats:
+    # Associate every center to the nearest containing tiny GT without enforcing
+    # one-to-one uniqueness. Count background separately from repeated GT hits.
+    association = nearest_containing_gt(p2_centers.detach(), tiny_boxes.detach())
+    foreground = association >= 0
+    foreground_count = int(foreground.sum())
+    unique_count = int(association[foreground].unique().numel())
+    duplicate = 0.0 if foreground_count == 0 else 1.0 - unique_count / foreground_count
+    return P2DiversityStats(
+        foreground_at_50=foreground_count,
+        unique_gt_at_50=unique_count,
+        duplicate_rate_at_50=duplicate,
+        background_rate_at_50=1.0 - foreground_count / max(len(p2_centers), 1),
+    )
 ```
 
 - [ ] **Step 4: Run query tests**
 
 Run: `C:\uav_env\Scripts\python.exe -m pytest tests/test_ebc_qp_queries.py -q`
 
-Expected: budget, stable ties, complete-field gathering, and unique-GT statistics pass.
+Expected: budget, stable ties, complete-field gathering, unique-GT replacement, and foreground-versus-duplicate P2 statistics pass.
 
 - [ ] **Step 5: Commit query competition**
 
@@ -1055,6 +1079,10 @@ The parser exposes `--arm control|a2` for D2 and `--arm a1|a2` for formal runs. 
 record = {
     "all_token_tiny_coverage": all_token_covered / max(tiny_gt, 1),
     "stock_top300_tiny_coverage": top300_covered / max(tiny_gt, 1),
+    "stock_survival_r_lt_8": survival["r_lt_8"],
+    "stock_survival_r_8_16": survival["r_8_16"],
+    "stock_survival_r_16_32": survival["r_16_32"],
+    "stock_survival_r_gt_32": survival["r_gt_32"],
     "tiny_relevant_rank_histogram": rank_histogram,
     "tiny_final_decoder_recall": final_detected / max(tiny_gt, 1),
     "checkpoint_sha256": file_sha256(args.weights),
@@ -1083,6 +1111,18 @@ record = {
     "effective_p2_entry_rate": aggregate.n_gain / max(aggregate.p2_entry_count, 1),
     "boundary_gap_mean": aggregate.boundary_gap_mean,
     "boundary_gap_positive_ratio": aggregate.boundary_gap_positive_ratio,
+    "p2_foreground_at_50": aggregate.p2_foreground_at_50,
+    "p2_unique_gt_at_50": aggregate.p2_unique_gt_at_50,
+    "p2_duplicate_rate_at_50": aggregate.p2_duplicate_rate_at_50,
+    "p2_background_rate_at_50": aggregate.p2_background_rate_at_50,
+    "score_iou_spearman": aggregate.score_iou_spearman,
+    "score_nwd_spearman": aggregate.score_nwd_spearman,
+    "score_quality_sample_count": aggregate.score_quality_sample_count,
+    "assigned_entry_mean_iou": aggregate.assigned_entry_mean_iou,
+    "assigned_entry_mean_nwd": aggregate.assigned_entry_mean_nwd,
+    "unassigned_entry_rate": aggregate.unassigned_entry_rate,
+    "low_quality_entry_rate": aggregate.low_quality_entry_rate,
+    "c2_p3_rms_ratio": aggregate.c2_p3_rms_ratio,
     "p2_loss": aggregate.p2_loss,
     "ebc_loss": aggregate.ebc_loss,
     "precision": metrics["metrics/precision(B)"],
@@ -1092,7 +1132,7 @@ record = {
 }
 ```
 
-Do not serialize P2 maps or per-candidate tensors. Persist the first-200-step update-monitor trace as a test/abort artifact, not an epoch metric.
+All diagnostic tensors are detached. NWD is metric-only with `C=12.8/640`; it does not enter v1.0 loss or ranking. Spearman values are `null` when fewer than three samples exist or either input is constant, and the sample count is always logged. `LowQualityEntryRate` uses the frozen diagnostic threshold `IoU<0.1` and never gates training. Do not serialize P2 maps or per-candidate tensors. Persist the first-200-step update-monitor trace as a test/abort artifact, not an epoch metric.
 
 - [ ] **Step 6: Run CLI and protocol tests**
 
@@ -1203,7 +1243,7 @@ git commit -m "Verify EBC-QP v1 screening chain"
 
 ## Plan Self-Review
 
-- Spec coverage: Tasks 1-10 cover source locking, C2/P3 detaches, parameter-level detached stock heads, independent P2 box head, deterministic stock/P2 matching, sparse VFL masking, zero-margin EBC, stable fixed-budget competition, stock-only encoder auxiliary loss, warm-up, custom AP-tiny, unique-GT gain/loss, normalized optimizer updates, resume, D0-D3, formal A1/A2, and multiseed freeze.
-- Scope control: no P2 NMS, local-peak selection, hard-negative ranking, reserved quota, dynamic assignment, decoder/Hungarian modification, ignore-region branch, NWD, or BTD-SE code changes are included.
+- Spec coverage: Tasks 1-10 cover source locking, C2/P3 detaches, fixed coefficient-one fusion, parameter-level detached stock heads, independent P2 box head, deterministic stock/P2 matching, sparse VFL masking, zero-margin EBC, stable fixed-budget competition, stock-only encoder auxiliary loss, warm-up, custom AP-tiny, scale survival, P2 diversity, score-quality diagnostics, unique-GT gain/loss, normalized optimizer updates, resume, D0-D3, formal A1/A2, and multiseed freeze.
+- Scope control: no learnable fusion scalar, P2 NMS, local-peak selection, hard-negative ranking, reserved quota, dynamic assignment, decoder/Hungarian modification, ignore-region branch, NWD training loss, or BTD-SE code changes are included.
 - Type consistency: `EBCQPConfig`, `CenterMatch`, `P2LossResult`, `QuerySet`, `ReplacementStats`, `EBCQPForwardState`, `EBCQPDecoder`, `EBCQPDetectionModel`, `EBCQPTrainer`, and `EBCQPValidator` are introduced once and reused under the same names.
 - Execution boundary: automated tests and one bounded smoke run precede D1/D2; 10-epoch results remain screening evidence and never enter the formal 100-epoch ablation table.

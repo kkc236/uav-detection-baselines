@@ -4,7 +4,7 @@
 
 - Chinese name: 固定查询预算下的淘汰感知边界校准查询保护机制
 - English name: Eviction-Aware Boundary-Calibrated Query Preservation
-- Status: frozen for D1/D2 screening
+- Status: frozen for D1/D2 screening; diagnostic addendum accepted 2026-07-22
 - Date: 2026-07-22
 - Base: `origin/codex/matched-baseline`
 - Branch: `codex/ebc-qp`
@@ -73,6 +73,11 @@ F2 = SiLU(
        + nearest_upsample_2x(stop_gradient(F3_stock))
      )
 ```
+
+The P3 coefficient is fixed to `1.0` in v1.0. A learnable fusion scalar is not
+part of v1.0 even when initialized to one, because it changes the optimization
+trajectory. D1 records the detached RMS ratio between the adapted C2 term and
+the upsampled P3 term; a sustained imbalance may motivate a v1.1 scalar gate.
 
 No extra P3 projection is added. P2 then uses the current stock encoder-output
 transform and encoder-score head with parameter-level stop-gradient:
@@ -351,6 +356,69 @@ Keep only:
 - boundary-gap mean and positive ratio;
 - `L_P2` and `L_EBC`;
 - overall Precision, Recall, mAP50, and mAP50-95.
+- D0 stock Top-300 survival rate for `r<8`, `8<=r<=16`, `16<r<=32`, and `r>32`;
+- P2 `Foreground@50`, `UniqueGT@50`, `DuplicateRate@50`, and `BackgroundRate@50`;
+- assigned-positive score/IoU and score/NWD Spearman correlations with sample counts;
+- assigned-entry mean IoU/NWD, unassigned-entry rate, and low-quality-entry rate;
+- detached C2-to-P3 fusion RMS ratio.
+
+These additions are compact detached diagnostics. They do not modify the
+forward path, targets, loss, assignment, query ranking, or optimizer and
+therefore do not create a new model version.
+
+### 9.1 Scale survival
+
+Use validation-preprocessed box sizes and the stock Top-300 center matcher from
+Section 4.1. For each fixed radius group:
+
+```text
+SurvivalRate(group) = uniquely covered GT in group / max(GT in group, 1)
+```
+
+The four groups are mutually exclusive: `r<8`, `8<=r<=16`, `16<r<=32`, and
+`r>32`. D0 reports all four so the paper motivation does not infer a scale bias
+from one aggregate tiny rate.
+
+### 9.2 P2 diversity without conflating background
+
+For this diagnostic only, associate each P2 Top-50 anchor center with the
+nearest tiny GT whose box contains the center; ties prefer the lower GT index.
+This association is many-to-one and detached. Let `N_fg50` be the number of
+candidates associated with a tiny GT and `N_unique50` the number of distinct
+associated tiny GT indices:
+
+```text
+Foreground@50 = N_fg50
+UniqueGT@50 = N_unique50
+DuplicateRate@50 = 1 - N_unique50 / max(N_fg50, 1)
+BackgroundRate@50 = 1 - N_fg50 / 50
+```
+
+Set `DuplicateRate@50=0` when `N_fg50=0`. This definition separates repeated
+foreground candidates from background candidates; `1-N_distinct/50` is not
+used because it would incorrectly count background as duplication.
+
+### 9.3 Score-quality alignment
+
+Aggregate locally assigned positives over each epoch. Use the assigned
+correct-class raw logit, detached IoU, and detached NWD similarity. NWD uses the
+canonical Gaussian box distance with `C=12.8` pixels, equivalently `12.8/640`
+for normalized 640-pixel boxes. Report Spearman correlations only with at least
+three samples and non-constant values; otherwise store `null` plus the sample
+count.
+
+For P2 candidates that enter the decoder, report:
+
+```text
+AssignedEntryMeanIoU
+AssignedEntryMeanNWD
+UnassignedEntryRate = unassigned P2 entries / max(P2 entries, 1)
+LowQualityEntryRate = (unassigned entries + assigned entries with IoU<0.1)
+                      / max(P2 entries, 1)
+```
+
+The `IoU<0.1` threshold is a frozen diagnostic threshold, not a training gate.
+No diagnostic value changes ranking or gradients inside a v1.0 run.
 
 For replacement statistics, independently match the stock Top-300 and final mixed
 Top-300 against all labeled GTs using the same detached maximum-cardinality,
@@ -425,10 +493,40 @@ contains all trainable non-P2 detector parameters. Abort for excessive P2 update
 only when `R_update > 10` for 20 consecutive optimizer steps within the first 200
 optimizer steps. A single spike never triggers this rule.
 
-Any change creates v1.1 and starts from a clean checkpoint. v1.0/v1.1 trajectories
-must not be spliced.
+Any change to the forward path, trainable parameters, targets, loss, assignment,
+query competition, schedule, or optimizer creates v1.1 and starts from a clean
+checkpoint. Detached scalar diagnostics may be added without changing the v1.0
+model version, but their code and metric definitions must be frozen before D2.
+v1.0/v1.1 trajectories must not be spliced.
 
-## 11. Reporting boundary
+## 11. Pre-registered v1.1 responses
+
+Do not add these mechanisms to v1.0. Select at most one after D1/D2 identifies
+its corresponding failure:
+
+| Observed failure | Sole v1.1 candidate |
+| --- | --- |
+| C2/P3 RMS imbalance and weak P2 coverage | learnable P3 fusion scalar, initialized to `1` |
+| assigned P2 localization remains unstable, especially for `r<8` | add NWD geometry loss while retaining L1/GIoU |
+| P2 scores rise while score-quality correlation or entry quality is poor | IoU-quality-weighted EBC |
+| high foreground duplication with low unique-GT gain | parameter-free 3x3 local-peak filtering |
+| accepted method later proves computationally excessive | P3-guided sparse P2 preselection |
+| D1 proves one local positive per GT cannot train the P2 branch | training-only local one-to-many positives |
+
+The pre-registered quality-aware loss is:
+
+```text
+q_g = stop_gradient(IoU(p2_box_g, gt_g))
+L_EBC_Q = sum_g u_g * q_g * relu(tau_b - Z2[j_g, y_g])
+          / max(sum_g u_g, 1)
+```
+
+Do not normalize by `sum(u_g*q_g)`: that normalization cancels the quality
+weight when only one eligible target exists and therefore fails to suppress a
+low-quality candidate. Fixed P2 quotas, dynamic total query counts, and multiple
+simultaneous v1.1 fixes remain forbidden.
+
+## 12. Reporting boundary
 
 Measure parameters, GFLOPs, memory, latency, FPS, and epoch time after a method
 passes. Before measurement, claim only that decoder architecture and its 300-query
