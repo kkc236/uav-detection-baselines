@@ -181,6 +181,7 @@ def validate_ebc_qp_checkpoint_metadata(metadata: dict, config: EBCQPConfig) -> 
     stored_config = dict(metadata.get("config", {}))
     stored_config.setdefault("quality_weighted_ebc", False)
     stored_config.setdefault("learnable_fusion_gamma", False)
+    stored_config.setdefault("query_injection_enabled", True)
     if stored_config != config.as_dict():
         raise RuntimeError("EBC-QP config mismatch")
     if metadata.get("source_sha256") != SOURCE_SHA256:

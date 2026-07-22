@@ -72,7 +72,11 @@ class EBCQPDecoder(RTDETRDecoder):
 
     @property
     def competition_active(self) -> bool:
-        return self.ebc_enabled and self.ebc_epoch >= self.ebc_config.warmup_epochs
+        return (
+            self.ebc_enabled
+            and self.ebc_config.query_injection_enabled
+            and self.ebc_epoch >= self.ebc_config.warmup_epochs
+        )
 
     def configure_ebc_config(self, config: EBCQPConfig) -> None:
         self.ebc_config = config

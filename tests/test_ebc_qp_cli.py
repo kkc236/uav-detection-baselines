@@ -130,6 +130,36 @@ def test_d2_a1_rejects_quality_weighted_ebc():
         validate_protocol(args)
 
 
+def test_d2_a1_no_injection_only_changes_the_query_injection_flag():
+    common = [
+        "--stage",
+        "d2",
+        "--arm",
+        "a1",
+        "--initial-state",
+        "init.pt",
+        "--learnable-fusion-gamma",
+    ]
+    injected = build_parser().parse_args(common)
+    isolated = build_parser().parse_args([*common, "--disable-query-injection"])
+
+    validate_protocol(isolated)
+    injected_values = build_ebc_config(injected).as_dict()
+    isolated_values = build_ebc_config(isolated).as_dict()
+    assert injected_values.pop("query_injection_enabled") is True
+    assert isolated_values.pop("query_injection_enabled") is False
+    assert injected_values == isolated_values
+
+
+def test_no_injection_flag_is_restricted_to_d2_a1():
+    args = build_parser().parse_args(
+        ["--stage", "d2", "--arm", "a2", "--initial-state", "init.pt", "--disable-query-injection"]
+    )
+
+    with pytest.raises(SystemExit, match="only valid for the D2 A1 arm"):
+        validate_protocol(args)
+
+
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
     assert resolve_protocol_optimizer("auto", lr=0.01, momentum=0.937) == ("MuSGD", 0.01, 0.937)
     assert resolve_protocol_optimizer("SGD", lr=0.02, momentum=0.8) == ("SGD", 0.02, 0.8)

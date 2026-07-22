@@ -153,6 +153,33 @@ def test_a1_and_a2_start_with_identical_fixed_budget_query_injection():
     assert torch.equal(a1_state.final_source_indices, a2_state.final_source_indices)
 
 
+def test_a1_no_injection_trains_p2_but_keeps_all_final_queries_stock():
+    head = _small_ebc_head_with_config(
+        EBCQPConfig(
+            query_budget=8,
+            p2_candidates=4,
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=True,
+            query_injection_enabled=False,
+        )
+    )
+    head.train()
+    head.set_progress(epoch=3)
+
+    state = head.forward_with_state(_small_inputs(requires_grad=False), _single_tiny_batch())
+    state.p2_loss.backward()
+
+    assert state.ordinary_query_count == 8
+    assert state.p2_entry_count == 0
+    assert state.competition_active is False
+    assert torch.count_nonzero(state.final_sources) == 0
+    assert torch.equal(state.final_source_indices, state.stock_topk_indices)
+    assert _grad_nonzero(head.p2_adapter)
+    assert _grad_nonzero(head.p2_bbox_head)
+    assert head.p2_fusion_gamma.grad is not None
+    assert torch.count_nonzero(head.p2_fusion_gamma.grad) == 1
+
+
 def _small_ebc_head() -> EBCQPDecoder:
     config = EBCQPConfig(query_budget=8, p2_candidates=4)
     return _small_ebc_head_with_config(config)

@@ -179,43 +179,92 @@ Run: `python -m pytest -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Commit, push, and synchronize the server**
+- [x] **Step 2: Commit, push, and synchronize the server**
 
 Push `codex/ebc-qp`, fetch it on `/mnt/uav/repo`, and verify local/server commit
 identity plus a clean server worktree.
 
-- [ ] **Step 3: Freeze A0/A2**
+- [x] **Step 3: Freeze A0/A2**
 
 Create an immutable freeze manifest from the existing gamma protocol directory,
 A0 checkpoint/results/revalidation, A2 checkpoint/results/diagnostics, logs, and
 D2 gate. Verify every SHA256 after creation and publish the resumable checkpoint
 assets and lightweight manifest to GitHub.
 
-- [ ] **Step 4: Run the server preflight tests**
+- [x] **Step 4: Run the server preflight tests**
 
 Run the CLI, decoder, integration, freeze, and comparison tests in
 `/mnt/uav/venv`, including CUDA query integrity where available.
 
 Expected: all focused tests pass on RTX 4090.
 
-- [ ] **Step 5: Run A1 for 10 epochs**
+- [x] **Step 5: Run A1 for 10 epochs**
 
 Launch D2 A1 with seed 0, the existing gamma initial state, D2 data YAML,
 protocol manifest, and `--learnable-fusion-gamma`. Keep batch 8, workers 8, AMP,
 MuSGD, and every frozen augmentation setting. Save every epoch.
 
-- [ ] **Step 6: Revalidate and diagnose A1**
+- [x] **Step 6: Revalidate and diagnose A1**
 
 Run exact checkpoint revalidation and read-only mechanism diagnostics against the
 same D2 validation YAML and protocol used by A0/A2. Hash all outputs.
 
-- [ ] **Step 7: Generate the tri-arm decision**
+- [x] **Step 7: Generate the tri-arm decision**
 
 Run `compare_ebc_qp_d2_arms.py` and freeze the resulting A0/A1/A2 report. Based
 on its predeclared decision, either begin a separate QG-P2 design, schedule
 A1-no-injection, or stop the current P2 formulation. Do not launch 100 epochs.
 
-### Task 6: Completion Verification
+Result: `QUERY_INJECTION_UNCLEAR`; schedule A1-no-injection.
+
+### Task 6: Run the Triggered A1-No-Injection Isolation
+
+**Files:**
+- Modify: `src/ebc_qp_config.py`
+- Modify: `src/ebc_qp_decoder.py`
+- Modify: `src/rtdetr_ebc_qp.py`
+- Modify: `scripts/train_rtdetr_ebc_qp.py`
+- Modify: `tests/test_ebc_qp_cli.py`
+- Modify: `tests/test_ebc_qp_decoder.py`
+- Modify: `tests/test_rtdetr_ebc_qp_integration.py`
+
+- [x] **Step 1: Write and verify failing no-injection tests**
+
+Assert that the no-injection arm differs from A1 only at
+`query_injection_enabled`, keeps P2/gamma gradients, preserves exactly 300 final
+stock queries, and rejects the switch for any arm other than D2 A1.
+
+- [x] **Step 2: Implement the isolated query-injection switch**
+
+Add `query_injection_enabled=True` to `EBCQPConfig`, make
+`competition_active` require that flag, preserve legacy checkpoint compatibility,
+and expose `--disable-query-injection` only for D2 A1.
+
+- [x] **Step 3: Run the full local regression suite**
+
+Run: `python -m pytest -q`
+
+Result: `275 passed`.
+
+- [ ] **Step 4: Commit, push, and synchronize the server**
+
+Commit the tested no-injection isolation, push `codex/ebc-qp`, synchronize the
+server by fast-forward, and verify commit identity.
+
+- [ ] **Step 5: Run A1-no-injection for 10 epochs**
+
+Use the same gamma initial state, D2 dataset, seed, protocol manifest, batch,
+workers, AMP, optimizer, scheduler, and augmentation settings as A1. Add only
+`--disable-query-injection`. Protect every completed epoch in a separate GitHub
+Release with optimizer checkpoint, SHA256 manifest, and results snapshot.
+
+- [ ] **Step 6: Revalidate and compare A0/A1-no-injection/A1/A2**
+
+Run exact checkpoint validation and read-only diagnostics, freeze all outputs,
+and report whether no-injection reproduces A0 and whether A1 query injection
+causes a consistent metric or mechanism change.
+
+### Task 7: Completion Verification
 
 - [ ] **Step 1: Re-run the full server suite**
 

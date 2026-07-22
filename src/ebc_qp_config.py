@@ -26,6 +26,7 @@ class EBCQPConfig:
     lambda_ebc: float = 0.05
     quality_weighted_ebc: bool = False
     learnable_fusion_gamma: bool = False
+    query_injection_enabled: bool = True
     local_radius: int = 1
     update_ratio_limit: float = 10.0
     update_ratio_patience: int = 20

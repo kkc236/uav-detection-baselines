@@ -102,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name")
     parser.add_argument("--quality-weighted-ebc", action="store_true")
     parser.add_argument("--learnable-fusion-gamma", action="store_true")
+    parser.add_argument("--disable-query-injection", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     return parser
 
@@ -172,6 +173,7 @@ def build_ebc_config(args: argparse.Namespace) -> EBCQPConfig:
         lambda_ebc=stage.lambda_ebc,
         quality_weighted_ebc=args.quality_weighted_ebc,
         learnable_fusion_gamma=args.learnable_fusion_gamma,
+        query_injection_enabled=not args.disable_query_injection,
     )
 
 
@@ -184,6 +186,8 @@ def validate_protocol(args: argparse.Namespace) -> None:
         raise SystemExit("quality-weighted EBC is only valid for the A2 arm")
     if args.learnable_fusion_gamma and not (args.arm in {"a1", "a2"} and args.stage in {"d2", "formal"}):
         raise SystemExit("learnable fusion gamma is only valid for the A1/A2 arms")
+    if args.disable_query_injection and not (args.stage == "d2" and args.arm == "a1"):
+        raise SystemExit("disabled query injection is only valid for the D2 A1 arm")
     if args.quality_weighted_ebc and args.learnable_fusion_gamma:
         raise SystemExit("quality-weighted EBC and fusion gamma are mutually exclusive")
 
