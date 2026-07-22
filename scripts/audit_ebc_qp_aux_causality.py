@@ -27,6 +27,7 @@ from src.ebc_qp_causal_audit import (  # noqa: E402
     capture_parameter_delta_sha256,
     capture_parameter_signatures,
     capture_tensor_sha256,
+    validate_audit_attempt,
 )
 from src.ebc_qp_protocol import state_fingerprint  # noqa: E402
 
@@ -188,8 +189,24 @@ def rng_fingerprint() -> str:
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(_json_safe(payload), indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
     temporary.replace(path)
+
+
+def _json_safe(value: Any) -> Any:
+    """Encode non-finite AMP-attempt evidence without producing invalid JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        if math.isnan(value):
+            return "NaN"
+        return "+Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, dict):
+        return {key: _json_safe(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(child) for child in value]
+    return value
 
 
 def _sha256(path: Path) -> str:
@@ -360,31 +377,36 @@ def _make_trainers():
             before = clone_named_parameters(self.audit_common_parameters)
             scale_before = float(self.scaler.get_scale())
             self.scaler.unscale_(self.optimizer)
+            stock_grad_tensors = _gradient_tensors(self.audit_common_parameters)
             stock_grad_preclip = capture_grouped_gradients(self.audit_common_parameters)
-            stock_grad_preclip_parameters = capture_parameter_signatures(
-                _gradient_tensors(self.audit_common_parameters)
-            )
-            stock_grad_preclip_sha256 = capture_tensor_sha256(_gradient_tensors(self.audit_common_parameters))
+            stock_grad_preclip_parameters = capture_parameter_signatures(stock_grad_tensors)
+            stock_grad_preclip_sha256 = capture_tensor_sha256(stock_grad_tensors)
+            stock_grad_preclip_finite = _tensor_mapping_all_finite(stock_grad_tensors)
             stock_grad_total_norm = math.sqrt(sum(record["l2"] ** 2 for record in stock_grad_preclip.values()))
             all_named_parameters = dict(model.named_parameters())
             auxiliary_parameters = {
                 name: parameter for name, parameter in all_named_parameters.items() if name not in self.audit_common_parameters
             }
-            aux_private_grad_total_norm = _tensor_mapping_l2(_gradient_tensors(auxiliary_parameters))
-            stock_only_clip_coefficient = min(1.0, 10.0 / (stock_grad_total_norm + 1e-6))
+            auxiliary_grad_tensors = _gradient_tensors(auxiliary_parameters)
+            aux_private_grad_total_norm = _tensor_mapping_l2(auxiliary_grad_tensors)
+            aux_private_grad_finite = _tensor_mapping_all_finite(auxiliary_grad_tensors)
+            all_grad_preclip_finite = stock_grad_preclip_finite and aux_private_grad_finite
+            stock_only_clip_coefficient = _clip_coefficient_from_norm(stock_grad_total_norm)
             total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
             total_norm_value = float(total_norm.detach().float().item())
-            clip_coefficient = min(1.0, 10.0 / (total_norm_value + 1e-6)) if math.isfinite(total_norm_value) else 0.0
+            clip_total_norm_finite = math.isfinite(total_norm_value)
+            clip_coefficient = _clip_coefficient_from_norm(total_norm_value)
             reconstructed_norm = math.sqrt(stock_grad_total_norm**2 + aux_private_grad_total_norm**2)
-            clip_norm_partition_relative_error = abs(total_norm_value - reconstructed_norm) / max(
-                total_norm_value,
-                reconstructed_norm,
-                1e-12,
+            clip_norm_partition_relative_error = (
+                abs(total_norm_value - reconstructed_norm)
+                / max(total_norm_value, reconstructed_norm, 1e-12)
+                if math.isfinite(total_norm_value) and math.isfinite(reconstructed_norm)
+                else float("nan")
             )
             stock_grad_postclip = capture_grouped_gradients(self.audit_common_parameters)
-            stock_grad_postclip_parameters = capture_parameter_signatures(
-                _gradient_tensors(self.audit_common_parameters)
-            )
+            stock_grad_postclip_tensors = _gradient_tensors(self.audit_common_parameters)
+            stock_grad_postclip_parameters = capture_parameter_signatures(stock_grad_postclip_tensors)
+            stock_grad_postclip_finite = _tensor_mapping_all_finite(stock_grad_postclip_tensors)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             scale_after = float(self.scaler.get_scale())
@@ -394,48 +416,49 @@ def _make_trainers():
             stock_delta = capture_grouped_parameter_deltas(before, self.audit_common_parameters)
             stock_delta_parameters = capture_parameter_delta_signatures(before, self.audit_common_parameters)
             stock_delta_sha256 = capture_parameter_delta_sha256(before, self.audit_common_parameters)
+            stock_delta_tensors = {
+                name: self.audit_common_parameters[name].detach().float() - before[name]
+                for name in self.audit_common_parameters
+            }
+            stock_delta_finite = _tensor_mapping_all_finite(stock_delta_tensors)
+            stock_delta_zero = _tensor_mapping_all_zero(stock_delta_tensors)
             self.optimizer.zero_grad()
             if self.ema:
                 self.ema.update(self.model)
 
             buffers = dict(model.named_buffers())
-            stock_bn = capture_grouped_values(
-                {
-                    name: buffers[name]
-                    for name in sorted(self.audit_common_buffer_names)
-                    if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
-                }
-            )
-            stock_bn_parameters = capture_parameter_signatures(
-                {
-                    name: buffers[name]
-                    for name in sorted(self.audit_common_buffer_names)
-                    if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
-                }
-            )
-            stock_bn_sha256 = capture_tensor_sha256(
-                {
-                    name: buffers[name]
-                    for name in sorted(self.audit_common_buffer_names)
-                    if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
-                }
-            )
+            stock_bn_tensors = {
+                name: buffers[name]
+                for name in sorted(self.audit_common_buffer_names)
+                if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
+            }
+            stock_bn = capture_grouped_values(stock_bn_tensors)
+            stock_bn_parameters = capture_parameter_signatures(stock_bn_tensors)
+            stock_bn_sha256 = capture_tensor_sha256(stock_bn_tensors)
             ema_parameters = dict(unwrap_model(self.ema.ema).named_parameters()) if self.ema else {}
-            stock_ema = capture_grouped_values(
-                {name: ema_parameters[name] for name in self.audit_common_parameters if name in ema_parameters}
-            )
-            stock_ema_parameters = capture_parameter_signatures(
-                {name: ema_parameters[name] for name in self.audit_common_parameters if name in ema_parameters}
-            )
+            stock_ema_tensors = {
+                name: ema_parameters[name] for name in self.audit_common_parameters if name in ema_parameters
+            }
+            stock_ema = capture_grouped_values(stock_ema_tensors)
+            stock_ema_parameters = capture_parameter_signatures(stock_ema_tensors)
             stock_state = capture_grouped_values(self.audit_common_parameters)
             stock_state_parameters = capture_parameter_signatures(self.audit_common_parameters)
             optimizer_state_tensors = _optimizer_state_tensors(self.optimizer, self.audit_common_parameters)
             optimizer_state = capture_grouped_values(optimizer_state_tensors)
             optimizer_state_parameters = capture_parameter_signatures(optimizer_state_tensors)
 
+            if step_skipped:
+                clip_coefficient = None
+                stock_only_clip_coefficient = None
+                clip_norm_partition_relative_error = None
+
+            loss_value = float(self.loss.detach().float().item())
+            loss_item_values = [
+                float(value) for value in self.loss_items.detach().float().cpu().reshape(-1)
+            ]
+
             step = len(self.audit_steps) + 1
-            self.audit_steps.append(
-                {
+            record = {
                     "optimizer_step": step,
                     "optimizer_attempt": step,
                     "successful_update": not step_skipped,
@@ -446,13 +469,18 @@ def _make_trainers():
                     "stock_grad_preclip": stock_grad_preclip,
                     "stock_grad_preclip_parameters": stock_grad_preclip_parameters,
                     "stock_grad_preclip_sha256": stock_grad_preclip_sha256,
+                    "stock_grad_preclip_finite": stock_grad_preclip_finite,
                     "stock_grad_postclip": stock_grad_postclip,
                     "stock_grad_postclip_parameters": stock_grad_postclip_parameters,
+                    "stock_grad_postclip_finite": stock_grad_postclip_finite,
                     "clip_total_norm": total_norm_value,
+                    "clip_total_norm_finite": clip_total_norm_finite,
                     "clip_coefficient": clip_coefficient,
                     "stock_only_clip_coefficient": stock_only_clip_coefficient,
                     "stock_grad_total_norm": stock_grad_total_norm,
                     "aux_private_grad_total_norm": aux_private_grad_total_norm,
+                    "aux_private_grad_finite": aux_private_grad_finite,
+                    "all_grad_preclip_finite": all_grad_preclip_finite,
                     "clip_norm_partition_relative_error": clip_norm_partition_relative_error,
                     "amp_scale_before": scale_before,
                     "amp_scale_after": scale_after,
@@ -460,23 +488,44 @@ def _make_trainers():
                     "stock_delta": stock_delta,
                     "stock_delta_parameters": stock_delta_parameters,
                     "stock_delta_sha256": stock_delta_sha256,
+                    "stock_delta_finite": stock_delta_finite,
+                    "stock_delta_zero": stock_delta_zero,
                     "stock_state": stock_state,
                     "stock_state_parameters": stock_state_parameters,
+                    "model_parameters_finite": _tensor_mapping_all_finite(all_named_parameters),
                     "stock_bn": stock_bn,
                     "stock_bn_parameters": stock_bn_parameters,
                     "stock_bn_sha256": stock_bn_sha256,
+                    "stock_bn_finite": _tensor_mapping_all_finite(stock_bn_tensors),
                     "stock_ema": stock_ema,
                     "stock_ema_parameters": stock_ema_parameters,
+                    "stock_ema_finite": _tensor_mapping_all_finite(stock_ema_tensors),
                     "optimizer_state": optimizer_state,
                     "optimizer_state_parameters": optimizer_state_parameters,
+                    "optimizer_state_finite": _tensor_mapping_all_finite(optimizer_state_tensors),
                     "optimizer_groups": _optimizer_group_runtime(self.optimizer),
-                    "loss": float(self.loss.detach().float().item()),
-                    "loss_items": [float(value) for value in self.loss_items.detach().float().cpu().reshape(-1)],
+                    "loss": loss_value,
+                    "loss_items": loss_item_values,
+                    "loss_finite": math.isfinite(loss_value),
+                    "loss_items_finite": all(math.isfinite(value) for value in loss_item_values),
                 }
-            )
+            self.audit_steps.append(record)
             self.audit_pending_batches.clear()
             self.audit_pending_rng.clear()
             self._write_audit_trace()
+            violations = validate_audit_attempt(record)
+            if violations:
+                raise RuntimeError(f"invalid audit attempt {step}: {'; '.join(violations)}")
+            skipped_attempts = sum(bool(item["amp_step_skipped"]) for item in self.audit_steps)
+            consecutive_skips = 0
+            for item in reversed(self.audit_steps):
+                if not item["amp_step_skipped"]:
+                    break
+                consecutive_skips += 1
+            if skipped_attempts > 32 or consecutive_skips > 16:
+                raise RuntimeError(
+                    f"AMP overflow limit exceeded: total={skipped_attempts}, consecutive={consecutive_skips}"
+                )
             if self.audit_successful_updates >= self.audit_target_steps:
                 self.stop = True
 
@@ -531,6 +580,26 @@ def _tensor_mapping_l2(tensors: Mapping[str, torch.Tensor]) -> float:
         return 0.0
     total = torch.stack([value.detach().float().square().sum() for value in tensors.values()]).sum().sqrt()
     return float(total.item())
+
+
+def _tensor_mapping_all_finite(tensors: Mapping[str, torch.Tensor]) -> bool:
+    if not tensors:
+        return True
+    checks = torch.stack([torch.isfinite(value.detach()).all() for value in tensors.values()])
+    return bool(checks.all().item())
+
+
+def _tensor_mapping_all_zero(tensors: Mapping[str, torch.Tensor]) -> bool:
+    if not tensors:
+        return True
+    checks = torch.stack([torch.count_nonzero(value.detach()) == 0 for value in tensors.values()])
+    return bool(checks.all().item())
+
+
+def _clip_coefficient_from_norm(total_norm: float, *, max_norm: float = 10.0) -> float | None:
+    if not math.isfinite(total_norm):
+        return None
+    return min(1.0, max_norm / (total_norm + 1e-6))
 
 
 def _stock_topk_indices(head, inputs: list[torch.Tensor]) -> torch.Tensor:

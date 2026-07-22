@@ -1,8 +1,13 @@
+import json
+from copy import deepcopy
+
 import pytest
 import torch
 from torch import nn
 
 from scripts.audit_ebc_qp_aux_causality import (
+    _clip_coefficient_from_norm,
+    _json_safe,
     batch_fingerprint,
     build_audit_settings,
     build_parser,
@@ -20,6 +25,7 @@ from src.ebc_qp_causal_audit import (
     clone_named_parameters,
     compare_a0_repeats,
     compare_audit_runs,
+    validate_audit_attempt,
 )
 
 
@@ -64,6 +70,7 @@ def test_gradient_and_delta_summaries_detect_group_local_changes():
 
 
 def _run(arm: str, *, clip: float, stock_delta: float, batch: str = "B", skipped: bool = False) -> dict:
+    effective_delta = 0.0 if skipped else stock_delta
     return {
         "arm": arm,
         "target_optimizer_steps": 2,
@@ -88,22 +95,39 @@ def _run(arm: str, *, clip: float, stock_delta: float, batch: str = "B", skipped
                 "successful_update_index": None if skipped else step,
                 "batch_fingerprints": [f"{batch}{step}"],
                 "rng_before_forward": [f"R{step}"],
-                "clip_coefficient": clip,
-                "stock_only_clip_coefficient": 1.0,
+                "clip_coefficient": None if skipped else clip,
+                "stock_only_clip_coefficient": None if skipped else 1.0,
                 "stock_grad_total_norm": 3.0,
                 "aux_private_grad_total_norm": 20.0 if arm == "aux-audit" else 0.0,
-                "clip_norm_partition_relative_error": 0.0,
+                "clip_norm_partition_relative_error": "NaN" if skipped else 0.0,
                 "amp_step_skipped": skipped,
                 "amp_scale_before": 65536.0,
                 "amp_scale_after": 32768.0 if skipped else 65536.0,
+                "stock_grad_preclip_finite": not skipped,
+                "aux_private_grad_finite": not skipped,
+                "all_grad_preclip_finite": not skipped,
+                "stock_grad_postclip_finite": not skipped,
+                "clip_total_norm_finite": not skipped,
+                "loss_finite": True,
+                "loss_items_finite": True,
+                "model_parameters_finite": True,
+                "stock_bn_finite": True,
+                "stock_ema_finite": True,
+                "optimizer_state_finite": True,
+                "stock_delta_finite": True,
+                "stock_delta_zero": skipped,
                 "stock_grad_preclip": {"backbone_c2": {"l2": 3.0, "max_abs": 2.0}},
                 "stock_grad_preclip_parameters": {"model.3.weight": {"l2": 3.0, "sum": 1.0, "max_abs": 2.0}},
                 "stock_grad_preclip_sha256": {"model.3.weight": "GRAD"},
-                "stock_delta": {"backbone_c2": {"l2": stock_delta, "max_abs": stock_delta}},
+                "stock_delta": {"backbone_c2": {"l2": effective_delta, "max_abs": effective_delta}},
                 "stock_delta_parameters": {
-                    "model.3.weight": {"l2": stock_delta, "sum": stock_delta, "max_abs": stock_delta}
+                    "model.3.weight": {
+                        "l2": effective_delta,
+                        "sum": effective_delta,
+                        "max_abs": effective_delta,
+                    }
                 },
-                "stock_delta_sha256": {"model.3.weight": f"DELTA-{stock_delta}"},
+                "stock_delta_sha256": {"model.3.weight": f"DELTA-{effective_delta}"},
                 "stock_bn": {"l2": 1.0, "sum": 1.0},
                 "stock_bn_parameters": {"model.3.running_mean": {"l2": 1.0, "sum": 1.0, "max_abs": 1.0}},
                 "stock_bn_sha256": {"model.3.running_mean": "BN"},
@@ -170,6 +194,61 @@ def test_compare_audit_runs_rejects_aux_probe_without_private_gradient():
     auxiliary["p2_only_aux_private_grad_l2"] = 0.0
     with pytest.raises(ValueError, match="AUX probe produced no auxiliary-private gradient"):
         compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)
+
+
+def test_trace_json_marks_nonfinite_amp_attempts_without_emitting_invalid_json():
+    safe = _json_safe({"nan": float("nan"), "positive": float("inf"), "negative": float("-inf")})
+    assert safe == {"nan": "NaN", "positive": "+Infinity", "negative": "-Infinity"}
+    json.dumps(safe, allow_nan=False)
+    assert _clip_coefficient_from_norm(float("nan")) is None
+    assert _clip_coefficient_from_norm(float("inf")) is None
+
+
+def test_compare_audit_runs_only_allows_nonfinite_partition_on_skipped_attempt():
+    auxiliary = _run("aux-audit", clip=0.5, stock_delta=0.05, skipped=True)
+    auxiliary["steps"][0]["clip_norm_partition_relative_error"] = "NaN"
+    assert compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)["classification"] == "AMP_STEP_COUPLING"
+
+    auxiliary["steps"][0]["amp_step_skipped"] = False
+    auxiliary["steps"][0]["amp_scale_after"] = auxiliary["steps"][0]["amp_scale_before"]
+    with pytest.raises(ValueError, match="non-finite gradient norm partition on successful update"):
+        compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), auxiliary)
+
+
+def test_validate_audit_attempt_rejects_nonfinite_state_or_nonzero_skipped_delta():
+    skipped = _run("aux-audit", clip=0.0, stock_delta=0.0, skipped=True)["steps"][0]
+    assert validate_audit_attempt(skipped) == []
+
+    broken_state = deepcopy(skipped)
+    broken_state["stock_bn_finite"] = False
+    assert "stock_bn_finite must be true" in validate_audit_attempt(broken_state)
+
+    broken_delta = deepcopy(skipped)
+    broken_delta["stock_delta_zero"] = False
+    assert "skipped AMP attempt changed stock parameters" in validate_audit_attempt(broken_delta)
+
+
+def test_compare_audit_runs_classifies_amp_when_attempt_counts_differ():
+    control = _run("a0", clip=1.0, stock_delta=0.1)
+    auxiliary = _run("aux-audit", clip=1.0, stock_delta=0.1)
+    third = deepcopy(auxiliary["steps"][1])
+    auxiliary["steps"][1] = _run("aux-audit", clip=0.0, stock_delta=0.0, skipped=True)["steps"][1]
+    third.update(
+        optimizer_step=3,
+        optimizer_attempt=3,
+        successful_update=True,
+        successful_update_index=2,
+        amp_step_skipped=False,
+        batch_fingerprints=["B3"],
+        rng_before_forward=["R3"],
+    )
+    auxiliary["steps"].append(third)
+    auxiliary["attempted_optimizer_steps"] = 3
+
+    result = compare_audit_runs(control, auxiliary)
+    assert result["classification"] == "AMP_STEP_COUPLING"
+    assert result["first_amp_divergence_step"] == 2
+    assert result["optimizer_attempt_count_mismatch"] is True
 
 
 def test_compare_audit_runs_rejects_batch_or_optimizer_mismatch():
@@ -293,3 +372,9 @@ def test_a0_repeatability_report_calibrates_first_exact_divergence():
     repeat["steps"][1]["stock_grad_preclip_sha256"]["model.3.weight"] = "NOISE"
     noisy = compare_a0_repeats(reference, repeat)
     assert noisy["first_preclip_hash_divergence_step"] == 2
+
+    repeat = _run("a0", clip=1.0, stock_delta=0.1)
+    repeat["arm"] = "a0-repeat"
+    repeat["steps"][0] = _run("a0", clip=0.0, stock_delta=0.0, skipped=True)["steps"][0]
+    with pytest.raises(ValueError, match="AMP skip-pattern mismatch"):
+        compare_a0_repeats(reference, repeat)

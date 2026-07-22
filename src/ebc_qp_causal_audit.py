@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from math import isclose
+from math import isclose, isfinite
 from typing import Mapping
 
 import torch
@@ -150,6 +150,63 @@ def capture_parameter_delta_sha256(
     )
 
 
+def validate_audit_attempt(record: dict) -> list[str]:
+    """Return invariant violations for one optimizer attempt without discarding its evidence."""
+    errors: list[str] = []
+    skipped = bool(record.get("amp_step_skipped"))
+    scale_before = _finite_float(record.get("amp_scale_before"))
+    scale_after = _finite_float(record.get("amp_scale_after"))
+    scale_decreased = scale_before is not None and scale_after is not None and scale_after < scale_before
+
+    if skipped != scale_decreased:
+        errors.append("amp_step_skipped must exactly match a decreasing AMP scale")
+
+    required_finite = (
+        "loss_finite",
+        "loss_items_finite",
+        "model_parameters_finite",
+        "stock_bn_finite",
+        "stock_ema_finite",
+        "optimizer_state_finite",
+        "stock_delta_finite",
+    )
+    for field in required_finite:
+        if not bool(record.get(field)):
+            errors.append(f"{field} must be true")
+
+    gradients_finite = all(
+        bool(record.get(field))
+        for field in (
+            "stock_grad_preclip_finite",
+            "aux_private_grad_finite",
+            "all_grad_preclip_finite",
+            "stock_grad_postclip_finite",
+            "clip_total_norm_finite",
+        )
+    )
+    if not gradients_finite and not (skipped and scale_decreased):
+        errors.append("non-finite gradients are only valid on a confirmed skipped AMP attempt")
+    if skipped and not bool(record.get("stock_delta_zero")):
+        errors.append("skipped AMP attempt changed stock parameters")
+
+    partition_error = _finite_float(record.get("clip_norm_partition_relative_error"))
+    if skipped:
+        if record.get("clip_coefficient") is not None:
+            errors.append("clip_coefficient must be null on a skipped AMP attempt")
+        if record.get("stock_only_clip_coefficient") is not None:
+            errors.append("stock_only_clip_coefficient must be null on a skipped AMP attempt")
+        if partition_error is not None:
+            errors.append("clip norm partition must be not-applicable on a skipped AMP attempt")
+    else:
+        if partition_error is None:
+            errors.append("non-finite gradient norm partition on successful update")
+        elif partition_error > 1e-4:
+            errors.append("gradient norm partition mismatch")
+        if record.get("clip_coefficient") is None or record.get("stock_only_clip_coefficient") is None:
+            errors.append("clip coefficients missing on successful update")
+    return errors
+
+
 def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-8) -> dict:
     """Validate two E0 traces and identify the earliest supported stock-coupling mechanism."""
     if control.get("arm") != "a0" or auxiliary.get("arm") != "aux-audit":
@@ -179,8 +236,14 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
     auxiliary_successful = int(auxiliary.get("completed_successful_updates", len(auxiliary_steps)))
     if control_successful != target or auxiliary_successful != target:
         raise ValueError("audit trace does not contain the target successful-update count")
-    if len(control_steps) != len(auxiliary_steps):
-        raise ValueError("optimizer-attempt count mismatch")
+    optimizer_attempt_count_mismatch = len(control_steps) != len(auxiliary_steps)
+    for label, records in (("control", control_steps), ("auxiliary", auxiliary_steps)):
+        for expected_step, record in enumerate(records, start=1):
+            if record.get("optimizer_step") != expected_step:
+                raise ValueError(f"{label} optimizer-step sequence mismatch")
+            violations = validate_audit_attempt(record)
+            if violations:
+                raise ValueError(f"{label} optimizer step {expected_step}: {'; '.join(violations)}")
 
     first_divergence = None
     clip_divergence = None
@@ -192,17 +255,38 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
     optimizer_state_divergence = None
     counterfactual_clip_effect = None
     for expected_step, (left, right) in enumerate(zip(control_steps, auxiliary_steps), start=1):
-        if left.get("optimizer_step") != expected_step or right.get("optimizer_step") != expected_step:
-            raise ValueError("optimizer-step sequence mismatch")
         if left.get("batch_fingerprints") != right.get("batch_fingerprints"):
             raise ValueError(f"batch sequence mismatch at optimizer step {expected_step}")
         if left.get("rng_before_forward") != right.get("rng_before_forward"):
             raise ValueError(f"random-state sequence mismatch at optimizer step {expected_step}")
-        if float(right.get("clip_norm_partition_relative_error", 0.0)) > 1e-4:
-            raise ValueError(f"gradient norm partition mismatch at optimizer step {expected_step}")
-
         if left.get("optimizer_groups") != right.get("optimizer_groups"):
             raise ValueError(f"optimizer runtime-group mismatch at optimizer step {expected_step}")
+
+        left_skipped = bool(left.get("amp_step_skipped"))
+        right_skipped = bool(right.get("amp_step_skipped"))
+        if left_skipped != right_skipped:
+            amp_divergence = expected_step
+            amp_scale_divergence = expected_step
+            first_divergence = expected_step
+            break
+
+        if not _nested_close(
+            {"before": left.get("amp_scale_before"), "after": left.get("amp_scale_after")},
+            {"before": right.get("amp_scale_before"), "after": right.get("amp_scale_after")},
+            tolerance,
+        ):
+            amp_scale_divergence = amp_scale_divergence or expected_step
+        if not _nested_close(_detail(left, "stock_bn"), _detail(right, "stock_bn"), tolerance):
+            bn_divergence = bn_divergence or expected_step
+        if not _nested_close(_detail(left, "stock_ema"), _detail(right, "stock_ema"), tolerance):
+            ema_divergence = ema_divergence or expected_step
+        if not _nested_close(_detail(left, "optimizer_state"), _detail(right, "optimizer_state"), tolerance):
+            optimizer_state_divergence = optimizer_state_divergence or expected_step
+        if not _nested_close(_detail(left, "stock_delta"), _detail(right, "stock_delta"), tolerance):
+            first_divergence = first_divergence or expected_step
+
+        if left_skipped:
+            continue
 
         if not _nested_close(_detail(left, "stock_grad_preclip"), _detail(right, "stock_grad_preclip"), tolerance):
             preclip_divergence = preclip_divergence or expected_step
@@ -220,22 +304,8 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
             abs_tol=tolerance,
         ):
             counterfactual_clip_effect = counterfactual_clip_effect or expected_step
-        if bool(left.get("amp_step_skipped")) != bool(right.get("amp_step_skipped")):
-            amp_divergence = amp_divergence or expected_step
-        if not _nested_close(
-            {"before": left.get("amp_scale_before"), "after": left.get("amp_scale_after")},
-            {"before": right.get("amp_scale_before"), "after": right.get("amp_scale_after")},
-            tolerance,
-        ):
-            amp_scale_divergence = amp_scale_divergence or expected_step
-        if not _nested_close(_detail(left, "stock_bn"), _detail(right, "stock_bn"), tolerance):
-            bn_divergence = bn_divergence or expected_step
-        if not _nested_close(_detail(left, "stock_ema"), _detail(right, "stock_ema"), tolerance):
-            ema_divergence = ema_divergence or expected_step
-        if not _nested_close(_detail(left, "optimizer_state"), _detail(right, "optimizer_state"), tolerance):
-            optimizer_state_divergence = optimizer_state_divergence or expected_step
-        if not _nested_close(_detail(left, "stock_delta"), _detail(right, "stock_delta"), tolerance):
-            first_divergence = first_divergence or expected_step
+    if optimizer_attempt_count_mismatch and amp_divergence is None:
+        raise ValueError("optimizer-attempt count mismatch without a preceding AMP skip divergence")
 
     p2_only_stock_grad = float(auxiliary.get("p2_only_stock_grad_l2", 0.0))
     p2_only_aux_private_grad = float(auxiliary.get("p2_only_aux_private_grad_l2", 0.0))
@@ -246,6 +316,8 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
         mechanisms.append("direct_gradient")
     if amp_divergence is not None:
         mechanisms.append("amp_step")
+    if optimizer_attempt_count_mismatch:
+        mechanisms.append("amp_attempt_count")
     if amp_scale_divergence is not None:
         mechanisms.append("amp_scale")
     if clip_divergence is not None:
@@ -299,6 +371,7 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
         "first_bn_divergence_step": bn_divergence,
         "first_ema_divergence_step": ema_divergence,
         "first_optimizer_state_divergence_step": optimizer_state_divergence,
+        "optimizer_attempt_count_mismatch": optimizer_attempt_count_mismatch,
         "p2_only_stock_grad_l2": p2_only_stock_grad,
         "p2_only_aux_private_grad_l2": p2_only_aux_private_grad,
     }
@@ -309,6 +382,7 @@ def compare_a0_repeats(reference: dict, repeat: dict) -> dict:
         raise ValueError("repeatability arms must be a0 and a0-repeat")
     for field, label in (
         ("target_optimizer_steps", "target optimizer-step count"),
+        ("completed_successful_updates", "successful-update count"),
         ("common_initial_fingerprint", "common initial-state fingerprint"),
         ("optimizer_common_manifest", "optimizer common-parameter manifest"),
         ("initial_probe", "initial forward/query probe"),
@@ -324,11 +398,27 @@ def compare_a0_repeats(reference: dict, repeat: dict) -> dict:
     first_delta = None
     first_bn = None
     for index, (left, right) in enumerate(zip(left_steps, right_steps), start=1):
+        for label, record in (("reference", left), ("repeat", right)):
+            violations = validate_audit_attempt(record)
+            if violations:
+                raise ValueError(f"A0 {label} optimizer step {index}: {'; '.join(violations)}")
         if left.get("batch_fingerprints") != right.get("batch_fingerprints"):
             raise ValueError(f"A0 repeat batch sequence mismatch at optimizer step {index}")
         if left.get("rng_before_forward") != right.get("rng_before_forward"):
             raise ValueError(f"A0 repeat random-state sequence mismatch at optimizer step {index}")
-        if left.get("stock_grad_preclip_sha256") != right.get("stock_grad_preclip_sha256"):
+        if left.get("optimizer_groups") != right.get("optimizer_groups"):
+            raise ValueError(f"A0 repeat optimizer runtime-group mismatch at optimizer step {index}")
+        if left.get("amp_step_skipped") != right.get("amp_step_skipped"):
+            raise ValueError(f"A0 repeat AMP skip-pattern mismatch at optimizer step {index}")
+        if (
+            left.get("amp_scale_before") != right.get("amp_scale_before")
+            or left.get("amp_scale_after") != right.get("amp_scale_after")
+        ):
+            raise ValueError(f"A0 repeat AMP scale trajectory mismatch at optimizer step {index}")
+        if (
+            not left.get("amp_step_skipped")
+            and left.get("stock_grad_preclip_sha256") != right.get("stock_grad_preclip_sha256")
+        ):
             first_preclip = first_preclip or index
         if left.get("stock_delta_sha256") != right.get("stock_delta_sha256"):
             first_delta = first_delta or index
@@ -380,6 +470,14 @@ def _nested_close(left: object, right: object, tolerance: float) -> bool:
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
         return isclose(float(left), float(right), rel_tol=tolerance, abs_tol=tolerance)
     return left == right
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) else None
 
 
 def _detail(step: dict, field: str) -> object:
