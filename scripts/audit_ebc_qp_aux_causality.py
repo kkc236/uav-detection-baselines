@@ -705,6 +705,9 @@ def _make_trainers():
                 "p2_only_aux_private_grad_parameters": self.audit_p2_only_aux_private_grad_parameters,
                 "initial_probe": self.audit_initial_probe,
                 "ebc_config": getattr(getattr(self, "ebc_config", None), "as_dict", lambda: None)(),
+                "ignored_initial_innovation_keys": list(
+                    getattr(unwrap_model(self.model), "ignored_initial_innovation_keys", ())
+                ),
                 "steps": self.audit_steps,
             }
             _atomic_write_json(self.audit_output, payload)

@@ -95,7 +95,13 @@ def build_initial_state(
     }
 
 
-def load_initial_state(model: nn.Module, artifact: Mapping[str, Any], *, include_innovation: bool) -> None:
+def load_initial_state(
+    model: nn.Module,
+    artifact: Mapping[str, Any],
+    *,
+    include_innovation: bool,
+    ignored_innovation_keys: set[str] | frozenset[str] = frozenset(),
+) -> None:
     common = artifact["common_state"]
     innovation = artifact["innovation_state"]
     fingerprints = artifact["fingerprints"]
@@ -104,9 +110,16 @@ def load_initial_state(model: nn.Module, artifact: Mapping[str, Any], *, include
     if state_fingerprint(innovation) != fingerprints["innovation"]:
         raise ValueError("innovation initial-state fingerprint mismatch")
 
+    ignored = set(ignored_innovation_keys)
+    if ignored and not include_innovation:
+        raise ValueError("ignored innovation keys require include_innovation=True")
+    unknown_ignored = ignored.difference(innovation)
+    if unknown_ignored:
+        raise ValueError(f"ignored keys are not present in innovation state: {sorted(unknown_ignored)}")
+
     expected = dict(common)
     if include_innovation:
-        expected.update(innovation)
+        expected.update({name: value for name, value in innovation.items() if name not in ignored})
     model_names = set(model.state_dict())
     expected_names = set(expected)
     if model_names != expected_names:

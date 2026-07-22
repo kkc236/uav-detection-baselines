@@ -561,7 +561,17 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
             model.load(weights)
         if self.initial_state is not None:
             _validate_initial_state_seed(self.initial_state, self.args.seed)
-            load_initial_state(model, self.initial_state, include_innovation=True)
+            gamma_key = "model.28.p2_fusion_gamma"
+            ignored_innovation_keys = set()
+            if self.ebc_config.contribution_separated_aux_gradients and gamma_key in self.initial_state["innovation_state"]:
+                ignored_innovation_keys.add(gamma_key)
+            load_initial_state(
+                model,
+                self.initial_state,
+                include_innovation=True,
+                ignored_innovation_keys=ignored_innovation_keys,
+            )
+            model.ignored_initial_innovation_keys = tuple(sorted(ignored_innovation_keys))
         return model
 
     def _build_train_pipeline(self):

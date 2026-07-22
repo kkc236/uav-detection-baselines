@@ -122,6 +122,33 @@ def test_initial_state_allows_the_preregistered_p2_fusion_gamma():
     torch.testing.assert_close(artifact["innovation_state"]["p2_fusion_gamma"], torch.tensor(1.0))
 
 
+def test_initial_state_can_explicitly_drop_only_a_removed_innovation_key():
+    control = _Control()
+    method = _Method()
+    method.register_parameter("p2_fusion_gamma", nn.Parameter(torch.ones(())))
+    artifact = build_initial_state(control.state_dict(), method.state_dict(), metadata={})
+    no_gamma = _Method()
+
+    load_initial_state(
+        no_gamma,
+        artifact,
+        include_innovation=True,
+        ignored_innovation_keys={"p2_fusion_gamma"},
+    )
+    torch.testing.assert_close(
+        no_gamma.state_dict()["p2_adapter.weight"], artifact["innovation_state"]["p2_adapter.weight"]
+    )
+    with pytest.raises(ValueError, match="keys do not match"):
+        load_initial_state(_Method(), artifact, include_innovation=True)
+    with pytest.raises(ValueError, match="not present in innovation state"):
+        load_initial_state(
+            no_gamma,
+            artifact,
+            include_innovation=True,
+            ignored_innovation_keys={"not_an_innovation"},
+        )
+
+
 def test_initial_state_allows_qg_p2_quality_head():
     control = _Control()
     method = _Method()
