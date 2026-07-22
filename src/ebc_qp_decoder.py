@@ -39,6 +39,7 @@ class EBCQPForwardState:
     p2_all_logits: torch.Tensor | None = None
     p2_shape: tuple[int, int] | None = None
     p2_valid_mask: torch.Tensor | None = None
+    c2_p3_rms_ratio: torch.Tensor | None = None
     stock_loss: torch.Tensor | None = None
 
 
@@ -64,6 +65,7 @@ class EBCQPDecoder(RTDETRDecoder):
         self.ebc_epoch = 0
         self.ebc_enabled = True
         self.diagnostics_enabled = False
+        self._last_c2_p3_rms_ratio: torch.Tensor | None = None
         self.last_state: EBCQPForwardState | None = None
 
     @property
@@ -181,6 +183,11 @@ class EBCQPDecoder(RTDETRDecoder):
             p2_all_logits=(p2_all.logits.detach() if self.diagnostics_enabled and self.ebc_enabled else None),
             p2_shape=(p2_shape if self.diagnostics_enabled and self.ebc_enabled else None),
             p2_valid_mask=(p2_valid_mask.detach() if self.diagnostics_enabled and self.ebc_enabled else None),
+            c2_p3_rms_ratio=(
+                self._last_c2_p3_rms_ratio
+                if self.diagnostics_enabled and self.ebc_enabled
+                else None
+            ),
         )
 
         output = dec_bboxes, dec_scores, stock.boxes, stock.logits, dn_meta
@@ -355,6 +362,11 @@ class EBCQPDecoder(RTDETRDecoder):
     def _p2_features(self, c2: torch.Tensor, projected_p3: torch.Tensor) -> torch.Tensor:
         lateral = self.p2_adapter(c2.detach())
         context = F.interpolate(projected_p3.detach(), size=lateral.shape[-2:], mode="nearest")
+        if self.diagnostics_enabled:
+            dimensions = tuple(range(1, lateral.ndim))
+            lateral_rms = lateral.detach().float().square().mean(dim=dimensions).sqrt()
+            context_rms = context.detach().float().square().mean(dim=dimensions).sqrt()
+            self._last_c2_p3_rms_ratio = lateral_rms / context_rms.clamp_min(self.ebc_config.epsilon)
         return F.silu(lateral + context)
 
     def _detached_stock_transform(self, p2_tokens: torch.Tensor) -> torch.Tensor:

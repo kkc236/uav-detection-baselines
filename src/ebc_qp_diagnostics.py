@@ -15,6 +15,7 @@ class MechanismDiagnosticsAccumulator:
     active_images: int = 0
     tiny_gt: int = 0
     stock_tiny_covered: int = 0
+    local_assigned_gt: int = 0
     n_gain: int = 0
     n_loss: int = 0
     p2_entry_count: int = 0
@@ -33,6 +34,8 @@ class MechanismDiagnosticsAccumulator:
     quality_scores: list[float] = field(default_factory=list)
     quality_ious: list[float] = field(default_factory=list)
     quality_nwds: list[float] = field(default_factory=list)
+    c2_p3_rms_ratio_sum: float = 0.0
+    c2_p3_rms_ratio_count: int = 0
 
     def update(self, state, batch: dict) -> None:
         if not state.competition_active:
@@ -43,6 +46,10 @@ class MechanismDiagnosticsAccumulator:
         batch_index = batch["batch_idx"].reshape(-1).long()
         boxes = batch["bboxes"].reshape(-1, 4).float()
         classes = batch["cls"].reshape(-1).long()
+        if state.c2_p3_rms_ratio is not None:
+            ratios = state.c2_p3_rms_ratio.float()
+            self.c2_p3_rms_ratio_sum += float(ratios.sum())
+            self.c2_p3_rms_ratio_count += ratios.numel()
 
         for image_index in range(batch_size):
             self.active_images += 1
@@ -112,6 +119,7 @@ class MechanismDiagnosticsAccumulator:
             radius=1,
         )
         pairs = local.pairs
+        self.local_assigned_gt += len(pairs)
         if pairs.numel():
             gt_indices = pairs[:, 0]
             candidate_indices = pairs[:, 1]
@@ -163,6 +171,7 @@ class MechanismDiagnosticsAccumulator:
             "active_images": self.active_images,
             "tiny_gt": self.tiny_gt,
             "stock_top300_coverage": _ratio(self.stock_tiny_covered, self.tiny_gt),
+            "local_assign_rate": _ratio(self.local_assigned_gt, self.tiny_gt),
             "p2_entry_count": self.p2_entry_count,
             "n_gain": self.n_gain,
             "n_loss": self.n_loss,
@@ -181,6 +190,7 @@ class MechanismDiagnosticsAccumulator:
             "assigned_entry_mean_nwd": _ratio(self.assigned_entry_nwd_sum, self.assigned_entry_count),
             "unassigned_entry_rate": unassigned_entry_rate,
             "low_quality_entry_rate": _ratio(self.low_quality_entry_count, self.entered_p2_count),
+            "c2_p3_rms_ratio": _ratio(self.c2_p3_rms_ratio_sum, self.c2_p3_rms_ratio_count),
         }
 
 

@@ -32,6 +32,7 @@ def test_mechanism_diagnostics_count_unique_gain_loss_and_p2_quality():
         p2_all_logits=torch.tensor([[[0.0, 0.0], [2.0, 0.0], [0.0, 0.0]]]),
         p2_shape=(1, 3),
         p2_valid_mask=torch.ones(1, 3, 1, dtype=torch.bool),
+        c2_p3_rms_ratio=torch.tensor([2.0]),
     )
     batch = {
         "batch_idx": torch.tensor([0]),
@@ -48,6 +49,7 @@ def test_mechanism_diagnostics_count_unique_gain_loss_and_p2_quality():
     assert result["n_loss"] == 0
     assert result["v_replace"] == 1
     assert result["stock_top300_coverage"] == 0.0
+    assert result["local_assign_rate"] == 1.0
     assert result["effective_p2_entry_rate"] == pytest.approx(0.5)
     assert result["boundary_gap_mean"] == pytest.approx(0.1)
     assert result["boundary_gap_positive_ratio"] == 1.0
@@ -62,6 +64,7 @@ def test_mechanism_diagnostics_count_unique_gain_loss_and_p2_quality():
     assert result["score_quality_sample_count"] == 1
     assert result["score_iou_spearman"] is None
     assert result["score_nwd_spearman"] is None
+    assert result["c2_p3_rms_ratio"] == pytest.approx(2.0)
 
 
 def test_mechanism_diagnostics_ignore_inactive_competition_batches():
