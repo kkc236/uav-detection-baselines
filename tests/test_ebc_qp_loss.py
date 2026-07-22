@@ -136,7 +136,7 @@ def test_sparse_quality_uses_detached_iou_and_excludes_inside_gt_negatives():
         gt_classes=[torch.tensor([0, 1])],
         assigned_pairs=[torch.tensor([[0, 0]])],
         topk_indices=torch.tensor([[0, 1, 2]]),
-        anchor_centers=torch.tensor([[0.25, 0.25], [0.75, 0.75], [0.95, 0.95], [0.1, 0.9]]),
+        anchor_centers=torch.tensor([[0.25, 0.25], [0.75, 0.75], [0.99, 0.99], [0.1, 0.9]]),
     )
 
     result = compute_sparse_quality_loss(quality_logits, boxes, targets)
