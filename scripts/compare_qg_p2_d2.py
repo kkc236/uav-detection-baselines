@@ -45,6 +45,29 @@ def classify_qg_p2(*, metric_gate_passed: bool, mechanism: dict[str, Any]) -> di
     }
 
 
+def preflight_passed(evidence: dict[str, Any]) -> bool:
+    required_true = (
+        "competition_active",
+        "gamma_gradient",
+        "p2_adapter_gradient",
+        "p2_bbox_gradient",
+        "quality_gradient",
+        "total_finite",
+    )
+    try:
+        quality_loss = float(evidence["quality_loss"])
+        return (
+            all(evidence.get(key) is True for key in required_true)
+            and int(evidence["loss_items"]) == 6
+            and int(evidence["ordinary_queries"]) == 300
+            and int(evidence["p2_entries"]) == 0
+            and math.isfinite(quality_loss)
+            and quality_loss > 0.0
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     control_exact = load_json(args.control_exact)
     method_diagnostics = load_json(args.method_diagnostics)
@@ -58,7 +81,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(mechanism, dict):
         raise ValueError("QG-P2 diagnostics must contain a mechanism object")
     _validate_protocol(protocol)
-    if not bool(preflight.get("passed")):
+    if not preflight_passed(preflight):
         raise ValueError("QG-P2 CUDA preflight did not pass")
 
     trajectory = evaluate_metric_trajectory(

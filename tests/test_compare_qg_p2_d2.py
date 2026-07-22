@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from scripts.compare_qg_p2_d2 import classify_qg_p2, compare_paired_metrics
+from scripts.compare_qg_p2_d2 import (
+    classify_qg_p2,
+    compare_paired_metrics,
+    preflight_passed,
+)
 
 
 def test_compare_paired_metrics_reports_method_minus_control():
@@ -28,3 +32,22 @@ def test_qg_p2_requires_both_metric_and_mechanism_gates_for_100_epochs():
     mechanism_only = classify_qg_p2(metric_gate_passed=False, mechanism=positive)
     assert mechanism_only["joint_gate_passed"] is False
     assert mechanism_only["decision"] == "ITERATE_QG_P2"
+
+
+def test_qg_preflight_requires_all_gradient_and_query_integrity_checks():
+    evidence = {
+        "competition_active": True,
+        "gamma_gradient": True,
+        "loss_items": 6,
+        "ordinary_queries": 300,
+        "p2_adapter_gradient": True,
+        "p2_bbox_gradient": True,
+        "p2_entries": 0,
+        "quality_gradient": True,
+        "quality_loss": 0.6931471824645996,
+        "total_finite": True,
+    }
+
+    assert preflight_passed(evidence) is True
+    assert preflight_passed({**evidence, "quality_gradient": False}) is False
+    assert preflight_passed({**evidence, "ordinary_queries": 299}) is False
