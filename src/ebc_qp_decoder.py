@@ -18,7 +18,13 @@ from src.ebc_qp_queries import QuerySet, compete_queries, gather_query_set, stab
 class EBCQPForwardState:
     stock_topk_indices: torch.Tensor
     p2_topk_indices: torch.Tensor
+    stock_centers: torch.Tensor
+    final_centers: torch.Tensor
+    final_boxes: torch.Tensor
+    p2_top_centers: torch.Tensor
+    final_ranking_score: torch.Tensor
     final_sources: torch.Tensor
+    final_source_indices: torch.Tensor
     p2_loss: torch.Tensor
     ebc_loss: torch.Tensor
     p2_entry_count: int
@@ -29,6 +35,10 @@ class EBCQPForwardState:
     stock_boundary: torch.Tensor
     assigned_pairs: list[torch.Tensor]
     uncovered: list[torch.Tensor]
+    p2_all_boxes: torch.Tensor | None = None
+    p2_all_logits: torch.Tensor | None = None
+    p2_shape: tuple[int, int] | None = None
+    p2_valid_mask: torch.Tensor | None = None
     stock_loss: torch.Tensor | None = None
 
 
@@ -53,6 +63,7 @@ class EBCQPDecoder(RTDETRDecoder):
         self.p2_bbox_head = deepcopy(self.enc_bbox_head)
         self.ebc_epoch = 0
         self.ebc_enabled = True
+        self.diagnostics_enabled = False
         self.last_state: EBCQPForwardState | None = None
 
     @property
@@ -145,7 +156,17 @@ class EBCQPDecoder(RTDETRDecoder):
         self.last_state = EBCQPForwardState(
             stock_topk_indices=stock_indices.detach(),
             p2_topk_indices=p2_indices.detach(),
+            stock_centers=stock.centers.detach(),
+            final_centers=final_queries.centers.detach(),
+            final_boxes=final_queries.boxes.detach(),
+            p2_top_centers=(
+                p2_top.centers.detach()
+                if p2_top is not None
+                else torch.empty((feats.shape[0], 0, 2), device=feats.device)
+            ),
+            final_ranking_score=final_queries.ranking_score.detach(),
             final_sources=final_queries.source.detach(),
+            final_source_indices=final_queries.source_index.detach(),
             p2_loss=p2_loss,
             ebc_loss=ebc_loss,
             p2_entry_count=p2_entry_count,
@@ -156,6 +177,10 @@ class EBCQPDecoder(RTDETRDecoder):
             stock_boundary=stock_boundary,
             assigned_pairs=assigned_pairs,
             uncovered=uncovered,
+            p2_all_boxes=(p2_all.boxes.detach() if self.diagnostics_enabled and self.ebc_enabled else None),
+            p2_all_logits=(p2_all.logits.detach() if self.diagnostics_enabled and self.ebc_enabled else None),
+            p2_shape=(p2_shape if self.diagnostics_enabled and self.ebc_enabled else None),
+            p2_valid_mask=(p2_valid_mask.detach() if self.diagnostics_enabled and self.ebc_enabled else None),
         )
 
         output = dec_bboxes, dec_scores, stock.boxes, stock.logits, dn_meta

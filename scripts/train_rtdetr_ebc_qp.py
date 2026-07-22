@@ -35,6 +35,8 @@ STAGES = {
 DIAGNOSTIC_FIELDS = frozenset(
     {
         "epoch",
+        "active_images",
+        "tiny_gt",
         "ap_tiny",
         "tiny_recall",
         "stock_top300_coverage",

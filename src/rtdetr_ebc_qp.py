@@ -22,6 +22,7 @@ from src.ebc_qp_config import (
     assert_ultralytics_source_lock,
 )
 from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
+from src.ebc_qp_diagnostics import MechanismDiagnosticsAccumulator
 from src.ebc_qp_metrics import TinyDetectionMetrics, validation_xy_gain
 from src.ebc_qp_protocol import load_initial_state
 
@@ -223,6 +224,37 @@ class EBCQPValidator(RTDETRValidator):
             self.tiny_metrics.clear()
 
 
+class EBCQPDiagnosticsValidator(EBCQPValidator):
+    """Read-only validator that records query-replacement mechanism evidence."""
+
+    def attach_diagnostic_model(self, model: EBCQPDetectionModel) -> None:
+        self.diagnostic_head = model.ebc_head
+
+    def init_metrics(self, model) -> None:
+        super().init_metrics(model)
+        if not hasattr(self, "diagnostic_head"):
+            heads = [module for module in model.modules() if isinstance(module, EBCQPDecoder)]
+            if len(heads) != 1:
+                raise RuntimeError(f"expected one EBC-QP decoder during diagnostics, found {len(heads)}")
+            self.diagnostic_head = heads[0]
+        self.mechanism_diagnostics = MechanismDiagnosticsAccumulator(
+            tiny_radius=self.diagnostic_head.ebc_config.tiny_radius
+        )
+        self.mechanism_stats: dict[str, float | int] = {}
+
+    def update_metrics(self, preds, batch) -> None:
+        super().update_metrics(preds, batch)
+        state = self.diagnostic_head.last_state
+        if state is None:
+            raise RuntimeError("EBC-QP forward state is missing during diagnostics")
+        self.mechanism_diagnostics.update(state, batch)
+
+    def get_stats(self) -> dict:
+        results = super().get_stats()
+        self.mechanism_stats = self.mechanism_diagnostics.compute()
+        return results
+
+
 class PairedProtocolOptimizerMixin:
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
         name, lr, momentum = resolve_protocol_optimizer(name, lr=lr, momentum=momentum)
@@ -276,7 +308,11 @@ class EBCQPTrainer(PairedProtocolOptimizerMixin, UltralyticsRTDETRTrainer):
         return super()._build_train_pipeline()
 
     def _set_ebc_progress(self, _trainer=None) -> None:
-        unwrap_model(self.model).set_ebc_progress(int(self.epoch))
+        epoch = int(self.epoch)
+        unwrap_model(self.model).set_ebc_progress(epoch)
+        ema_model = self.ema.ema if getattr(self, "ema", None) is not None else None
+        if ema_model is not None:
+            unwrap_model(ema_model).set_ebc_progress(epoch)
 
     def get_validator(self):
         self.loss_names = LOSS_NAMES

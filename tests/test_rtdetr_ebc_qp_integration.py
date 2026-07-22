@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -45,14 +46,18 @@ def test_model_adds_weighted_losses_but_keeps_stock_encoder_auxiliary_output():
 
 def test_epoch_callback_restores_activation_boundary_after_resume():
     model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False)
+    ema_model = EBCQPDetectionModel(CONFIG, ch=3, nc=3, verbose=False)
     trainer = object.__new__(EBCQPTrainer)
     trainer.model = model
+    trainer.ema = SimpleNamespace(ema=ema_model)
     trainer.epoch = 3
 
     trainer._set_ebc_progress()
 
     assert model.ebc_head.ebc_epoch == 3
     assert model.ebc_head.competition_active
+    assert ema_model.ebc_head.ebc_epoch == 3
+    assert ema_model.ebc_head.competition_active
 
 
 def test_checkpoint_round_trip_preserves_p2_parameters_and_progress(tmp_path: Path):
