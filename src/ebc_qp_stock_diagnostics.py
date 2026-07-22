@@ -102,4 +102,3 @@ class StockQueryProbe:
 
     def close(self) -> None:
         self.handle.remove()
-
