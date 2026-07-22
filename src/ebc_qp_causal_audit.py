@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from math import isclose, isfinite
+from statistics import median
 from typing import Mapping
 
 import torch
@@ -484,18 +485,44 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
                 break
 
     h1_first = (h1.get("steps") or [{}])[0]
-    shallow_stock_norm = _signature_subset_l2(
-        h1_first.get("stock_grad_preclip_parameters", {}),
-        lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
-    )
     shallow_p2_norm = _signature_subset_l2(
         h1_signatures,
         lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
     )
-    rho = shallow_p2_norm / (shallow_stock_norm + 1e-12)
-    if not 0.01 <= rho <= 0.25:
-        errors.append(f"H1 shallow gradient ratio rho={rho:.6g} is outside [0.01, 0.25]")
+    initial_shallow_stock_norm = _signature_subset_l2(
+        h1_first.get("stock_grad_preclip_parameters", {}),
+        lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
+    )
+    initial_probe_preclip_ratio = shallow_p2_norm / (initial_shallow_stock_norm + 1e-12)
+    preclip_ratios: list[float] = []
+    applied_ratios: list[float] = []
+    for step in h1.get("steps", []):
+        stock_shallow_norm = _signature_subset_l2(
+            step.get("stock_grad_preclip_parameters", {}),
+            lambda name: classify_tsgr_gradient_boundary(name) == "routed_shallow",
+        )
+        route_norm = float(step.get("routed_shallow_grad_total_norm", 0.0))
+        stock_coefficient = float(step.get("stock_only_clip_coefficient", 0.0))
+        route_coefficient = float(step.get("routed_shallow_clip_coefficient", 0.0))
+        preclip_ratios.append(route_norm / (stock_shallow_norm + 1e-12))
+        applied_ratios.append(
+            route_norm * route_coefficient / (stock_shallow_norm * stock_coefficient + 1e-12)
+        )
+    applied_ratio_median = median(applied_ratios) if applied_ratios else 0.0
+    preclip_ratio_median = median(preclip_ratios) if preclip_ratios else 0.0
+    if not 0.01 <= applied_ratio_median <= 0.25:
+        errors.append(
+            f"H1 applied shallow gradient ratio median={applied_ratio_median:.6g} is outside [0.01, 0.25]"
+        )
+    if any(float(step.get("routed_shallow_grad_total_norm", 0.0)) > tolerance for step in h0.get("steps", [])):
+        errors.append("H0 produced a routed shallow gradient during training")
 
+    if a0.get("steps") and h0.get("steps"):
+        a0_delta = a0["steps"][0].get("stock_delta_sha256", {})
+        h0_delta = h0["steps"][0].get("stock_delta_sha256", {})
+        divergent = [name for name in sorted(set(a0_delta).intersection(h0_delta)) if a0_delta[name] != h0_delta[name]]
+        if divergent:
+            errors.append(f"H0 first update differs from A0: {divergent[:5]}")
     if h0.get("steps") and h1.get("steps"):
         h0_delta = h0["steps"][0].get("stock_delta_sha256", {})
         h1_delta = h1["steps"][0].get("stock_delta_sha256", {})
@@ -512,7 +539,11 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
         "passed": not errors,
         "classification": "TSGR_E0B_PASS" if not errors else "TSGR_E0B_FAIL",
         "errors": errors,
-        "h1_shallow_gradient_ratio": rho,
+        "h1_initial_probe_preclip_ratio": initial_probe_preclip_ratio,
+        "h1_shallow_preclip_ratio_median": preclip_ratio_median,
+        "h1_shallow_applied_ratio_median": applied_ratio_median,
+        "h1_shallow_applied_ratio_min": min(applied_ratios) if applied_ratios else 0.0,
+        "h1_shallow_applied_ratio_max": max(applied_ratios) if applied_ratios else 0.0,
         "h1_routed_nonzero_parameter_count": len(h1_allowed),
         "h1_forbidden_nonzero_parameter_count": len(h1_forbidden),
     }

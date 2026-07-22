@@ -13,6 +13,7 @@ from scripts.audit_ebc_qp_aux_causality import (
     build_audit_settings,
     build_parser,
     controlled_amp_config,
+    gradient_alignment,
     optimizer_common_manifest,
     resolved_audit_steps,
     resolved_run_name,
@@ -361,6 +362,8 @@ def _tsgr_run(arm: str) -> dict:
                 "gradient_clipping_mode": "contribution_separated" if is_auxiliary else "legacy_combined",
                 "clip_coefficient": 1.0,
                 "stock_only_clip_coefficient": 1.0,
+                "routed_shallow_grad_total_norm": 0.05 if arm == "h1" else 0.0,
+                "routed_shallow_clip_coefficient": 1.0,
                 "p2_entry_count": 0,
                 "ordinary_query_count": 300,
                 "stock_grad_preclip_parameters": {
@@ -381,7 +384,7 @@ def _tsgr_run(arm: str) -> dict:
 def test_tsgr_e0b_comparator_enforces_exact_gradient_boundary_and_ratio():
     result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), _tsgr_run("h1"))
     assert result["passed"] is True
-    assert result["h1_shallow_gradient_ratio"] == pytest.approx(0.05)
+    assert result["h1_shallow_applied_ratio_median"] == pytest.approx(0.05)
 
     leaked = _tsgr_run("h1")
     leaked["p2_only_stock_grad_parameters"]["model.2.weight"] = {"l2": 0.1, "max_abs": 0.1}
@@ -438,6 +441,22 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
         "growth_interval": 1000,
         "require_zero_skips": True,
     }
+    controlled_100 = parser.parse_args(
+        ["--arm", "h1", *common, "--controlled-amp-scale", "256", "--controlled-amp-steps", "100"]
+    )
+    assert resolved_audit_steps(controlled_100) == 100
+    assert resolved_run_name(controlled_100) == "e0-h1-seed0-controlled-amp256-100step"
+
+
+def test_gradient_alignment_uses_the_applied_contributions():
+    result = gradient_alignment(
+        {"model.0.weight": torch.tensor([3.0, 0.0])},
+        {"model.0.weight": torch.tensor([0.0, 4.0])},
+        stock_coefficient=0.5,
+        routed_coefficient=0.25,
+    )
+    assert result["route_stock_cosine"] == pytest.approx(0.0)
+    assert result["combined_to_stock_cosine"] == pytest.approx(1.5 / (3.25**0.5))
 
 
 def test_batch_and_optimizer_manifests_are_stable_and_common_only():

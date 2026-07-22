@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=100, choices=(100,))
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--controlled-amp-scale", type=float, choices=(256.0,))
+    parser.add_argument("--controlled-amp-steps", type=int, default=32, choices=(32, 100))
     parser.add_argument("--seed", type=int, default=0, choices=(0,))
     parser.add_argument("--device", default="0")
     parser.add_argument("--project", type=Path, default=Path("/mnt/uav/runs/ebc-qp-e0-causal-audit"))
@@ -51,14 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolved_audit_steps(args: argparse.Namespace) -> int:
     if args.controlled_amp_scale is not None:
-        return 32
+        return int(args.controlled_amp_steps)
     return 1 if args.smoke else int(args.steps)
 
 
 def resolved_run_name(args: argparse.Namespace) -> str:
     if args.controlled_amp_scale is not None:
         scale = int(args.controlled_amp_scale)
-        return f"e0-{args.arm}-seed0-controlled-amp{scale}-32step"
+        return f"e0-{args.arm}-seed0-controlled-amp{scale}-{args.controlled_amp_steps}step"
     suffix = "-smoke" if args.smoke else ""
     return f"e0-{args.arm}-seed0{suffix}"
 
@@ -209,6 +210,52 @@ def tensor_structure_fingerprint(value: Any) -> str:
 
     update(value)
     return digest.hexdigest().upper()
+
+
+def gradient_alignment(
+    stock: Mapping[str, torch.Tensor],
+    routed: Mapping[str, torch.Tensor],
+    *,
+    stock_coefficient: float,
+    routed_coefficient: float,
+) -> dict[str, float | None]:
+    if not stock or not routed:
+        return {"route_stock_cosine": None, "combined_to_stock_cosine": None}
+    stock_squared = []
+    route_squared = []
+    dot_products = []
+    combined_squared = []
+    stock_combined_dot = []
+    for name, stock_gradient in stock.items():
+        stock_value = stock_gradient.detach().float() * stock_coefficient
+        route_gradient = routed.get(name)
+        route_value = (
+            torch.zeros_like(stock_value)
+            if route_gradient is None
+            else route_gradient.detach().float() * routed_coefficient
+        )
+        combined = stock_value + route_value
+        stock_squared.append(stock_value.square().sum())
+        route_squared.append(route_value.square().sum())
+        dot_products.append((stock_value * route_value).sum())
+        combined_squared.append(combined.square().sum())
+        stock_combined_dot.append((stock_value * combined).sum())
+    stock_norm = torch.stack(stock_squared).sum().sqrt()
+    route_norm = torch.stack(route_squared).sum().sqrt()
+    combined_norm = torch.stack(combined_squared).sum().sqrt()
+    if float(stock_norm.item()) == 0.0 or float(route_norm.item()) == 0.0:
+        route_stock_cosine = None
+    else:
+        route_stock_cosine = float((torch.stack(dot_products).sum() / (stock_norm * route_norm)).item())
+    combined_to_stock_cosine = (
+        None
+        if float(stock_norm.item()) == 0.0 or float(combined_norm.item()) == 0.0
+        else float((torch.stack(stock_combined_dot).sum() / (stock_norm * combined_norm)).item())
+    )
+    return {
+        "route_stock_cosine": route_stock_cosine,
+        "combined_to_stock_cosine": combined_to_stock_cosine,
+    }
 
 
 def optimizer_common_manifest(
@@ -540,6 +587,17 @@ def _make_trainers():
             )
             routed_shallow_grad_parameters = capture_parameter_signatures(routed_shallow_grad_tensors)
             routed_shallow_grad_sha256 = capture_tensor_sha256(routed_shallow_grad_tensors)
+            shallow_stock_grad_tensors = {
+                name: tensor
+                for name, tensor in stock_grad_tensors.items()
+                if name.startswith("model.0.") or name.startswith("model.1.")
+            }
+            alignment = gradient_alignment(
+                shallow_stock_grad_tensors,
+                routed_shallow_grad_tensors,
+                stock_coefficient=float(stock_only_clip_coefficient),
+                routed_coefficient=float(routed_shallow_clip_coefficient),
+            )
             stock_grad_postclip = capture_grouped_tensor_mapping(stock_grad_postclip_tensors)
             stock_grad_postclip_parameters = capture_parameter_signatures(stock_grad_postclip_tensors)
             stock_grad_postclip_finite = _tensor_mapping_all_finite(stock_grad_postclip_tensors)
@@ -629,6 +687,8 @@ def _make_trainers():
                     "routed_shallow_grad_sha256": routed_shallow_grad_sha256,
                     "routed_shallow_grad_finite": routed_shallow_grad_finite,
                     "routed_shallow_clip_coefficient": routed_shallow_clip_coefficient,
+                    "route_stock_cosine": alignment["route_stock_cosine"],
+                    "combined_to_stock_cosine": alignment["combined_to_stock_cosine"],
                     "combined_hypothetical_clip_coefficient": combined_hypothetical_clip_coefficient,
                     "all_grad_preclip_finite": all_grad_preclip_finite,
                     "clip_norm_partition_relative_error": clip_norm_partition_relative_error,
@@ -842,6 +902,8 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.smoke and args.controlled_amp_scale is not None:
         raise SystemExit("--smoke and --controlled-amp-scale are mutually exclusive")
+    if args.controlled_amp_scale is None and args.controlled_amp_steps != 32:
+        raise SystemExit("--controlled-amp-steps requires --controlled-amp-scale")
     manifest = _validate_protocol(args)
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite existing audit trace: {args.output}")
