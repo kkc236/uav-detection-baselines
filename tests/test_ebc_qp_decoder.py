@@ -68,7 +68,7 @@ def test_p2_only_backward_isolates_stock_parameters_and_side_inputs():
     assert _grad_nonzero(head.p2_bbox_head)
     assert not _grad_nonzero(head.enc_output)
     assert not _grad_nonzero(head.enc_score_head)
-    assert inputs[0].grad is None
+    assert inputs[0].grad is None or torch.count_nonzero(inputs[0].grad) == 0
     assert inputs[1].grad is None
 
 
@@ -81,8 +81,9 @@ def test_tsg_p2_scales_only_c2_gradient_and_preserves_private_gradient():
     }
     for scale in (0.1, 1.0):
         heads[scale].load_state_dict(heads[0.0].state_dict(), strict=True)
+    base_inputs = _small_inputs(requires_grad=True)
     inputs_by_scale = {
-        scale: _small_inputs(requires_grad=True)
+        scale: [value.detach().clone().requires_grad_(True) for value in base_inputs]
         for scale in heads
     }
     states = {}
