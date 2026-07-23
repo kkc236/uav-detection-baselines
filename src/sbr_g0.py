@@ -178,16 +178,30 @@ class RawViewRecord:
         )
         net = tuple(float(x) for x in network_xyxy)
         view_box = tuple(float(x) for x in np.asarray(inverse_letterbox_xyxy(net, transform)).tolist())
+        # Predictions on letterbox padding can map entirely outside the
+        # source view. Clip in the view frame before applying the tile offset;
+        # a fully collapsed box is a harmless padding artifact and is
+        # discarded by the caller.
+        view_w = float(view.tile.width if view.tile is not None else width)
+        view_h = float(view.tile.height if view.tile is not None else height)
+        clipped_view_box = tuple(
+            float(x)
+            for x in np.asarray(view_box, dtype=float)
+            .reshape(1, 4)
+            .clip([0.0, 0.0, 0.0, 0.0], [view_w, view_h, view_w, view_h])[0]
+        )
+        if clipped_view_box[2] <= clipped_view_box[0] or clipped_view_box[3] <= clipped_view_box[1]:
+            raise ValueError("prediction lies outside source frame")
         if view.tile is None:
             global_box = tuple(
                 float(x)
-                for x in np.asarray(view_box, dtype=float)
+                for x in np.asarray(clipped_view_box, dtype=float)
                 .reshape(1, 4)
                 .clip([0.0, 0.0, 0.0, 0.0], [float(width), float(height), float(width), float(height)])[0]
             )
         else:
             global_box = tuple(
-                float(x) for x in np.asarray(tile_to_global_xyxy(view_box, view.tile, width, height)).tolist()
+                float(x) for x in np.asarray(tile_to_global_xyxy(clipped_view_box, view.tile, width, height)).tolist()
             )
         return cls(
             image_id=str(image_id), width=int(width), height=int(height), arm=view.arm,
@@ -309,11 +323,15 @@ def collect_raw_views(
         kept = [r for r in validated if r[1] >= FrozenSBRProtocol().conf]
         kept.sort(key=lambda r: (-r[1], r[3]))
         for box, score, cls, query in kept[: FrozenSBRProtocol().max_det]:
-            records.append(
-                RawViewRecord.from_prediction(
+            try:
+                record = RawViewRecord.from_prediction(
                     view, box, score, cls, query, width, height, image_id=image_id
                 )
-            )
+            except ValueError as exc:
+                if str(exc) == "prediction lies outside source frame":
+                    continue
+                raise
+            records.append(record)
     return (tuple(records), manifest) if return_manifest else tuple(records)
 
 
