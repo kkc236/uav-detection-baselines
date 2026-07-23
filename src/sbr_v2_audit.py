@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
+import hashlib
 import json
 import math
 from numbers import Integral, Real
@@ -13,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from src.sbr_fusion import Detection, greedy_ios_clusters
+from src.sbr_metrics import evaluate_dataset
 
 
 Box = tuple[float, float, float, float]
@@ -787,6 +789,355 @@ def reconstruct_c_clusters(
     )
 
 
+def apply_large_view_guard(
+    reconstruction: CClusterReconstruction,
+    raw_detections: Iterable[AuditRawDetection],
+) -> CClusterReconstruction:
+    """Replace eligible mixed-cluster coordinates with their full-view anchor."""
+
+    raw = tuple(raw_detections)
+    _raw_detection_hash(raw)
+    member_clusters = _validated_cluster_members(reconstruction)
+    pre_cap_predictions, selected_predictions = (
+        _validated_reconstruction_predictions(reconstruction)
+    )
+    if (
+        len(pre_cap_predictions) != len(member_clusters)
+        or len(selected_predictions) != min(300, len(pre_cap_predictions))
+        or selected_predictions != pre_cap_predictions[: len(selected_predictions)]
+    ):
+        raise ValueError("standard reconstruction shape or top-300 is invalid")
+    raw_indices = {detection.original_index for detection in raw}
+    member_indices = {
+        member for cluster in member_clusters for member in cluster
+    }
+    if raw_indices != member_indices:
+        raise ValueError("cluster membership must cover exact raw provenance")
+    raw_by_index = {
+        detection.original_index: detection for detection in raw
+    }
+    guarded_pre_cap = list(pre_cap_predictions)
+    for cluster_index, cluster_member_indices in enumerate(member_clusters):
+        members = tuple(raw_by_index[index] for index in cluster_member_indices)
+        full_members = tuple(member for member in members if member.source_order == 0)
+        if not full_members or not any(member.source_order > 0 for member in members):
+            continue
+        anchor = min(
+            full_members,
+            key=lambda member: (
+                -member.score,
+                member.source_order,
+                member.query_index,
+                member.original_index,
+            ),
+        )
+        if effective_size(
+            anchor.global_xyxy, width=anchor.width, height=anchor.height
+        ) <= 96.0:
+            continue
+        guarded_pre_cap[cluster_index] = replace(
+            guarded_pre_cap[cluster_index], box=anchor.global_xyxy
+        )
+    pre_cap = tuple(guarded_pre_cap)
+    return CClusterReconstruction(
+        pre_cap_predictions=pre_cap,
+        standard_predictions=pre_cap[: len(reconstruction.standard_predictions)],
+        cluster_members=reconstruction.cluster_members,
+    )
+
+
+def _raw_detection_hash(detections: Iterable[AuditRawDetection]) -> str:
+    raw = tuple(detections)
+    if any(
+        not isinstance(detection, AuditRawDetection) or detection.arm != "C"
+        for detection in raw
+    ):
+        raise ValueError("guard provenance accepts only Arm-C detections")
+    if len({detection.original_index for detection in raw}) != len(raw):
+        raise ValueError("guard provenance raw indices must be unique")
+    payload = [
+        {
+            "image_id": detection.image_id,
+            "arm": detection.arm,
+            "width": detection.width,
+            "height": detection.height,
+            "source_order": detection.source_order,
+            "query_index": detection.query_index,
+            "class_id": detection.class_id,
+            "score": detection.score,
+            "network_xyxy": detection.network_xyxy,
+            "view_xyxy": detection.view_xyxy,
+            "global_xyxy": detection.global_xyxy,
+            "tile_bounds": detection.tile_bounds,
+            "original_index": detection.original_index,
+        }
+        for detection in raw
+    ]
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validated_cluster_members(
+    reconstruction: CClusterReconstruction,
+) -> tuple[tuple[int, ...], ...]:
+    if not isinstance(reconstruction, CClusterReconstruction):
+        raise ValueError("guard invariants require cluster reconstructions")
+    members = tuple(
+        tuple(_strict_nonnegative_int("cluster member", member) for member in cluster)
+        for cluster in reconstruction.cluster_members
+    )
+    if any(not cluster for cluster in members):
+        raise ValueError("clusters must not be empty")
+    flattened = tuple(member for cluster in members for member in cluster)
+    if len(set(flattened)) != len(flattened):
+        raise ValueError("cluster raw members must be unique")
+    return members
+
+
+def _validated_reconstruction_predictions(
+    reconstruction: CClusterReconstruction,
+) -> tuple[tuple[Detection, ...], tuple[Detection, ...]]:
+    pre_cap = tuple(reconstruction.pre_cap_predictions)
+    selected = tuple(reconstruction.standard_predictions)
+    for index, prediction in enumerate(pre_cap):
+        _prediction_fields(prediction, index)
+    for index, prediction in enumerate(selected):
+        _prediction_fields(prediction, index)
+    return pre_cap, selected
+
+
+def _same_prediction(
+    left: Detection, right: Detection, *, allow_box_difference: bool
+) -> bool:
+    left_fields = _prediction_fields(left, 0)
+    right_fields = _prediction_fields(right, 0)
+    if not allow_box_difference and left_fields[0] != right_fields[0]:
+        return False
+    return left_fields[1:] == right_fields[1:]
+
+
+def verify_guard_invariants(
+    standard: CClusterReconstruction,
+    guarded: CClusterReconstruction,
+    raw_detections: Iterable[AuditRawDetection],
+    *,
+    guarded_raw_detections: Iterable[AuditRawDetection] | None = None,
+) -> dict[str, bool]:
+    """Verify that Large-View Guard changed coordinates and nothing else."""
+
+    result = {
+        "raw_hash_equal": False,
+        "cluster_hash_equal": False,
+        "cluster_count_equal": False,
+        "scores_equal": False,
+        "classes_equal": False,
+        "selected_cluster_ids_equal": False,
+        "singleton_preservation": False,
+        "passed": False,
+    }
+    original_raw = tuple(raw_detections)
+    guarded_raw = (
+        original_raw
+        if guarded_raw_detections is None
+        else tuple(guarded_raw_detections)
+    )
+    try:
+        result["raw_hash_equal"] = (
+            _raw_detection_hash(original_raw) == _raw_detection_hash(guarded_raw)
+        )
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        standard_members = _validated_cluster_members(standard)
+        guarded_members = _validated_cluster_members(guarded)
+        result["cluster_hash_equal"] = standard_members == guarded_members
+        result["cluster_count_equal"] = (
+            len(standard.pre_cap_predictions)
+            == len(standard_members)
+            == len(guarded.pre_cap_predictions)
+            == len(guarded_members)
+        )
+    except (AttributeError, TypeError, ValueError):
+        standard_members = ()
+        guarded_members = ()
+
+    try:
+        standard_pre, standard_selected = _validated_reconstruction_predictions(
+            standard
+        )
+        guarded_pre, guarded_selected = _validated_reconstruction_predictions(
+            guarded
+        )
+        result["scores_equal"] = (
+            tuple(prediction.score for prediction in standard_pre)
+            == tuple(prediction.score for prediction in guarded_pre)
+            and tuple(prediction.score for prediction in standard_selected)
+            == tuple(prediction.score for prediction in guarded_selected)
+        )
+        result["classes_equal"] = (
+            tuple(prediction.class_id for prediction in standard_pre)
+            == tuple(prediction.class_id for prediction in guarded_pre)
+            and tuple(prediction.class_id for prediction in standard_selected)
+            == tuple(prediction.class_id for prediction in guarded_selected)
+        )
+        standard_prefix_valid = (
+            len(standard_selected) <= len(standard_pre)
+            and all(
+                _same_prediction(selected, pre_cap, allow_box_difference=False)
+                for selected, pre_cap in zip(standard_selected, standard_pre)
+            )
+        )
+        guarded_prefix_valid = (
+            len(guarded_selected) <= len(guarded_pre)
+            and all(
+                _same_prediction(selected, pre_cap, allow_box_difference=False)
+                for selected, pre_cap in zip(guarded_selected, guarded_pre)
+            )
+        )
+        result["selected_cluster_ids_equal"] = (
+            standard_prefix_valid
+            and guarded_prefix_valid
+            and tuple(
+                (prediction.source_order, prediction.query_index)
+                for prediction in standard_pre
+            )
+            == tuple(
+                (prediction.source_order, prediction.query_index)
+                for prediction in guarded_pre
+            )
+            and standard_members[: len(standard_selected)]
+            == guarded_members[: len(guarded_selected)]
+        )
+        result["singleton_preservation"] = (
+            len(standard_pre) == len(guarded_pre) == len(standard_members)
+            and all(
+                len(member_ids) != 1
+                or _same_prediction(
+                    standard_pre[index],
+                    guarded_pre[index],
+                    allow_box_difference=False,
+                )
+                for index, member_ids in enumerate(standard_members)
+            )
+        )
+    except (AttributeError, IndexError, TypeError, ValueError):
+        pass
+
+    result["passed"] = all(
+        value for key, value in result.items() if key != "passed"
+    )
+    return result
+
+
+_GUARD_DELTA_KEYS = (
+    "AP-tiny-SBR",
+    "mAP50-95",
+    "tiny_recall",
+    "AP75",
+    "AP-large-SBR",
+)
+_GUARD_INVARIANT_KEYS = (
+    "raw_hash_equal",
+    "cluster_hash_equal",
+    "cluster_count_equal",
+    "scores_equal",
+    "classes_equal",
+    "selected_cluster_ids_equal",
+    "singleton_preservation",
+    "passed",
+)
+
+
+def _guard_metric_deltas(
+    minuend: Mapping[str, Any], subtrahend: Mapping[str, Any]
+) -> dict[str, float]:
+    deltas: dict[str, float] = {}
+    for key in _GUARD_DELTA_KEYS:
+        left = minuend.get(key)
+        right = subtrahend.get(key)
+        if (
+            isinstance(left, bool)
+            or isinstance(right, bool)
+            or not isinstance(left, Real)
+            or not isinstance(right, Real)
+            or not math.isfinite(float(left))
+            or not math.isfinite(float(right))
+        ):
+            raise ValueError(f"guard metric {key} must be finite")
+        deltas[key] = float(left) - float(right)
+    return deltas
+
+
+def evaluate_guard_upper_bound(
+    a_rows: Sequence[Mapping[str, Any]],
+    c_rows: Sequence[Mapping[str, Any]],
+    v2_rows: Sequence[Mapping[str, Any]],
+    *,
+    mixed_localization_unique_large_gt: int,
+    a_tp_to_c_fn_unique_large_gt: int,
+    invariants: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Evaluate the two independent frozen SBR-V2 audit eligibility gates."""
+
+    numerator = _strict_nonnegative_int(
+        "mixed_localization_unique_large_gt",
+        mixed_localization_unique_large_gt,
+    )
+    denominator = _strict_nonnegative_int(
+        "a_tp_to_c_fn_unique_large_gt",
+        a_tp_to_c_fn_unique_large_gt,
+    )
+    if numerator > denominator:
+        raise ValueError(
+            "mixed localization count cannot exceed A-TP-to-C-FN count"
+        )
+    if not isinstance(invariants, Mapping):
+        raise ValueError("invariants must be a mapping")
+
+    a_metrics = evaluate_dataset(a_rows)
+    c_metrics = evaluate_dataset(c_rows)
+    v2_metrics = evaluate_dataset(v2_rows)
+    v2_minus_a = _guard_metric_deltas(v2_metrics, a_metrics)
+    v2_minus_c = _guard_metric_deltas(v2_metrics, c_metrics)
+    mechanism_share = (
+        float(numerator) / float(denominator) if denominator > 0 else 0.0
+    )
+    mechanism_gate = (
+        "PASS" if denominator > 0 and mechanism_share >= 0.60 else "FAIL"
+    )
+    recoverable_gate = (
+        "PASS"
+        if v2_metrics["AP-large-SBR"] >= a_metrics["AP-large-SBR"] - 0.005
+        else "FAIL"
+    )
+    normalized_invariants = {
+        key: invariants.get(key) is True for key in _GUARD_INVARIANT_KEYS
+    }
+    normalized_invariants["passed"] = all(
+        normalized_invariants[key]
+        for key in _GUARD_INVARIANT_KEYS
+        if key != "passed"
+    ) and invariants.get("passed") is True
+    return {
+        "mechanism_share_ap75": mechanism_share,
+        "mechanism_gate": mechanism_gate,
+        "a_metrics": a_metrics,
+        "c_metrics": c_metrics,
+        "v2_metrics": v2_metrics,
+        "v2_minus_a": v2_minus_a,
+        "v2_minus_c": v2_minus_c,
+        "recoverable_upper_bound_gate": recoverable_gate,
+        "invariants": normalized_invariants,
+    }
+
+
 __all__ = [
     "AuditRawDetection",
     "AuditImage",
@@ -800,4 +1151,7 @@ __all__ = [
     "group_relevant_raw_rows",
     "map_full_a_to_c",
     "reconstruct_c_clusters",
+    "apply_large_view_guard",
+    "verify_guard_invariants",
+    "evaluate_guard_upper_bound",
 ]
