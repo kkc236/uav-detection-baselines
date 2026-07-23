@@ -6,6 +6,9 @@ from src.sbr_fusion import Detection, fuse_standard, greedy_ios_clusters, inters
 
 
 def det(box, score, cls=0, source=0, query=0, **kwargs):
+    cls = kwargs.pop("class_id", cls)
+    source = kwargs.pop("source_order", kwargs.pop("source", source))
+    query = kwargs.pop("query_index", kwargs.pop("query", query))
     return Detection(
         box=box,
         score=score,
@@ -80,3 +83,30 @@ def test_nonfinite_or_invalid_inputs_fail_closed():
     bad_box = det((0, 0, math.nan, 2), 0.8)
     assert fuse_standard([good, bad_score, bad_box]) == (good,)
     assert intersection_over_smaller((0, 0, 1, 1), (0, 0, math.nan, 1)) == 0.0
+
+
+def test_protocol_rejects_nonfrozen_threshold_and_max_det():
+    d = det((0, 0, 2, 2), 0.9)
+    with pytest.raises(ValueError):
+        greedy_ios_clusters([d], ios_threshold=0.4)
+    with pytest.raises(ValueError):
+        fuse_standard([d], max_det=10)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"view_xyxy": (0, 0, math.nan, 1)},
+        {"global_xyxy": (2, 0, 1, 1)},
+        {"network_xyxy": (2, 2, 1, 3)},
+        {"tile_local_box": (0, 0, math.inf, 1)},
+        {"global_box": (0, 0, 0, 1)},
+        {"class_id": "bad"},
+        {"source": "bad"},
+        {"query": "bad"},
+    ],
+)
+def test_invalid_provenance_or_indices_are_dropped(kwargs):
+    good = det((0, 0, 2, 2), 0.9)
+    bad = det((0, 0, 2, 2), 0.8, **kwargs)
+    assert fuse_standard([good, bad]) == (good,)

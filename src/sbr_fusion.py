@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+from numbers import Integral
 from typing import Any, Iterable
 
 
@@ -40,30 +41,43 @@ class Detection:
     transform: Any = None
     tile_index: int | None = None
     members: tuple["Detection", ...] = ()
+    _metadata_valid: bool = field(default=True, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        metadata_valid = True
         object.__setattr__(self, "box", _box_tuple(self.box))
         try:
             score = float(self.score)
         except (TypeError, ValueError):
             score = math.nan
         object.__setattr__(self, "score", score)
-        try:
-            object.__setattr__(self, "class_id", int(self.class_id))
-        except (TypeError, ValueError):
-            object.__setattr__(self, "class_id", -1)
+        for name in ("class_id", "source_order", "query_index"):
+            original = getattr(self, name)
+            if isinstance(original, bool) or not isinstance(original, Integral):
+                metadata_valid = False
         for name in ("source_order", "query_index"):
             try:
                 value = int(getattr(self, name))
             except (TypeError, ValueError):
                 value = -1
+                metadata_valid = False
             object.__setattr__(self, name, value)
+        try:
+            object.__setattr__(self, "class_id", int(self.class_id))
+        except (TypeError, ValueError):
+            object.__setattr__(self, "class_id", -1)
+            metadata_valid = False
+        if self.tile_index is not None and (
+            isinstance(self.tile_index, bool) or not isinstance(self.tile_index, Integral)
+        ):
+            metadata_valid = False
         for name in ("view_xyxy", "global_xyxy", "network_xyxy", "tile_local_box", "global_box"):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _box_tuple(value))
         if self.members:
             object.__setattr__(self, "members", tuple(self.members))
+        object.__setattr__(self, "_metadata_valid", metadata_valid)
 
     @property
     def cluster_members(self) -> tuple["Detection", ...]:
@@ -91,9 +105,23 @@ def _valid_box(box: Any) -> bool:
 def _valid_detection(detection: Any) -> bool:
     return (
         isinstance(detection, Detection)
+        and detection._metadata_valid
+        and detection.class_id >= 0
+        and detection.source_order >= 0
+        and detection.query_index >= 0
         and _valid_box(detection.box)
         and math.isfinite(float(detection.score))
         and float(detection.score) >= 0.0
+        and all(
+            value is None or _valid_box(value)
+            for value in (
+                detection.view_xyxy,
+                detection.global_xyxy,
+                detection.network_xyxy,
+                detection.tile_local_box,
+                detection.global_box,
+            )
+        )
     )
 
 
@@ -130,12 +158,9 @@ def greedy_ios_clusters(
     is intentionally non-transitive.
     """
 
-    try:
-        threshold = float(ios_threshold)
-    except (TypeError, ValueError):
-        return ()
-    if not math.isfinite(threshold):
-        return ()
+    if isinstance(ios_threshold, bool) or not isinstance(ios_threshold, (int, float)) or float(ios_threshold) != 0.5:
+        raise ValueError("SBR protocol freezes ios_threshold at 0.5")
+    threshold = 0.5
     valid = [(i, d) for i, d in enumerate(detections) if _valid_detection(d)]
     ordered = [d for _, d in sorted(valid, key=_sort_key)]
     remaining = list(ordered)
@@ -189,12 +214,9 @@ def fuse_standard(
 ) -> tuple[Detection, ...]:
     """Fuse detections with standard score-weighted SBR coordinates."""
 
-    try:
-        limit = int(max_det)
-    except (TypeError, ValueError):
-        return ()
-    if limit <= 0:
-        return ()
+    if isinstance(max_det, bool) or not isinstance(max_det, Integral) or int(max_det) != 300:
+        raise ValueError("SBR protocol freezes max_det at 300")
+    limit = 300
     fused = [_fuse_cluster(cluster) for cluster in greedy_ios_clusters(detections, ios_threshold=ios_threshold)]
     return tuple(
         detection
