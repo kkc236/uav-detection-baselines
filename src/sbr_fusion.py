@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
-from numbers import Integral
+from numbers import Integral, Real
 from typing import Any, Iterable
 
 
@@ -46,10 +46,14 @@ class Detection:
     def __post_init__(self) -> None:
         metadata_valid = True
         object.__setattr__(self, "box", _box_tuple(self.box))
-        try:
-            score = float(self.score)
-        except (TypeError, ValueError):
+        original_score = self.score
+        if isinstance(original_score, bool) or not isinstance(
+            original_score, Real
+        ):
+            metadata_valid = False
             score = math.nan
+        else:
+            score = float(self.score)
         object.__setattr__(self, "score", score)
         for name in ("class_id", "source_order", "query_index"):
             original = getattr(self, name)

@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pytest
 
 from src.sbr_fusion import (
@@ -92,6 +93,17 @@ def test_nonfinite_or_invalid_inputs_fail_closed():
     bad_box = det((0, 0, math.nan, 2), 0.8)
     assert fuse_standard([good, bad_score, bad_box]) == (good,)
     assert intersection_over_smaller((0, 0, 1, 1), (0, 0, math.nan, 1)) == 0.0
+
+
+def test_score_types_fail_closed_without_rejecting_real_numeric_scores():
+    integer_score = det((0, 0, 2, 2), 1)
+    numpy_score = det((3, 0, 5, 2), np.float32(0.5))
+    boolean_score = det((6, 0, 8, 2), True)
+    string_score = det((9, 0, 11, 2), "0.8")
+
+    assert fuse_standard(
+        [integer_score, numpy_score, boolean_score, string_score]
+    ) == (integer_score, numpy_score)
 
 
 def test_protocol_rejects_nonfrozen_threshold_and_max_det():

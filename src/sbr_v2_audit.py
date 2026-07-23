@@ -115,10 +115,9 @@ class AuditRawDetection:
             object.__setattr__(
                 self, name, _strict_nonnegative_int(name, getattr(self, name))
             )
-        try:
-            score = float(self.score)
-        except (TypeError, ValueError):
-            raise ValueError("score must be finite and within [0, 1]") from None
+        if isinstance(self.score, bool) or not isinstance(self.score, Real):
+            raise ValueError("score must be finite and within [0, 1]")
+        score = float(self.score)
         if not math.isfinite(score) or score < 0.0 or score > 1.0:
             raise ValueError("score must be finite and within [0, 1]")
         object.__setattr__(self, "score", score)

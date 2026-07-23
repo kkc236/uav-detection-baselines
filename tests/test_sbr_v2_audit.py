@@ -277,6 +277,24 @@ def test_matcher_rejects_malformed_prediction_records(prediction):
         match_large_targets([prediction], [], [], width=640, height=640, iou_threshold=.75)
 
 
+def test_matcher_rejects_detection_with_boolean_score():
+    with pytest.raises(ValueError):
+        match_large_targets(
+            [Detection((0, 0, 1, 1), True, 0, 0, 0)],
+            [],
+            [],
+            width=640,
+            height=640,
+            iou_threshold=.75,
+        )
+
+
+@pytest.mark.parametrize("score", [True, "0.8"])
+def test_audit_raw_detection_rejects_non_real_score_before_conversion(score):
+    with pytest.raises(ValueError):
+        AuditRawDetection.synthetic("i.jpg", "C", score=score)
+
+
 def test_matcher_validates_ignore_boxes_even_without_eligible_predictions():
     for malformed in (
         (0, 0, float("nan"), 1),
