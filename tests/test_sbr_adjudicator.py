@@ -71,6 +71,8 @@ def test_adjudicator_recomputes_gate_without_trusting_runner_status(tmp_path):
     assert report["independent_gate"] == "SBR_G0A_PASS"
     assert report["runner_status"] == "SBR_G0A_FAIL"
     assert report["checksums_verified"] is True
+    assert report["gate_updated"] is True
+    assert json.loads((tmp_path / "evidence" / "g0_gate.json").read_text())["status"] == "SBR_G0A_PASS"
     assert json.loads((tmp_path / "evidence" / "independent_adjudication.json").read_text())["decision"] == "PASS"
 
 

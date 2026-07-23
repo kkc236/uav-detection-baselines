@@ -204,11 +204,21 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
         }
 
     atomic_write_json(root / "independent_adjudication.json", report)
-    # A valid report becomes part of the checksummed evidence set.  On a
-    # failed integrity check we retain the old manifest for forensic review.
+    # Converge the machine-readable gate only after the independent decision
+    # has been written.  A failed checksum audit is retained as-is for
+    # forensics; no tampered evidence is silently re-sealed.
     if checksum_ok:
+        gate_path = root / "g0_gate.json"
+        gate = _json(gate_path)
+        gate["status"] = "SBR_G0A_PASS" if report.get("decision") == "PASS" else "SBR_G0A_FAIL"
+        atomic_write_json(gate_path, gate)
+        report["gate_updated"] = True
+        atomic_write_json(root / "independent_adjudication.json", report)
         files = [p for p in root.iterdir() if p.is_file() and p.name != "checksums.sha256"]
         write_checksums(root / "checksums.sha256", files, root=root)
+    else:
+        report["gate_updated"] = False
+        atomic_write_json(root / "independent_adjudication.json", report)
     return report
 
 
