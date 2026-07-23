@@ -746,9 +746,10 @@ def test_guard_invariants_pass_only_for_coordinate_only_guard_output():
         "scores_equal": True,
         "classes_equal": True,
         "selected_cluster_ids_equal": True,
-        "singleton_preservation": True,
+        "singleton_preservation": 1.0,
         "passed": True,
     }
+    assert isinstance(invariants["singleton_preservation"], float)
 
 
 def test_guard_invariants_fail_closed_for_mutation_and_nonfinite_coordinates():
@@ -801,12 +802,17 @@ def test_guard_invariants_fail_closed_for_mutation_and_nonfinite_coordinates():
         "singleton_preservation",
         "passed",
     }
-    assert all(isinstance(value, bool) for value in invariants.values())
+    assert all(
+        isinstance(value, bool)
+        for key, value in invariants.items()
+        if key != "singleton_preservation"
+    )
+    assert isinstance(invariants["singleton_preservation"], float)
     assert invariants["raw_hash_equal"] is False
     assert invariants["cluster_hash_equal"] is False
     assert invariants["scores_equal"] is False
     assert invariants["selected_cluster_ids_equal"] is False
-    assert invariants["singleton_preservation"] is False
+    assert invariants["singleton_preservation"] == 0.0
     assert invariants["passed"] is False
 
 
@@ -835,6 +841,156 @@ def test_guard_invariants_reject_seed_provenance_changes_in_mixed_cluster():
 
     assert invariants["selected_cluster_ids_equal"] is False
     assert invariants["passed"] is False
+
+
+def test_guard_invariants_reject_local_only_non_singleton_coordinate_change():
+    raw = (
+        AuditRawDetection.synthetic(
+            "i.jpg", "C", source=1, query=0, score=0.9,
+            box=(0, 0, 40, 40), width=640, height=640, original_index=10,
+        ),
+        AuditRawDetection.synthetic(
+            "i.jpg", "C", source=2, query=0, score=0.8,
+            box=(2, 2, 38, 38), width=640, height=640, original_index=11,
+        ),
+    )
+    standard = reconstruct_c_clusters(raw)
+    guarded = audit_module.apply_large_view_guard(standard, raw)
+    wrong = replace(guarded.pre_cap_predictions[0], box=(1, 1, 39, 39))
+    malformed_guard = type(guarded)(
+        pre_cap_predictions=(wrong,),
+        standard_predictions=(wrong,),
+        cluster_members=guarded.cluster_members,
+    )
+
+    invariants = audit_module.verify_guard_invariants(
+        standard, malformed_guard, raw
+    )
+
+    assert invariants["cluster_hash_equal"] is False
+    assert invariants["passed"] is False
+
+
+def test_guard_invariants_reject_size_96_mixed_coordinate_change():
+    raw = (
+        AuditRawDetection.synthetic(
+            "i.jpg", "C", source=0, query=0, score=0.9,
+            box=(0, 0, 96, 96), width=640, height=640, original_index=10,
+        ),
+        AuditRawDetection.synthetic(
+            "i.jpg", "C", source=1, query=0, score=0.8,
+            box=(2, 2, 94, 94), width=640, height=640, original_index=11,
+        ),
+    )
+    standard = reconstruct_c_clusters(raw)
+    guarded = audit_module.apply_large_view_guard(standard, raw)
+    wrong = replace(guarded.pre_cap_predictions[0], box=(0, 0, 96, 96))
+    malformed_guard = type(guarded)(
+        pre_cap_predictions=(wrong,),
+        standard_predictions=(wrong,),
+        cluster_members=guarded.cluster_members,
+    )
+
+    invariants = audit_module.verify_guard_invariants(
+        standard, malformed_guard, raw
+    )
+
+    assert invariants["cluster_hash_equal"] is False
+    assert invariants["passed"] is False
+
+
+def test_guard_invariants_reject_wrong_full_anchor_for_eligible_mixed_cluster():
+    preferred = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=0, query=1, score=0.8,
+        box=(0, 0, 120, 120), width=640, height=640, original_index=20,
+    )
+    wrong_anchor = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=0, query=2, score=0.8,
+        box=(20, 20, 140, 140), width=640, height=640, original_index=10,
+    )
+    local = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=1, query=0, score=0.9,
+        box=(10, 10, 130, 130), width=640, height=640, original_index=30,
+    )
+    raw = (preferred, wrong_anchor, local)
+    standard = reconstruct_c_clusters(raw)
+    guarded = audit_module.apply_large_view_guard(standard, raw)
+    wrong = replace(
+        guarded.pre_cap_predictions[0], box=wrong_anchor.global_xyxy
+    )
+    malformed_guard = type(guarded)(
+        pre_cap_predictions=(wrong,),
+        standard_predictions=(wrong,),
+        cluster_members=guarded.cluster_members,
+    )
+
+    invariants = audit_module.verify_guard_invariants(
+        standard, malformed_guard, raw
+    )
+
+    assert guarded.pre_cap_predictions[0].box == preferred.global_xyxy
+    assert invariants["cluster_hash_equal"] is False
+    assert invariants["passed"] is False
+
+
+def test_singleton_preservation_rejects_global_frame_provenance_change():
+    only = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=0, query=0, score=0.8,
+        box=(0, 0, 40, 40), width=640, height=640, original_index=10,
+    )
+    raw = (only,)
+    standard = reconstruct_c_clusters(raw)
+    guarded = audit_module.apply_large_view_guard(standard, raw)
+    wrong = replace(
+        guarded.pre_cap_predictions[0], global_xyxy=(1, 1, 41, 41)
+    )
+    malformed_guard = type(guarded)(
+        pre_cap_predictions=(wrong,),
+        standard_predictions=(wrong,),
+        cluster_members=guarded.cluster_members,
+    )
+
+    invariants = audit_module.verify_guard_invariants(
+        standard, malformed_guard, raw
+    )
+
+    assert invariants["singleton_preservation"] == 0.0
+    assert invariants["passed"] is False
+
+
+def test_large_view_guard_changes_rank_301_pre_cap_without_changing_top300():
+    distractors = tuple(
+        AuditRawDetection.synthetic(
+            "i.jpg",
+            "C",
+            source=1,
+            query=index,
+            score=0.9,
+            box=(1000 + 10 * index, 0, 1001 + 10 * index, 1),
+            width=5000,
+            height=5000,
+            original_index=1000 + index,
+        )
+        for index in range(300)
+    )
+    full = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=0, query=400, score=0.1,
+        box=(0, 0, 800, 800), width=5000, height=5000, original_index=10,
+    )
+    local = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=1, query=400, score=0.1,
+        box=(10, 10, 790, 790), width=5000, height=5000, original_index=11,
+    )
+    raw = (*distractors, full, local)
+    standard = reconstruct_c_clusters(raw)
+
+    guarded = audit_module.apply_large_view_guard(standard, raw)
+
+    assert len(standard.pre_cap_predictions) == 301
+    assert standard.pre_cap_predictions[300].box != full.global_xyxy
+    assert guarded.pre_cap_predictions[300].box == full.global_xyxy
+    assert guarded.standard_predictions == standard.standard_predictions
+    assert guarded.cluster_members[:300] == standard.cluster_members[:300]
 
 
 def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
@@ -867,7 +1023,7 @@ def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
         "scores_equal": True,
         "classes_equal": True,
         "selected_cluster_ids_equal": True,
-        "singleton_preservation": True,
+        "singleton_preservation": 1.0,
         "passed": True,
     }
 
@@ -906,6 +1062,55 @@ def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
     assert report["v2_metrics"]["AP-large-SBR"] == pytest.approx(
         report["a_metrics"]["AP-large-SBR"]
     )
+
+
+def test_guard_upper_bound_reports_nonzero_deltas_as_v2_minus_baseline(monkeypatch):
+    a_metrics = {
+        "AP-tiny-SBR": 0.10,
+        "mAP50-95": 0.20,
+        "tiny_recall": 0.30,
+        "AP75": 0.40,
+        "AP-large-SBR": 0.50,
+    }
+    c_metrics = {
+        "AP-tiny-SBR": 0.15,
+        "mAP50-95": 0.25,
+        "tiny_recall": 0.35,
+        "AP75": 0.45,
+        "AP-large-SBR": 0.55,
+    }
+    v2_metrics = {
+        "AP-tiny-SBR": 0.30,
+        "mAP50-95": 0.40,
+        "tiny_recall": 0.50,
+        "AP75": 0.60,
+        "AP-large-SBR": 0.70,
+    }
+    responses = iter((a_metrics, c_metrics, v2_metrics))
+    monkeypatch.setattr(
+        audit_module, "evaluate_dataset", lambda _rows: next(responses)
+    )
+
+    report = audit_module.evaluate_guard_upper_bound(
+        (), (), (),
+        mixed_localization_unique_large_gt=3,
+        a_tp_to_c_fn_unique_large_gt=5,
+        invariants={"singleton_preservation": 1.0, "passed": True},
+    )
+
+    for key in {
+        "AP-tiny-SBR",
+        "mAP50-95",
+        "tiny_recall",
+        "AP75",
+        "AP-large-SBR",
+    }:
+        assert report["v2_minus_a"][key] == pytest.approx(
+            v2_metrics[key] - a_metrics[key]
+        )
+        assert report["v2_minus_c"][key] == pytest.approx(
+            v2_metrics[key] - c_metrics[key]
+        )
 
 
 def _guard_metrics(large):

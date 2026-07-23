@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 import hashlib
 import json
 import math
 from numbers import Integral, Real
+import struct
 from typing import Any
 
 import numpy as np
@@ -912,14 +913,96 @@ def _validated_reconstruction_predictions(
     return pre_cap, selected
 
 
-def _same_prediction(
-    left: Detection, right: Detection, *, allow_box_difference: bool
-) -> bool:
-    left_fields = _prediction_fields(left, 0)
-    right_fields = _prediction_fields(right, 0)
-    if not allow_box_difference and left_fields[0] != right_fields[0]:
-        return False
-    return left_fields[1:] == right_fields[1:]
+def _canonical_float(value: object, name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a finite real number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite real number")
+    return struct.pack(">d", result).hex()
+
+
+def _canonical_metadata(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Integral):
+        return ("int", int(value))
+    if isinstance(value, Real):
+        return ("float64", _canonical_float(value, "metadata"))
+    if isinstance(value, bytes):
+        return ("bytes", value.hex())
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            type(value).__module__,
+            type(value).__qualname__,
+            tuple(
+                (field.name, _canonical_metadata(getattr(value, field.name)))
+                for field in fields(value)
+            ),
+        )
+    if isinstance(value, Mapping):
+        items = [
+            (_canonical_metadata(key), _canonical_metadata(item))
+            for key, item in value.items()
+        ]
+        return ("mapping", tuple(sorted(items, key=repr)))
+    if isinstance(value, Sequence):
+        return ("sequence", tuple(_canonical_metadata(item) for item in value))
+    raise ValueError(f"unsupported provenance metadata: {type(value).__name__}")
+
+
+def _canonical_optional_box(value: Any, name: str) -> Any:
+    if value is None:
+        return None
+    box = _validated_box(name, value)
+    return tuple(_canonical_float(item, name) for item in box)
+
+
+def _canonical_detection_identity(
+    prediction: Detection, *, _seen: set[int] | None = None
+) -> tuple[Any, ...]:
+    if not isinstance(prediction, Detection):
+        raise ValueError("guard output must contain Detection records")
+    _prediction_fields(prediction, 0)
+    seen = set() if _seen is None else _seen
+    identity = id(prediction)
+    if identity in seen:
+        raise ValueError("cyclic Detection members are invalid")
+    seen.add(identity)
+    try:
+        members = tuple(
+            _canonical_detection_identity(member, _seen=seen)
+            for member in prediction.members
+        )
+    finally:
+        seen.remove(identity)
+    tile_index = (
+        None
+        if prediction.tile_index is None
+        else _strict_nonnegative_int("tile_index", prediction.tile_index)
+    )
+    return (
+        _canonical_optional_box(prediction.box, "box"),
+        _canonical_float(prediction.score, "score"),
+        _strict_nonnegative_int("class_id", prediction.class_id),
+        _strict_nonnegative_int("source_order", prediction.source_order),
+        _strict_nonnegative_int("query_index", prediction.query_index),
+        _canonical_optional_box(prediction.view_xyxy, "view_xyxy"),
+        _canonical_optional_box(prediction.global_xyxy, "global_xyxy"),
+        _canonical_optional_box(prediction.network_xyxy, "network_xyxy"),
+        _canonical_optional_box(prediction.tile_local_box, "tile_local_box"),
+        _canonical_optional_box(prediction.global_box, "global_box"),
+        _canonical_metadata(prediction.tile_bounds),
+        _canonical_metadata(prediction.transform),
+        tile_index,
+        members,
+    )
+
+
+def _same_prediction(left: Detection, right: Detection) -> bool:
+    return _canonical_detection_identity(left) == _canonical_detection_identity(
+        right
+    )
 
 
 def verify_guard_invariants(
@@ -928,7 +1011,7 @@ def verify_guard_invariants(
     raw_detections: Iterable[AuditRawDetection],
     *,
     guarded_raw_detections: Iterable[AuditRawDetection] | None = None,
-) -> dict[str, bool]:
+) -> dict[str, bool | float]:
     """Verify that Large-View Guard changed coordinates and nothing else."""
 
     result = {
@@ -938,7 +1021,7 @@ def verify_guard_invariants(
         "scores_equal": False,
         "classes_equal": False,
         "selected_cluster_ids_equal": False,
-        "singleton_preservation": False,
+        "singleton_preservation": 0.0,
         "passed": False,
     }
     original_raw = tuple(raw_detections)
@@ -957,7 +1040,6 @@ def verify_guard_invariants(
     try:
         standard_members = _validated_cluster_members(standard)
         guarded_members = _validated_cluster_members(guarded)
-        result["cluster_hash_equal"] = standard_members == guarded_members
         result["cluster_count_equal"] = (
             len(standard.pre_cap_predictions)
             == len(standard_members)
@@ -975,6 +1057,28 @@ def verify_guard_invariants(
         guarded_pre, guarded_selected = _validated_reconstruction_predictions(
             guarded
         )
+        expected = apply_large_view_guard(standard, original_raw)
+        expected_pre, expected_selected = _validated_reconstruction_predictions(
+            expected
+        )
+        expected_members = _validated_cluster_members(expected)
+        result["cluster_hash_equal"] = (
+            expected_members == guarded_members
+            and len(expected_pre) == len(guarded_pre)
+            and len(expected_selected) == len(guarded_selected)
+            and all(
+                _same_prediction(expected_prediction, guarded_prediction)
+                for expected_prediction, guarded_prediction in zip(
+                    expected_pre, guarded_pre
+                )
+            )
+            and all(
+                _same_prediction(expected_prediction, guarded_prediction)
+                for expected_prediction, guarded_prediction in zip(
+                    expected_selected, guarded_selected
+                )
+            )
+        )
         result["scores_equal"] = (
             tuple(prediction.score for prediction in standard_pre)
             == tuple(prediction.score for prediction in guarded_pre)
@@ -990,14 +1094,14 @@ def verify_guard_invariants(
         standard_prefix_valid = (
             len(standard_selected) <= len(standard_pre)
             and all(
-                _same_prediction(selected, pre_cap, allow_box_difference=False)
+                _same_prediction(selected, pre_cap)
                 for selected, pre_cap in zip(standard_selected, standard_pre)
             )
         )
         guarded_prefix_valid = (
             len(guarded_selected) <= len(guarded_pre)
             and all(
-                _same_prediction(selected, pre_cap, allow_box_difference=False)
+                _same_prediction(selected, pre_cap)
                 for selected, pre_cap in zip(guarded_selected, guarded_pre)
             )
         )
@@ -1015,23 +1119,37 @@ def verify_guard_invariants(
             and standard_members[: len(standard_selected)]
             == guarded_members[: len(guarded_selected)]
         )
-        result["singleton_preservation"] = (
-            len(standard_pre) == len(guarded_pre) == len(standard_members)
-            and all(
-                len(member_ids) != 1
-                or _same_prediction(
-                    standard_pre[index],
-                    guarded_pre[index],
-                    allow_box_difference=False,
-                )
-                for index, member_ids in enumerate(standard_members)
+        singleton_indices = tuple(
+            index
+            for index, member_ids in enumerate(standard_members)
+            if len(member_ids) == 1
+        )
+        preserved_singletons = (
+            sum(
+                _same_prediction(standard_pre[index], guarded_pre[index])
+                for index in singleton_indices
             )
+            if len(standard_pre) == len(guarded_pre) == len(standard_members)
+            else 0
+        )
+        result["singleton_preservation"] = (
+            float(preserved_singletons) / float(len(singleton_indices))
+            if singleton_indices
+            else 1.0
         )
     except (AttributeError, IndexError, TypeError, ValueError):
         pass
 
-    result["passed"] = all(
-        value for key, value in result.items() if key != "passed"
+    singleton_preservation = result["singleton_preservation"]
+    result["passed"] = (
+        isinstance(singleton_preservation, float)
+        and math.isfinite(singleton_preservation)
+        and singleton_preservation == 1.0
+        and all(
+            value is True
+            for key, value in result.items()
+            if key not in {"singleton_preservation", "passed"}
+        )
     )
     return result
 
@@ -1118,13 +1236,29 @@ def evaluate_guard_upper_bound(
         else "FAIL"
     )
     normalized_invariants = {
-        key: invariants.get(key) is True for key in _GUARD_INVARIANT_KEYS
-    }
-    normalized_invariants["passed"] = all(
-        normalized_invariants[key]
+        key: invariants.get(key) is True
         for key in _GUARD_INVARIANT_KEYS
-        if key != "passed"
-    ) and invariants.get("passed") is True
+        if key not in {"singleton_preservation", "passed"}
+    }
+    singleton_value = invariants.get("singleton_preservation")
+    if (
+        isinstance(singleton_value, bool)
+        or not isinstance(singleton_value, Real)
+        or not math.isfinite(float(singleton_value))
+        or not 0.0 <= float(singleton_value) <= 1.0
+    ):
+        normalized_invariants["singleton_preservation"] = 0.0
+    else:
+        normalized_invariants["singleton_preservation"] = float(singleton_value)
+    normalized_invariants["passed"] = (
+        invariants.get("passed") is True
+        and normalized_invariants["singleton_preservation"] == 1.0
+        and all(
+            normalized_invariants[key] is True
+            for key in _GUARD_INVARIANT_KEYS
+            if key not in {"singleton_preservation", "passed"}
+        )
+    )
     return {
         "mechanism_share_ap75": mechanism_share,
         "mechanism_gate": mechanism_gate,
