@@ -12,9 +12,11 @@ from src.sbr_artifacts import (
     atomic_write_json,
     atomic_write_jsonl_gz,
     load_dataset,
+    protocol_signature,
     sha256_file,
     write_checksums,
 )
+from src.sbr_g0 import FrozenSBRProtocol
 
 
 REQUIRED_OUTPUTS = {
@@ -113,7 +115,11 @@ def _make_input(
     )
     source_commit = "a" * 40
     source_tree = "b" * 64
-    protocol_hash = "c" * 64
+    protocol = dict(FrozenSBRProtocol().__dict__)
+    protocol_hash = protocol_signature(protocol)
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"frozen-checkpoint")
+    checkpoint_hash = sha256_file(checkpoint)
     g0_manifest = {
         "mode": "g0-a",
         "source": {
@@ -121,6 +127,8 @@ def _make_input(
             "source_tree_hash": source_tree,
         },
         "source_hash": source_commit,
+        "checkpoint_hash": checkpoint_hash,
+        "protocol": protocol,
         "protocol_hash": protocol_hash,
         "dataset_signature": dataset["dataset_signature"],
         "image_count": 1,
@@ -136,6 +144,7 @@ def _make_input(
         {
             "status": "SBR_G0A_FAIL",
             "source_hash": source_commit,
+            "checkpoint_hash": checkpoint_hash,
             "protocol_hash": protocol_hash,
             "dataset_signature": dataset["dataset_signature"],
         },
@@ -149,7 +158,9 @@ def _make_input(
             "runner_status": "SBR_G0A_FAIL",
             "checksums_verified": True,
             "source_hash": source_commit,
+            "checkpoint_hash": checkpoint_hash,
             "protocol_hash": protocol_hash,
+            "dataset_signature": dataset["dataset_signature"],
         },
     )
     write_checksums(
@@ -179,6 +190,12 @@ def _make_input(
             "raw_views": entry(evidence / "raw_views.jsonl.gz"),
             "arm_predictions": entry(evidence / "arm_predictions.jsonl.gz"),
             "g0_metrics": entry(evidence / "g0_metrics.json"),
+            "g0_gate": entry(evidence / "g0_gate.json"),
+            "independent_adjudication": entry(
+                evidence / "independent_adjudication.json"
+            ),
+            "original_checksums": entry(evidence / "checksums.sha256"),
+            "checkpoint": entry(checkpoint),
             "image_list": entry(evidence / "image_list.json"),
             "dataset_yaml": entry(dataset_yaml),
         },
@@ -406,6 +423,12 @@ def test_original_g0_must_be_sealed_immutable_fail(tmp_path: Path):
         [p for p in evidence.iterdir() if p.name != "checksums.sha256"],
         root=evidence,
     )
+    portable = json.loads(manifest.read_text(encoding="utf-8"))
+    portable["files"]["g0_gate"]["sha256"] = sha256_file(gate_path)
+    portable["files"]["original_checksums"]["sha256"] = sha256_file(
+        evidence / "checksums.sha256"
+    )
+    atomic_write_json(manifest, portable)
     with pytest.raises(ValueError, match="FAIL"):
         validate_input_manifest(manifest, tmp_path / "out")
 
@@ -447,6 +470,9 @@ def test_incomplete_c_view_manifest_fails_before_output(
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["files"]["raw_views"]["sha256"] = sha256_file(raw_path)
+    payload["files"]["original_checksums"]["sha256"] = sha256_file(
+        evidence / "checksums.sha256"
+    )
     atomic_write_json(manifest, payload)
     args = cli.build_parser().parse_args(
         ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
@@ -454,3 +480,91 @@ def test_incomplete_c_view_manifest_fails_before_output(
     with pytest.raises(ValueError, match="view_manifest"):
         cli.run(args)
     assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    "sealed_name",
+    [
+        "g0_gate.json",
+        "independent_adjudication.json",
+        "checksums.sha256",
+    ],
+)
+def test_manifest_directly_pins_original_seals(
+    tmp_path: Path, sealed_name: str
+):
+    from scripts.audit_sbr_v2 import validate_input_manifest
+
+    manifest, evidence, _ = _make_input(tmp_path)
+    target = evidence / sealed_name
+    if sealed_name == "checksums.sha256":
+        target.write_bytes(target.read_bytes() + b"\n")
+    else:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        payload["untrusted_reseal"] = True
+        atomic_write_json(target, payload)
+        write_checksums(
+            evidence / "checksums.sha256",
+            [
+                path
+                for path in evidence.iterdir()
+                if path.name != "checksums.sha256"
+            ],
+            root=evidence,
+        )
+    with pytest.raises(ValueError, match="checksum"):
+        validate_input_manifest(manifest, tmp_path / "out")
+
+
+def test_checkpoint_bytes_must_match_all_frozen_provenance(tmp_path: Path):
+    from scripts.audit_sbr_v2 import validate_input_manifest
+
+    manifest, _, _ = _make_input(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    checkpoint = (manifest.parent / payload["files"]["checkpoint"]["uri"]).resolve()
+    checkpoint.write_bytes(b"different-checkpoint")
+    payload["files"]["checkpoint"]["sha256"] = sha256_file(checkpoint)
+    atomic_write_json(manifest, payload)
+    with pytest.raises(ValueError, match="checkpoint"):
+        validate_input_manifest(manifest, tmp_path / "out")
+
+
+def test_protocol_payload_is_recomputed_and_frozen_exact(tmp_path: Path):
+    from scripts.audit_sbr_v2 import validate_input_manifest
+
+    manifest, evidence, _ = _make_input(tmp_path)
+    g0_path = evidence / "g0_manifest.json"
+    g0 = json.loads(g0_path.read_text(encoding="utf-8"))
+    g0["protocol"]["max_det"] = 301
+    atomic_write_json(g0_path, g0)
+    write_checksums(
+        evidence / "checksums.sha256",
+        [p for p in evidence.iterdir() if p.name != "checksums.sha256"],
+        root=evidence,
+    )
+    portable = json.loads(manifest.read_text(encoding="utf-8"))
+    portable["files"]["g0_manifest"]["sha256"] = sha256_file(g0_path)
+    portable["files"]["original_checksums"]["sha256"] = sha256_file(
+        evidence / "checksums.sha256"
+    )
+    atomic_write_json(manifest, portable)
+    with pytest.raises(ValueError, match="protocol"):
+        validate_input_manifest(manifest, tmp_path / "out")
+
+
+def test_dataset_image_order_must_match_frozen_list_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    manifest, _, _ = _make_input(tmp_path)
+    real_loader = cli.load_dataset
+
+    def reordered(*args, **kwargs):
+        dataset = real_loader(*args, **kwargs)
+        dataset["image_list"] = ["unexpected.jpg", *dataset["image_list"]]
+        return dataset
+
+    monkeypatch.setattr(cli, "load_dataset", reordered)
+    with pytest.raises(ValueError, match="order"):
+        cli.validate_input_manifest(manifest, tmp_path / "out")

@@ -29,11 +29,12 @@ from src.sbr_artifacts import (
     environment_info,
     git_provenance,
     load_dataset,
+    protocol_signature,
     sha256_bytes,
     sha256_file,
     write_checksums,
 )
-from src.sbr_g0 import build_arm_views
+from src.sbr_g0 import FrozenSBRProtocol, build_arm_views
 from src.sbr_v2_audit import (
     AuditImage,
     AuditRawDetection,
@@ -84,8 +85,16 @@ ORIGINAL_G0_FILE_KEYS = (
     "raw_views",
     "arm_predictions",
     "g0_metrics",
+    "g0_gate",
+    "independent_adjudication",
+    "original_checksums",
 )
-ALL_FILE_KEYS = ORIGINAL_G0_FILE_KEYS + ("image_list", "dataset_yaml")
+ROOT_CHECKSUM_SEALED_KEYS = ORIGINAL_G0_FILE_KEYS[:-1]
+ALL_FILE_KEYS = ORIGINAL_G0_FILE_KEYS + (
+    "checkpoint",
+    "image_list",
+    "dataset_yaml",
+)
 HEX = frozenset("0123456789abcdefABCDEF")
 VIEW_BY_SOURCE = ("full", "TL", "TR", "BL", "BR")
 INVARIANT_BOOL_KEYS = (
@@ -116,6 +125,7 @@ class ValidatedAuditInput:
     g0_gate_sha256: str
     independent_adjudication_sha256: str
     original_checksums_sha256: str
+    checkpoint_sha256: str
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -201,8 +211,7 @@ def _manifest_file_entries(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
     return entries
 
 
-def _verify_original_checksums(root: Path) -> set[str]:
-    checksum_path = root / "checksums.sha256"
+def _verify_original_checksums(root: Path, checksum_path: Path) -> set[str]:
     if not checksum_path.is_file():
         raise ValueError("original evidence checksums.sha256 is missing")
     listed: set[str] = set()
@@ -307,22 +316,18 @@ def validate_input_manifest(
     _validate_output_path(
         Path(output), evidence_root, [path, *resolved_paths.values(), dataset_root]
     )
-    listed = _verify_original_checksums(evidence_root)
-    for key in ORIGINAL_G0_FILE_KEYS:
+    listed = _verify_original_checksums(
+        evidence_root, resolved_paths["original_checksums"]
+    )
+    for key in ROOT_CHECKSUM_SEALED_KEYS:
         relative = resolved_paths[key].relative_to(evidence_root).as_posix()
         if relative not in listed:
             raise ValueError(f"{key} is not sealed by original checksums")
 
     g0_manifest_raw = _read_json(resolved_paths["g0_manifest"])
     g0_metrics_raw = _read_json(resolved_paths["g0_metrics"])
-    gate_path = evidence_root / "g0_gate.json"
-    independent_path = evidence_root / "independent_adjudication.json"
-    if not gate_path.is_file() or not independent_path.is_file():
-        raise ValueError("original G0 gate/adjudication is missing")
-    gate_relative = gate_path.relative_to(evidence_root).as_posix()
-    independent_relative = independent_path.relative_to(evidence_root).as_posix()
-    if gate_relative not in listed or independent_relative not in listed:
-        raise ValueError("original G0 gate/adjudication is not sealed")
+    gate_path = resolved_paths["g0_gate"]
+    independent_path = resolved_paths["independent_adjudication"]
     g0_gate_raw = _read_json(gate_path)
     independent = _read_json(independent_path)
     if not isinstance(g0_manifest_raw, Mapping) or g0_manifest_raw.get("mode") != "g0-a":
@@ -352,6 +357,14 @@ def validate_input_manifest(
     )
     if g0_tree != source_tree:
         raise ValueError("G0 source tree provenance disagrees")
+    g0_protocol = g0_manifest.get("protocol")
+    frozen_protocol = dict(FrozenSBRProtocol().__dict__)
+    if not isinstance(g0_protocol, Mapping) or canonical_json_bytes(
+        dict(g0_protocol)
+    ) != canonical_json_bytes(frozen_protocol):
+        raise ValueError("G0 protocol is not canonical-exact frozen SBR")
+    if protocol_signature(dict(g0_protocol)) != protocol_hash:
+        raise ValueError("G0 protocol payload/hash disagreement")
     if (
         not isinstance(independent, Mapping)
         or independent.get("checksums_verified") is not True
@@ -362,6 +375,14 @@ def validate_input_manifest(
     expected_dataset_signature = str(
         g0_manifest.get("dataset_signature", "")
     ).lower()
+    checkpoint_hash = expected_hashes["checkpoint"]
+    if any(
+        str(record.get("checkpoint_hash", "")).lower() != checkpoint_hash
+        for record in (g0_manifest, g0_gate, independent)
+    ):
+        raise ValueError(
+            "checkpoint bytes and G0 manifest/gate/adjudication disagree"
+        )
     if (
         g0_gate.get("status") != "SBR_G0A_FAIL"
         or str(g0_gate.get("source_hash", "")).lower() != source_commit
@@ -410,6 +431,17 @@ def validate_input_manifest(
         != dataset_signature
     ):
         raise ValueError("dataset signature disagrees with G0 evidence")
+    if (
+        str(g0_gate.get("dataset_signature", "")).lower()
+        != dataset_signature
+        or str(independent.get("dataset_signature", "")).lower()
+        != dataset_signature
+    ):
+        raise ValueError(
+            "dataset signature disagrees across G0 gate/adjudication"
+        )
+    if tuple(dataset["image_list"]) != image_list:
+        raise ValueError("dataset image order disagrees with frozen image_list")
     by_image = {record["relative_path"]: record for record in dataset["images"]}
     if set(by_image) != set(image_list):
         raise ValueError("dataset image set disagrees with exact image_list")
@@ -431,8 +463,9 @@ def validate_input_manifest(
         g0_gate_sha256=sha256_file(gate_path),
         independent_adjudication_sha256=sha256_file(independent_path),
         original_checksums_sha256=sha256_file(
-            evidence_root / "checksums.sha256"
+            resolved_paths["original_checksums"]
         ),
+        checkpoint_sha256=checkpoint_hash,
     )
 
 
@@ -987,6 +1020,7 @@ def _write_final_evidence(
                 "commit": validated.manifest["source"]["commit"],
                 "tree": validated.manifest["source"]["tree"],
                 "protocol_hash": validated.manifest["protocol_hash"],
+                "checkpoint_sha256": validated.checkpoint_sha256,
                 "original_evidence_root_uri": _entry_uri(
                     validated.manifest["original_evidence_root"],
                     "original_evidence_root",
@@ -1010,6 +1044,7 @@ def _write_final_evidence(
                     validated.independent_adjudication_sha256
                 ),
                 "checksums_sha256": validated.original_checksums_sha256,
+                "checkpoint_sha256": validated.checkpoint_sha256,
             },
             "limitations": [
                 "A/C arm-image pairs with zero retained raw detections cannot carry a row-level view_manifest; their execution completeness is inherited from the sealed immutable G0-A evidence."
