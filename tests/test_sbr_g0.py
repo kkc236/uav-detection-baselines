@@ -127,3 +127,13 @@ def test_assemble_paired_arms_requires_identical_c_d_inputs():
     pair = assemble_paired_arms(raw, width=8, height=8)
     assert pair["C"]["raw_hash"] == pair["D"]["raw_hash"]
     assert pair["C"]["cluster_hash"] == pair["D"]["cluster_hash"]
+
+
+def test_collect_manifest_and_missing_view_fail_closed():
+    from src.sbr_g0 import assemble_arm, collect_raw_views
+
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    raw, manifest = collect_raw_views(image, "C", lambda square, imgsz: [], return_manifest=True)
+    assert len(manifest) == 5 and all(item["executed"] for item in manifest)
+    with pytest.raises(ValueError):
+        assemble_arm(raw, "C", width=8, height=8, view_manifest=manifest[:-1])

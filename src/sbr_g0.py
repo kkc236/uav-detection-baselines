@@ -214,25 +214,13 @@ def _letterbox(image: np.ndarray, imgsz: int) -> np.ndarray:
         raise ValueError("image must have at least two dimensions")
     try:
         from ultralytics.data.augment import LetterBox
-    except Exception:
-        LetterBox = None
-    if LetterBox is not None:
-        out = LetterBox(
-            new_shape=(imgsz, imgsz), auto=False, scale_fill=False,
-            scaleup=False, center=True, padding_value=114,
-        )(image=arr)
-        return np.asarray(out)
-    h, w = arr.shape[:2]
-    gain = min(float(imgsz) / w, float(imgsz) / h, 1.0)
-    rw, rh = max(1, int(round(w * gain))), max(1, int(round(h * gain)))
-    ys = np.minimum((np.arange(rh) / gain).astype(int), h - 1)
-    xs = np.minimum((np.arange(rw) / gain).astype(int), w - 1)
-    resized = arr[ys[:, None], xs[None, :]]
-    shape = (imgsz, imgsz) + arr.shape[2:]
-    out = np.full(shape, 114, dtype=arr.dtype)
-    px, py = (imgsz - rw) // 2, (imgsz - rh) // 2
-    out[py : py + rh, px : px + rw] = resized
-    return out
+    except Exception as exc:
+        raise RuntimeError("Ultralytics LetterBox is required for production SBR inference") from exc
+    out = LetterBox(
+        new_shape=(imgsz, imgsz), auto=False, scale_fill=False,
+        scaleup=False, center=True, padding_value=114,
+    )(image=arr)
+    return np.asarray(out)
 
 
 def _prediction_rows(result: Any) -> list[tuple[Sequence[float], float, int, int]]:
@@ -275,7 +263,8 @@ def collect_raw_views(
     *,
     image_id: str = "image",
     protocol: FrozenSBRProtocol | None = None,
-) -> tuple[RawViewRecord, ...]:
+    return_manifest: bool = False,
+) -> tuple[RawViewRecord, ...] | tuple[tuple[RawViewRecord, ...], list[dict[str, Any]]]:
     """Run each unique arm view once and return serializable raw records."""
 
     arr = np.asarray(image)
@@ -283,10 +272,12 @@ def collect_raw_views(
         raise ValueError("image must have at least two dimensions")
     height, width = arr.shape[:2]
     records: list[RawViewRecord] = []
+    manifest: list[dict[str, Any]] = []
     for view in build_arm_views(arm, width, height, protocol):
         crop = arr if view.tile is None else arr[view.tile.top : view.tile.bottom, view.tile.left : view.tile.right]
         square = _letterbox(crop, view.imgsz)
         rows = _prediction_rows(predict_square(square, view.imgsz))
+        manifest.append({"view_id": view.view_id, "source_order": view.source_order, "executed": True})
         validated = []
         for box, score, cls, query in rows:
             try:
@@ -312,7 +303,7 @@ def collect_raw_views(
                     view, box, score, cls, query, width, height, image_id=image_id
                 )
             )
-    return tuple(records)
+    return (tuple(records), manifest) if return_manifest else tuple(records)
 
 
 def _canonical(value: Any) -> bytes:
@@ -326,6 +317,7 @@ def assemble_arm(
     width: int,
     height: int,
     protocol: FrozenSBRProtocol | None = None,
+    view_manifest: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Fuse cached raw records into one arm result with deterministic hashes."""
 
@@ -334,10 +326,18 @@ def assemble_arm(
     if len(records) > p.max_det * max(1, len(build_arm_views(arm, width, height, p))):
         raise ValueError("raw records exceed protocol maximum")
     expected_views = {v.view_id: v for v in build_arm_views(arm, width, height, p)}
+    if view_manifest is not None:
+        manifest_ids = {str(item.get("view_id")) for item in view_manifest if item.get("executed")}
+        if manifest_ids != set(expected_views):
+            raise ValueError("view execution manifest is incomplete")
     per_view: dict[str, int] = {}
     for r in records:
         if not isinstance(r, RawViewRecord):
             raise ValueError("assemble_arm requires RawViewRecord values")
+        if arm.upper() != "D" and r.arm != arm.upper():
+            raise ValueError("raw record arm mismatch")
+        if arm.upper() == "D" and r.arm != "C":
+            raise ValueError("Arm D accepts only explicit Arm C raw records")
         if r.width != width or r.height != height:
             raise ValueError("raw record image dimensions mismatch")
         if r.view_id not in expected_views or r.source_order != expected_views[r.view_id].source_order:
@@ -348,9 +348,17 @@ def assemble_arm(
                     raise ValueError("raw record view metadata mismatch")
             else:
                 raise ValueError("raw record view metadata mismatch")
+        expected_tile = expected_views.get(r.view_id)
+        if expected_tile is None and arm.upper() == "D" and r.arm == "C":
+            expected_tile = {v.view_id: v for v in build_arm_views("C", width, height, p)}.get(r.view_id)
+        expected_bounds = None if expected_tile is None or expected_tile.tile is None else expected_tile.tile.bounds
+        if r.tile_bounds != expected_bounds:
+            raise ValueError("raw record tile metadata mismatch")
         per_view[r.view_id] = per_view.get(r.view_id, 0) + 1
     if any(count > p.max_det for count in per_view.values()):
         raise ValueError("per-view raw records exceed max_det")
+    if view_manifest is None and set(per_view) != set(expected_views):
+        raise ValueError("view execution manifest required for zero-detection views")
     for r in records:
         if r.tile_bounds is not None:
             tw = r.tile_bounds[2] - r.tile_bounds[0]
@@ -395,14 +403,15 @@ def assemble_arm(
 def assemble_paired_arms(
     raw_records: Iterable[RawViewRecord], *, width: int, height: int,
     protocol: FrozenSBRProtocol | None = None,
+    view_manifest: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Assemble C and D from one immutable C raw-view collection."""
 
     records = tuple(raw_records)
     if any(r.arm != "C" for r in records):
         raise ValueError("paired C/D assembly requires Arm C raw records")
-    c = assemble_arm(records, "C", width=width, height=height, protocol=protocol)
-    d = assemble_arm(records, "D", width=width, height=height, protocol=protocol)
+    c = assemble_arm(records, "C", width=width, height=height, protocol=protocol, view_manifest=view_manifest)
+    d = assemble_arm(records, "D", width=width, height=height, protocol=protocol, view_manifest=view_manifest)
     if c["raw_hash"] != d["raw_hash"] or c["cluster_hash"] != d["cluster_hash"]:
         raise ValueError("C/D raw or cluster hashes differ")
     return {"C": c, "D": d}
