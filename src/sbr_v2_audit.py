@@ -743,6 +743,7 @@ def reconstruct_c_clusters(
         for detection in raw
     ):
         raise ValueError("cluster reconstruction accepts only Arm-C detections")
+    _validate_c_raw_provenance(raw)
     if raw:
         image_signature = {(item.image_id, item.width, item.height) for item in raw}
         if len(image_signature) != 1:
@@ -798,6 +799,9 @@ def apply_large_view_guard(
 
     raw = tuple(raw_detections)
     _raw_detection_hash(raw)
+    rebuilt = reconstruct_c_clusters(raw)
+    if not _same_reconstruction(reconstruction, rebuilt):
+        raise ValueError("standard reconstruction does not match supplied raw data")
     member_clusters = _validated_cluster_members(reconstruction)
     pre_cap_predictions, selected_predictions = (
         _validated_reconstruction_predictions(reconstruction)
@@ -854,6 +858,7 @@ def _raw_detection_hash(detections: Iterable[AuditRawDetection]) -> str:
         for detection in raw
     ):
         raise ValueError("guard provenance accepts only Arm-C detections")
+    _validate_c_raw_provenance(raw)
     if len({detection.original_index for detection in raw}) != len(raw):
         raise ValueError("guard provenance raw indices must be unique")
     payload = [
@@ -882,6 +887,18 @@ def _raw_detection_hash(detections: Iterable[AuditRawDetection]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_c_raw_provenance(
+    detections: Iterable[AuditRawDetection],
+) -> None:
+    for detection in detections:
+        if not 0 <= detection.source_order <= 4:
+            raise ValueError("Arm-C source_order must be within [0,4]")
+        if detection.source_order == 0 and detection.tile_bounds is not None:
+            raise ValueError("Arm-C source 0 must be a full-view detection")
+        if detection.source_order > 0 and detection.tile_bounds is None:
+            raise ValueError("Arm-C sources 1..4 must be local detections")
 
 
 def _validated_cluster_members(
@@ -1003,6 +1020,33 @@ def _same_prediction(left: Detection, right: Detection) -> bool:
     return _canonical_detection_identity(left) == _canonical_detection_identity(
         right
     )
+
+
+def _same_reconstruction(
+    left: CClusterReconstruction, right: CClusterReconstruction
+) -> bool:
+    try:
+        left_members = _validated_cluster_members(left)
+        right_members = _validated_cluster_members(right)
+        left_pre, left_selected = _validated_reconstruction_predictions(left)
+        right_pre, right_selected = _validated_reconstruction_predictions(right)
+        return (
+            left_members == right_members
+            and len(left_pre) == len(right_pre)
+            and len(left_selected) == len(right_selected)
+            and all(
+                _same_prediction(left_prediction, right_prediction)
+                for left_prediction, right_prediction in zip(left_pre, right_pre)
+            )
+            and all(
+                _same_prediction(left_prediction, right_prediction)
+                for left_prediction, right_prediction in zip(
+                    left_selected, right_selected
+                )
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def verify_guard_invariants(
@@ -1193,6 +1237,250 @@ def _guard_metric_deltas(
     return deltas
 
 
+_EVIDENCE_ROW_KEYS = frozenset(
+    {
+        "image_id",
+        "width",
+        "height",
+        "pred_boxes",
+        "pred_scores",
+        "pred_classes",
+        "pred_source",
+        "pred_query",
+        "gt_boxes",
+        "gt_classes",
+        "ignore_boxes",
+        "effective_gain",
+    }
+)
+
+
+def _row_sequence(value: Any, name: str) -> tuple[Any, ...]:
+    if isinstance(value, (str, bytes, Mapping)):
+        raise ValueError(f"{name} must be an explicit sequence")
+    try:
+        return tuple(value)
+    except TypeError:
+        raise ValueError(f"{name} must be an explicit sequence") from None
+
+
+def _row_boxes(value: Any, name: str) -> tuple[Box, ...]:
+    boxes = tuple(
+        _validated_box(name, box) for box in _row_sequence(value, name)
+    )
+    if any(coordinate < 0.0 for box in boxes for coordinate in box):
+        raise ValueError(f"{name} must use nonnegative coordinates")
+    return boxes
+
+
+def _validate_evidence_rows(
+    rows: Sequence[Mapping[str, Any]], *, arm: str
+) -> tuple[dict[str, Any], ...]:
+    try:
+        raw_rows = tuple(rows)
+    except TypeError:
+        raise ValueError(f"{arm} evidence rows must be a sequence") from None
+    if not raw_rows:
+        raise ValueError(f"{arm} evidence rows must be nonempty")
+    normalized: list[dict[str, Any]] = []
+    image_ids: set[str] = set()
+    for row_index, row in enumerate(raw_rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{arm} row {row_index} must be a mapping")
+        missing = _EVIDENCE_ROW_KEYS.difference(row)
+        if missing:
+            raise ValueError(
+                f"{arm} row {row_index} is missing explicit keys: "
+                + ",".join(sorted(missing))
+            )
+        image_id = row["image_id"]
+        if not isinstance(image_id, str) or not image_id:
+            raise ValueError("image_id must be a nonempty exact string")
+        if image_id in image_ids:
+            raise ValueError(f"duplicate {arm} image_id: {image_id!r}")
+        image_ids.add(image_id)
+        width = _positive_dimension("width", row["width"])
+        height = _positive_dimension("height", row["height"])
+        pred_boxes = _row_boxes(row["pred_boxes"], "pred_boxes")
+        pred_scores = tuple(
+            _validated_score("pred_score", score)
+            for score in _row_sequence(row["pred_scores"], "pred_scores")
+        )
+        pred_classes = tuple(
+            _strict_nonnegative_int("pred_class", class_id)
+            for class_id in _row_sequence(
+                row["pred_classes"], "pred_classes"
+            )
+        )
+        pred_source = tuple(
+            _strict_nonnegative_int("pred_source", source)
+            for source in _row_sequence(row["pred_source"], "pred_source")
+        )
+        pred_query = tuple(
+            _strict_nonnegative_int("pred_query", query)
+            for query in _row_sequence(row["pred_query"], "pred_query")
+        )
+        prediction_count = len(pred_boxes)
+        if any(
+            len(values) != prediction_count
+            for values in (
+                pred_scores,
+                pred_classes,
+                pred_source,
+                pred_query,
+            )
+        ):
+            raise ValueError("prediction evidence lengths must agree")
+        if arm == "A":
+            if any(source != 0 for source in pred_source):
+                raise ValueError("Arm-A evidence pred_source must be all zero")
+        elif arm in {"C", "V2"}:
+            if any(source > 4 for source in pred_source):
+                raise ValueError(f"Arm-{arm} pred_source must be within [0,4]")
+        else:
+            raise ValueError(f"unsupported evidence arm: {arm}")
+        gt_boxes = _row_boxes(row["gt_boxes"], "gt_boxes")
+        gt_classes = tuple(
+            _strict_nonnegative_int("gt_class", class_id)
+            for class_id in _row_sequence(row["gt_classes"], "gt_classes")
+        )
+        if len(gt_boxes) != len(gt_classes):
+            raise ValueError("ground-truth evidence lengths must agree")
+        ignore_boxes = _row_boxes(row["ignore_boxes"], "ignore_boxes")
+        effective_gain = row["effective_gain"]
+        if isinstance(effective_gain, bool) or not isinstance(
+            effective_gain, Real
+        ):
+            raise ValueError("effective_gain must be a finite positive scalar")
+        effective_gain = float(effective_gain)
+        expected_gain = min(
+            640.0 / float(width), 640.0 / float(height), 1.0
+        )
+        if (
+            not math.isfinite(effective_gain)
+            or effective_gain <= 0.0
+            or not math.isclose(
+                effective_gain, expected_gain, rel_tol=0.0, abs_tol=1e-12
+            )
+        ):
+            raise ValueError("effective_gain disagrees with frozen 640 gain")
+        normalized.append(
+            {
+                "image_id": image_id,
+                "width": width,
+                "height": height,
+                "pred_boxes": pred_boxes,
+                "pred_scores": pred_scores,
+                "pred_classes": pred_classes,
+                "pred_source": pred_source,
+                "pred_query": pred_query,
+                "gt_boxes": gt_boxes,
+                "gt_classes": gt_classes,
+                "ignore_boxes": ignore_boxes,
+                "effective_gain": effective_gain,
+            }
+        )
+    return tuple(normalized)
+
+
+def _ground_truth_signature(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        row["image_id"],
+        row["width"],
+        row["height"],
+        tuple(
+            _canonical_optional_box(box, "gt_box")
+            for box in row["gt_boxes"]
+        ),
+        tuple(row["gt_classes"]),
+        tuple(
+            _canonical_optional_box(box, "ignore_box")
+            for box in row["ignore_boxes"]
+        ),
+        _canonical_float(row["effective_gain"], "effective_gain"),
+    )
+
+
+def _validate_aligned_evidence(
+    a_rows: Sequence[Mapping[str, Any]],
+    c_rows: Sequence[Mapping[str, Any]],
+    v2_rows: Sequence[Mapping[str, Any]],
+) -> tuple[
+    tuple[dict[str, Any], ...],
+    tuple[dict[str, Any], ...],
+    tuple[dict[str, Any], ...],
+]:
+    normalized_a = _validate_evidence_rows(a_rows, arm="A")
+    normalized_c = _validate_evidence_rows(c_rows, arm="C")
+    normalized_v2 = _validate_evidence_rows(v2_rows, arm="V2")
+    if not len(normalized_a) == len(normalized_c) == len(normalized_v2):
+        raise ValueError("A/C/V2 evidence rows must have equal lengths")
+    for a_row, c_row, v2_row in zip(
+        normalized_a, normalized_c, normalized_v2
+    ):
+        signature = _ground_truth_signature(a_row)
+        if (
+            _ground_truth_signature(c_row) != signature
+            or _ground_truth_signature(v2_row) != signature
+        ):
+            raise ValueError(
+                "A/C/V2 image order or ground-truth evidence disagrees"
+            )
+    return normalized_a, normalized_c, normalized_v2
+
+
+def _evidence_predictions(row: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {
+            "box": box,
+            "score": score,
+            "class_id": class_id,
+            "source_order": source,
+            "query_index": query,
+            "original_index": index,
+        }
+        for index, (box, score, class_id, source, query) in enumerate(
+            zip(
+                row["pred_boxes"],
+                row["pred_scores"],
+                row["pred_classes"],
+                row["pred_source"],
+                row["pred_query"],
+            )
+        )
+    )
+
+
+def _recompute_a_tp_to_c_fn(
+    a_rows: Sequence[Mapping[str, Any]],
+    c_rows: Sequence[Mapping[str, Any]],
+) -> int:
+    total = 0
+    for a_row, c_row in zip(a_rows, c_rows):
+        a_match = match_large_targets(
+            _evidence_predictions(a_row),
+            a_row["gt_boxes"],
+            a_row["gt_classes"],
+            ignore_boxes=a_row["ignore_boxes"],
+            width=a_row["width"],
+            height=a_row["height"],
+            iou_threshold=0.75,
+        )
+        c_match = match_large_targets(
+            _evidence_predictions(c_row),
+            c_row["gt_boxes"],
+            c_row["gt_classes"],
+            ignore_boxes=c_row["ignore_boxes"],
+            width=c_row["width"],
+            height=c_row["height"],
+            iou_threshold=0.75,
+        )
+        total += len(
+            set(a_match.tp_gt_indices).difference(c_match.tp_gt_indices)
+        )
+    return total
+
+
 def evaluate_guard_upper_bound(
     a_rows: Sequence[Mapping[str, Any]],
     c_rows: Sequence[Mapping[str, Any]],
@@ -1219,9 +1507,20 @@ def evaluate_guard_upper_bound(
     if not isinstance(invariants, Mapping):
         raise ValueError("invariants must be a mapping")
 
-    a_metrics = evaluate_dataset(a_rows)
-    c_metrics = evaluate_dataset(c_rows)
-    v2_metrics = evaluate_dataset(v2_rows)
+    normalized_a, normalized_c, normalized_v2 = _validate_aligned_evidence(
+        a_rows, c_rows, v2_rows
+    )
+    recomputed_denominator = _recompute_a_tp_to_c_fn(
+        normalized_a, normalized_c
+    )
+    if denominator != recomputed_denominator:
+        raise ValueError(
+            "A-TP-to-C-FN denominator disagrees with AP75 evidence"
+        )
+
+    a_metrics = evaluate_dataset(normalized_a)
+    c_metrics = evaluate_dataset(normalized_c)
+    v2_metrics = evaluate_dataset(normalized_v2)
     v2_minus_a = _guard_metric_deltas(v2_metrics, a_metrics)
     v2_minus_c = _guard_metric_deltas(v2_metrics, c_metrics)
     mechanism_share = (

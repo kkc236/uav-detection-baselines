@@ -697,6 +697,60 @@ def test_large_view_guard_rejects_malformed_raw_provenance(malformed):
         audit_module.apply_large_view_guard(standard, malformed_raw)
 
 
+def test_large_view_guard_rejects_standard_not_rebuilt_from_supplied_raw():
+    full = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=0, query=0, score=0.8,
+        box=(0, 0, 120, 120), width=640, height=640, original_index=10,
+    )
+    local = AuditRawDetection.synthetic(
+        "i.jpg", "C", source=1, query=0, score=0.9,
+        box=(10, 10, 110, 110), width=640, height=640, original_index=11,
+    )
+    standard = reconstruct_c_clusters((full, local))
+    mutated_full = replace(
+        full,
+        network_xyxy=(20, 20, 140, 140),
+        view_xyxy=(20, 20, 140, 140),
+        global_xyxy=(20, 20, 140, 140),
+    )
+
+    with pytest.raises(ValueError):
+        audit_module.apply_large_view_guard(
+            standard, (mutated_full, local)
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        (
+            AuditRawDetection.synthetic(
+                "i.jpg", "C", source=5, original_index=10
+            ),
+        ),
+        (
+            AuditRawDetection.synthetic(
+                "i.jpg", "C", source=99, original_index=10
+            ),
+        ),
+        (
+            AuditRawDetection.synthetic(
+                "i.jpg", "C", source=0, tile_bounds=(0, 0, 100, 100),
+                original_index=10,
+            ),
+        ),
+        (
+            AuditRawDetection.synthetic(
+                "i.jpg", "C", source=1, tile_bounds=None, original_index=10
+            ),
+        ),
+    ],
+)
+def test_c_reconstruction_rejects_invalid_source_provenance(raw):
+    with pytest.raises(ValueError):
+        reconstruct_c_clusters(raw)
+
+
 def test_guard_invariants_pass_only_for_coordinate_only_guard_output():
     full = AuditRawDetection.synthetic(
         "i.jpg",
@@ -993,29 +1047,44 @@ def test_large_view_guard_changes_rank_301_pre_cap_without_changing_top300():
     assert guarded.cluster_members[:300] == standard.cluster_members[:300]
 
 
-def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
-    common = {
-        "gt_boxes": [(0, 0, 8, 8), (100, 100, 220, 220)],
-        "gt_classes": [0, 0],
+def _evidence_row(image_id, *, predicts=True, source=0):
+    gt_box = (0, 0, 120, 120)
+    return {
+        "image_id": image_id,
+        "width": 640,
+        "height": 640,
+        "pred_boxes": [gt_box] if predicts else [],
+        "pred_scores": [0.9] if predicts else [],
+        "pred_classes": [0] if predicts else [],
+        "pred_source": [source] if predicts else [],
+        "pred_query": [0] if predicts else [],
+        "gt_boxes": [gt_box],
+        "gt_classes": [0],
+        "ignore_boxes": [],
         "effective_gain": 1.0,
     }
+
+
+def _upper_bound_evidence(count=1, *, c_recovers=False):
     a_rows = [
-        {
-            **common,
-            "pred_boxes": [(0, 0, 8, 8), (100, 100, 220, 220)],
-            "pred_scores": [0.9, 0.8],
-            "pred_classes": [0, 0],
-        }
+        _evidence_row(f"i{index}.jpg", predicts=True, source=0)
+        for index in range(count)
     ]
     c_rows = [
-        {
-            **common,
-            "pred_boxes": [(0, 0, 8, 8)],
-            "pred_scores": [0.9],
-            "pred_classes": [0],
-        }
+        _evidence_row(
+            f"i{index}.jpg", predicts=c_recovers, source=0
+        )
+        for index in range(count)
     ]
-    v2_rows = list(a_rows)
+    v2_rows = [
+        _evidence_row(f"i{index}.jpg", predicts=True, source=0)
+        for index in range(count)
+    ]
+    return a_rows, c_rows, v2_rows
+
+
+def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
+    a_rows, c_rows, v2_rows = _upper_bound_evidence()
     invariants = {
         "raw_hash_equal": True,
         "cluster_hash_equal": True,
@@ -1031,8 +1100,8 @@ def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
         a_rows,
         c_rows,
         v2_rows,
-        mixed_localization_unique_large_gt=3,
-        a_tp_to_c_fn_unique_large_gt=5,
+        mixed_localization_unique_large_gt=1,
+        a_tp_to_c_fn_unique_large_gt=1,
         invariants=invariants,
     )
 
@@ -1047,7 +1116,7 @@ def test_guard_upper_bound_evaluates_real_a_c_v2_rows_and_fixed_gates():
         "recoverable_upper_bound_gate",
         "invariants",
     }
-    assert report["mechanism_share_ap75"] == pytest.approx(0.6)
+    assert report["mechanism_share_ap75"] == pytest.approx(1.0)
     assert report["mechanism_gate"] == "PASS"
     assert report["recoverable_upper_bound_gate"] == "PASS"
     assert report["invariants"] == invariants
@@ -1090,11 +1159,12 @@ def test_guard_upper_bound_reports_nonzero_deltas_as_v2_minus_baseline(monkeypat
     monkeypatch.setattr(
         audit_module, "evaluate_dataset", lambda _rows: next(responses)
     )
+    a_rows, c_rows, v2_rows = _upper_bound_evidence()
 
     report = audit_module.evaluate_guard_upper_bound(
-        (), (), (),
-        mixed_localization_unique_large_gt=3,
-        a_tp_to_c_fn_unique_large_gt=5,
+        a_rows, c_rows, v2_rows,
+        mixed_localization_unique_large_gt=1,
+        a_tp_to_c_fn_unique_large_gt=1,
         invariants={"singleton_preservation": 1.0, "passed": True},
     )
 
@@ -1133,9 +1203,10 @@ def _patch_guard_metrics(monkeypatch, a_large, c_large, v2_large):
 
 
 def test_guard_upper_bound_gate_boundaries_are_independent(monkeypatch):
+    a_rows, c_rows, v2_rows = _upper_bound_evidence(5)
     _patch_guard_metrics(monkeypatch, 0.5, 0.4, 0.495)
     report = audit_module.evaluate_guard_upper_bound(
-        (), (), (),
+        a_rows, c_rows, v2_rows,
         mixed_localization_unique_large_gt=3,
         a_tp_to_c_fn_unique_large_gt=5,
         invariants={"passed": False},
@@ -1146,9 +1217,9 @@ def test_guard_upper_bound_gate_boundaries_are_independent(monkeypatch):
 
     _patch_guard_metrics(monkeypatch, 0.5, 0.4, 0.494999999)
     report = audit_module.evaluate_guard_upper_bound(
-        (), (), (),
-        mixed_localization_unique_large_gt=599,
-        a_tp_to_c_fn_unique_large_gt=1000,
+        a_rows, c_rows, v2_rows,
+        mixed_localization_unique_large_gt=2,
+        a_tp_to_c_fn_unique_large_gt=5,
         invariants={"passed": True},
     )
     assert report["mechanism_gate"] == "FAIL"
@@ -1156,10 +1227,11 @@ def test_guard_upper_bound_gate_boundaries_are_independent(monkeypatch):
 
 
 def test_guard_upper_bound_zero_denominator_is_finite_and_fails_closed(monkeypatch):
+    a_rows, c_rows, v2_rows = _upper_bound_evidence(c_recovers=True)
     _patch_guard_metrics(monkeypatch, 0.5, 0.4, 0.5)
 
     report = audit_module.evaluate_guard_upper_bound(
-        (), (), (),
+        a_rows, c_rows, v2_rows,
         mixed_localization_unique_large_gt=0,
         a_tp_to_c_fn_unique_large_gt=0,
         invariants={"passed": True},
@@ -1167,6 +1239,73 @@ def test_guard_upper_bound_zero_denominator_is_finite_and_fails_closed(monkeypat
 
     assert report["mechanism_share_ap75"] == 0.0
     assert report["mechanism_gate"] == "FAIL"
+
+
+def test_guard_upper_bound_rejects_empty_evidence_rows():
+    with pytest.raises(ValueError):
+        audit_module.evaluate_guard_upper_bound(
+            (), (), (),
+            mixed_localization_unique_large_gt=0,
+            a_tp_to_c_fn_unique_large_gt=0,
+            invariants={"passed": True},
+        )
+
+
+def test_guard_upper_bound_rejects_forged_loss_denominator():
+    a_rows, c_rows, v2_rows = _upper_bound_evidence()
+
+    with pytest.raises(ValueError):
+        audit_module.evaluate_guard_upper_bound(
+            a_rows, c_rows, v2_rows,
+            mixed_localization_unique_large_gt=1,
+            a_tp_to_c_fn_unique_large_gt=5,
+            invariants={"passed": True},
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unequal_lengths",
+        "wrong_order",
+        "missing_key",
+        "duplicate_image_id",
+        "gt_mismatch",
+        "gain_mismatch",
+        "a_local_source",
+        "c_source_out_of_range",
+        "boolean_query",
+    ],
+)
+def test_guard_upper_bound_rejects_malformed_evidence_contract(mutation):
+    count = 2 if mutation in {"wrong_order", "duplicate_image_id"} else 1
+    a_rows, c_rows, v2_rows = _upper_bound_evidence(count)
+    if mutation == "unequal_lengths":
+        c_rows.clear()
+    elif mutation == "wrong_order":
+        c_rows.reverse()
+    elif mutation == "missing_key":
+        del v2_rows[0]["pred_source"]
+    elif mutation == "duplicate_image_id":
+        a_rows[1]["image_id"] = a_rows[0]["image_id"]
+    elif mutation == "gt_mismatch":
+        c_rows[0]["gt_boxes"] = [(1, 1, 121, 121)]
+    elif mutation == "gain_mismatch":
+        v2_rows[0]["effective_gain"] = 0.5
+    elif mutation == "a_local_source":
+        a_rows[0]["pred_source"] = [1]
+    elif mutation == "c_source_out_of_range":
+        c_rows[0] = _evidence_row("i0.jpg", predicts=True, source=5)
+    elif mutation == "boolean_query":
+        v2_rows[0]["pred_query"] = [True]
+
+    with pytest.raises(ValueError):
+        audit_module.evaluate_guard_upper_bound(
+            a_rows, c_rows, v2_rows,
+            mixed_localization_unique_large_gt=0,
+            a_tp_to_c_fn_unique_large_gt=count,
+            invariants={"passed": True},
+        )
 
 
 @pytest.mark.parametrize("bad_count", [True, -1, 1.0, float("nan")])
@@ -1191,12 +1330,13 @@ def test_guard_upper_bound_rejects_mechanism_numerator_over_denominator():
 
 
 def test_guard_upper_bound_rejects_nonfinite_metrics(monkeypatch):
+    a_rows, c_rows, v2_rows = _upper_bound_evidence()
     _patch_guard_metrics(monkeypatch, 0.5, 0.4, float("nan"))
 
     with pytest.raises(ValueError):
         audit_module.evaluate_guard_upper_bound(
-            (), (), (),
-            mixed_localization_unique_large_gt=3,
-            a_tp_to_c_fn_unique_large_gt=5,
+            a_rows, c_rows, v2_rows,
+            mixed_localization_unique_large_gt=1,
+            a_tp_to_c_fn_unique_large_gt=1,
             invariants={"passed": True},
         )
