@@ -160,7 +160,16 @@ def _yaml_load(path: Path) -> Mapping[str, Any]:
     return data
 
 
-def _resolve_dataset_root(yaml_path: Path, config: Mapping[str, Any]) -> Path:
+def _resolve_dataset_root(
+    yaml_path: Path,
+    config: Mapping[str, Any],
+    root_override: Path | str | None = None,
+) -> Path:
+    if root_override is not None:
+        root = Path(root_override)
+        if not root.is_absolute():
+            root = Path.cwd() / root
+        return root.resolve()
     root_value = config.get("path", ".")
     root = Path(root_value)
     if not root.is_absolute():
@@ -230,11 +239,16 @@ def _content_manifest(root: Path, split: str) -> tuple[list[str], str]:
     return lines, sha256_bytes(payload)
 
 
-def load_dataset(yaml_path: Path | str, *, split: str = "val") -> dict[str, Any]:
+def load_dataset(
+    yaml_path: Path | str,
+    *,
+    split: str = "val",
+    root_override: Path | str | None = None,
+) -> dict[str, Any]:
     """Load sorted image records and normalized YOLO labels in pixel xyxy."""
     yaml_file = Path(yaml_path).resolve()
     config = _yaml_load(yaml_file)
-    root = _resolve_dataset_root(yaml_file, config)
+    root = _resolve_dataset_root(yaml_file, config, root_override)
     image_dir = _split_image_dir(root, yaml_file, config, split)
     if not image_dir.exists():
         raise FileNotFoundError(image_dir)

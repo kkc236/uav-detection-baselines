@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--checkpoint-sha256")
     p.add_argument("--data", required=True)
+    p.add_argument("--dataset-root", help="Operational dataset root override for YAMLs with relocatable paths")
     p.add_argument("--split", default="val")
     p.add_argument("--output", required=True)
     p.add_argument("--device", default="0")
@@ -69,8 +70,11 @@ def validate_prior_gate(path: Path | str, expected: Mapping[str, str]) -> dict[s
         adj = json.loads(adjudication.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError("invalid independent adjudication artifact") from exc
-    if adj.get("status") in (None, "NOT_RUN"):
-        raise ValueError("independent adjudication must be complete")
+    if adj.get("status") != "SBR_G0A_INDEPENDENT_PASS" or adj.get("decision") != "PASS":
+        raise ValueError("independent adjudication must explicitly PASS")
+    for key in ("source_hash", "checkpoint_hash", "dataset_signature", "protocol_hash"):
+        if str(adj.get(key, "")).lower() != str(expected.get(key, "")).lower():
+            raise ValueError(f"adjudication provenance mismatch: {key}")
     checksums = evidence / "checksums.sha256"
     if not checksums.exists():
         raise ValueError("checksums.sha256 is required")
@@ -205,7 +209,7 @@ def run(args: argparse.Namespace) -> int:
     checkpoint_hash = sha256_file(checkpoint)
     if args.checkpoint_sha256 and checkpoint_hash.lower() != args.checkpoint_sha256.lower():
         raise ValueError("checkpoint SHA256 mismatch")
-    dataset = load_dataset(args.data, split=args.split)
+    dataset = load_dataset(args.data, split=args.split, root_override=args.dataset_root)
     if args.mode == "g0-a" and dataset["image_count"] != 548:
         raise ValueError("g0-a requires exactly 548 images")
     if args.mode == "s0":
@@ -220,8 +224,8 @@ def run(args: argparse.Namespace) -> int:
         dataset["image_list"] = [r["relative_path"] for r in dataset["images"]]
         dataset["image_count"] = len(dataset["images"])
     source = git_provenance(Path.cwd())
-    if not source.get("clean_tracked", False):
-        raise ValueError("tracked worktree must be clean before inference")
+    if not source.get("clean_tracked", False) or source.get("untracked", False):
+        raise ValueError("source worktree must be clean with no untracked files before inference")
     source_hash = source.get("commit", "")
     proto_hash = protocol_signature(protocol.__dict__)
     expected = {"source_hash": source_hash, "checkpoint_hash": checkpoint_hash, "dataset_signature": dataset["dataset_signature"], "protocol_hash": proto_hash}
