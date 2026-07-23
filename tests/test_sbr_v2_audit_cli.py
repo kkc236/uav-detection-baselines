@@ -463,7 +463,12 @@ def test_synthetic_end_to_end_eligible_writes_exact_atomic_contract(
     assert gate["status"] == "SBR_V2_AUDIT_ELIGIBLE"
     summary = json.loads((output / "attribution_summary.json").read_text())
     assert summary["primary_ap75"]["denominator"] == 1
-    assert summary["primary_ap75"]["mixed_cluster_localization"] == 1
+    assert (
+        summary["primary_ap75"][
+            "local_seed_coordinate_displacement"
+        ]
+        == 1
+    )
     invariants = json.loads((output / "invariants.json").read_text())
     assert invariants["passed"] is True
     audit_manifest = json.loads((output / "audit_manifest.json").read_text())
@@ -920,6 +925,109 @@ def test_frozen_g0_metrics_use_global_xyxy_not_fused_box():
     )
 
     assert row["pred_boxes"] == [[80.0, 0.0, 280.0, 200.0]]
+
+
+def test_production_v2_metric_path_consumes_verified_anchor_override():
+    import scripts.audit_sbr_v2 as cli
+    from src.sbr_v2_audit import (
+        AuditImage,
+        AuditRawDetection,
+        prepare_image_audit,
+    )
+
+    target = (0, 0, 200, 200)
+    full = AuditRawDetection.synthetic(
+        "one.jpg", "C", score=0.9, box=target,
+        width=640, height=640, original_index=1,
+    )
+    arm_a = AuditRawDetection.synthetic(
+        "one.jpg", "A", score=0.9, box=target,
+        width=640, height=640, original_index=0,
+    )
+    local = AuditRawDetection.synthetic(
+        "one.jpg", "C", source=1, query=1, score=0.95,
+        box=(40, 0, 240, 200), width=640, height=640,
+        original_index=2,
+    )
+    prepared = prepare_image_audit(
+        AuditImage(
+            "one.jpg", 640, 640, (target,), (0,), (arm_a,),
+            (full, local),
+        )
+    )
+    image = {
+        "relative_path": "one.jpg",
+        "width": 640,
+        "height": 640,
+        "gt_boxes": [target],
+        "gt_classes": [0],
+        "ignore_boxes": [],
+    }
+
+    c_row = cli._metric_row(
+        image,
+        prepared.standard.standard_predictions,
+        frozen_global_xyxy=True,
+    )
+    v2_row = cli._v2_metric_row(image, prepared)
+
+    assert prepared.invariants["passed"] is True
+    assert prepared.standard.standard_predictions[0].box != target
+    assert c_row["pred_boxes"] == [list(local.global_xyxy)]
+    assert v2_row["pred_boxes"] == [list(full.global_xyxy)]
+    for key in (
+        "pred_scores",
+        "pred_classes",
+        "pred_source",
+        "pred_query",
+    ):
+        assert v2_row[key] == c_row[key]
+
+
+def test_production_v2_is_exact_c_when_no_cluster_is_eligible():
+    import scripts.audit_sbr_v2 as cli
+    from src.sbr_v2_audit import (
+        AuditImage,
+        AuditRawDetection,
+        prepare_image_audit,
+    )
+
+    seed = AuditRawDetection.synthetic(
+        "one.jpg", "C", source=1, query=0, score=0.9,
+        box=(0, 0, 200, 200), width=640, height=640,
+        original_index=1,
+    )
+    member = AuditRawDetection.synthetic(
+        "one.jpg", "C", source=2, query=1, score=0.8,
+        box=(80, 0, 280, 200), width=640, height=640,
+        original_index=2,
+    )
+    target = (0, 0, 200, 200)
+    prepared = prepare_image_audit(
+        AuditImage(
+            "one.jpg", 640, 640, (target,), (0,), (), (seed, member),
+        )
+    )
+    image = {
+        "relative_path": "one.jpg",
+        "width": 640,
+        "height": 640,
+        "gt_boxes": [target],
+        "gt_classes": [0],
+        "ignore_boxes": [],
+    }
+
+    c_row = cli._metric_row(
+        image,
+        prepared.standard.standard_predictions,
+        frozen_global_xyxy=True,
+    )
+    v2_row = cli._v2_metric_row(image, prepared)
+
+    assert prepared.guard_anchors == (None,)
+    assert prepared.standard.standard_predictions[0].box != seed.global_xyxy
+    assert c_row == v2_row
+    assert evaluate_dataset([c_row]) == evaluate_dataset([v2_row])
 
 
 @pytest.mark.parametrize(

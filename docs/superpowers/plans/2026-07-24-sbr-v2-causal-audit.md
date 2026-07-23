@@ -510,3 +510,40 @@ Do not commit raw evidence. If documentation changes are required:
 git add docs/SBR_RTDETR_SERVER_GUIDE.md
 git commit -m "Document SBR-V2 causal audit execution"
 ```
+
+## Amendment — 2026-07-24: Correct Evaluated-Coordinate Projection
+
+Keep the task history above unchanged. Before the first publishable audit,
+apply this semantic correction to every audit task:
+
+- Treat the frozen Arm C result as Greedy cluster membership plus
+  highest-ranked seed-coordinate retention. The weighted
+  `prediction.box` remains necessary for byte-exact frozen
+  arm-prediction binding, but it is not an evaluated G0 coordinate.
+- Build selected and pre-cap Arm C matching records from
+  `prediction.global_xyxy`.
+- Use one guard-anchor selector for attribution, the invariant-verified guard
+  reconstruction, and production V2 metric rows. An override exists only for
+  a mixed cluster whose selected full anchor has effective size strictly
+  greater than 96 pixels.
+- Build the invariant-verified V2 reconstruction from the full Arm C
+  seed-coordinate baseline, overriding all and only eligible clusters with
+  their selected full anchors. Preserve row count, score, class, source, query,
+  ordering, cluster identity, and final top-300 selection.
+- Build each attribution counterfactual from the complete final-300 Arm C
+  seed-coordinate baseline and override only the target cluster. A seed already
+  equal to the full anchor is not a local-seed coordinate displacement
+  recovery.
+- Exercise both asymmetric regressions: full seed passes while the unevaluated
+  weighted box fails, and local seed fails while the unevaluated weighted box
+  passes. Also cover ineligible multi-member clusters, the exact 96-pixel
+  boundary, pre-cap truncation, non-target competition coordinates, and the
+  production V2 evaluator path.
+
+Call the audited mechanism **local-seed coordinate displacement**. Do not
+change the five original gates, the `0.60` mechanism threshold, or any fusion,
+confidence, IoS, size, or max-detection parameter. The two earlier primary
+audit executions terminated at consistency checks before metric publication
+and before independent adjudication; they are discarded diagnostic runs, not
+observed results. This amendment is a correction of evaluator semantics, not
+post-result tuning.

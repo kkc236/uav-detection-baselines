@@ -56,7 +56,7 @@ DETERMINISTIC_ARTIFACTS = (
 )
 THRESHOLDS = tuple(round(0.50 + index * 0.05, 2) for index in range(10))
 CATEGORIES = (
-    "mixed_cluster_localization",
+    "local_seed_coordinate_displacement",
     "final_300_truncation",
     "matching_competition",
     "class_or_candidate_loss",
@@ -366,13 +366,15 @@ def _expected_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     primary_counts = Counter(str(event["category"]) for event in primary)
     denominator = len(primary)
-    mixed = int(primary_counts.get("mixed_cluster_localization", 0))
+    mixed = int(
+        primary_counts.get("local_seed_coordinate_displacement", 0)
+    )
     share = float(mixed) / float(denominator) if denominator else 0.0
     return {
         "primary_ap75": {
             "unique_event_key": ["image_id", "gt_index", "iou_threshold"],
             "denominator": denominator,
-            "mixed_cluster_localization": mixed,
+            "local_seed_coordinate_displacement": mixed,
             "mechanism_share": share,
             "category_counts": {
                 category: int(primary_counts.get(category, 0))
@@ -399,7 +401,7 @@ def _verify_summary(
         primary_value.get("denominator"), "summary AP75 denominator"
     )
     _strict_nonnegative_int(
-        primary_value.get("mixed_cluster_localization"),
+        primary_value.get("local_seed_coordinate_displacement"),
         "summary AP75 mixed count",
     )
     _finite_number(
@@ -450,7 +452,7 @@ def _verify_summary(
     primary = expected["primary_ap75"]
     return (
         int(primary["denominator"]),
-        int(primary["mixed_cluster_localization"]),
+        int(primary["local_seed_coordinate_displacement"]),
         float(primary["mechanism_share"]),
     )
 
@@ -894,7 +896,7 @@ def adjudicate_evidence(
             "checksums_regenerated": True,
             "event_count": len(events),
             "ap75_denominator": denominator,
-            "mixed_cluster_localization": mixed,
+            "local_seed_coordinate_displacement": mixed,
             "mechanism_share": mechanism_share,
             "mechanism_share_threshold": 0.60,
             "large_ap_tolerance": -0.005,

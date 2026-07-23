@@ -65,7 +65,10 @@ def test_mixed_anchor_tie_uses_source_query_original_order():
     local = AuditRawDetection.synthetic("i.jpg", "C", source=1, query=0, score=.9, box=(15, 15, 115, 115), original_index=300)
     fixture = AuditImage("i.jpg", 640, 640, ((0, 0, 100, 100),), (0,), (a_first,), (c_first, c_second, local), ())
     event = audit_image_at_threshold(fixture, .75).events[0]
-    assert event.category is AttributionCategory.MIXED_CLUSTER_LOCALIZATION
+    assert (
+        event.category
+        is AttributionCategory.LOCAL_SEED_COORDINATE_DISPLACEMENT
+    )
     assert event.counterfactual_recovers is True
 
 
@@ -93,8 +96,8 @@ def test_prepared_audit_matches_threshold_api_and_clusters_once(monkeypatch):
         "C",
         source=1,
         query=1,
-        score=0.9,
-        box=(80, 0, 280, 200),
+        score=0.95,
+        box=(40, 0, 240, 200),
         width=640,
         height=640,
         original_index=2,
@@ -130,6 +133,244 @@ def test_prepared_audit_matches_threshold_api_and_clusters_once(monkeypatch):
 
     assert actual == expected
     assert calls == 1
+
+
+def test_attribution_uses_sealed_global_coordinates_for_loss_denominator():
+    target = (0, 0, 200, 200)
+    a = AuditRawDetection.synthetic(
+        "sealed-coordinates.jpg",
+        "A",
+        score=0.9,
+        box=target,
+        width=640,
+        height=640,
+        original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "sealed-coordinates.jpg",
+        "C",
+        score=0.9,
+        box=target,
+        width=640,
+        height=640,
+        original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "sealed-coordinates.jpg",
+        "C",
+        source=1,
+        query=1,
+        score=0.95,
+        box=(40, 0, 240, 200),
+        width=640,
+        height=640,
+        original_index=2,
+    )
+    fixture = AuditImage(
+        "sealed-coordinates.jpg",
+        640,
+        640,
+        (target,),
+        (0,),
+        (a,),
+        (c_full, c_local),
+    )
+    evidence_base = {
+        "image_id": "sealed-coordinates.jpg",
+        "width": 640,
+        "height": 640,
+        "gt_boxes": [target],
+        "gt_classes": [0],
+        "ignore_boxes": [],
+        "effective_gain": 1.0,
+    }
+    a_row = {
+        **evidence_base,
+        "pred_boxes": [target],
+        "pred_scores": [0.9],
+        "pred_classes": [0],
+        "pred_source": [0],
+        "pred_query": [0],
+    }
+    c_row = {
+        **evidence_base,
+        "pred_boxes": [c_local.global_xyxy],
+        "pred_scores": [0.95],
+        "pred_classes": [0],
+        "pred_source": [1],
+        "pred_query": [1],
+    }
+
+    legacy = audit_image_at_threshold(fixture, 0.75)
+    prepared = audit_module.prepare_image_audit(fixture)
+    cached = audit_module.audit_prepared_image_at_threshold(prepared, 0.75)
+    denominator = audit_module._recompute_a_tp_to_c_fn([a_row], [c_row])
+
+    assert denominator == 1
+    assert len(legacy.events) == denominator
+    assert cached.events == legacy.events
+    assert (
+        legacy.events[0].category
+        is AttributionCategory.LOCAL_SEED_COORDINATE_DISPLACEMENT
+    )
+
+
+def test_full_seed_tp_is_not_lost_by_unevaluated_weighted_coordinates():
+    target = (0, 0, 200, 200)
+    a = AuditRawDetection.synthetic(
+        "full-seed.jpg", "A", score=0.9, box=target,
+        width=640, height=640, original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "full-seed.jpg", "C", score=0.9, box=target,
+        width=640, height=640, original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "full-seed.jpg", "C", source=1, query=1, score=0.8,
+        box=(80, 0, 280, 200), width=640, height=640,
+        original_index=2,
+    )
+    fixture = AuditImage(
+        "full-seed.jpg", 640, 640, (target,), (0,), (a,),
+        (c_full, c_local),
+    )
+    prepared = audit_module.prepare_image_audit(fixture)
+
+    assert prepared.standard.standard_predictions[0].box != target
+    assert prepared.c_match_predictions[0]["box"] == target
+    assert audit_image_at_threshold(fixture, 0.75).events == ()
+    assert (
+        audit_module.audit_prepared_image_at_threshold(
+            prepared, 0.75
+        ).events
+        == ()
+    )
+
+
+def test_counterfactual_keeps_non_target_clusters_on_sealed_global_coordinates():
+    target = (0, 0, 200, 200)
+    a = AuditRawDetection.synthetic(
+        "counterfactual-base.jpg", "A", score=0.9, box=target,
+        width=640, height=640, original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "counterfactual-base.jpg", "C", score=0.9, box=target,
+        width=640, height=640, original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "counterfactual-base.jpg", "C", source=1, query=1, score=0.95,
+        box=(40, 0, 240, 200), width=640, height=640, original_index=2,
+    )
+    other_seed = AuditRawDetection.synthetic(
+        "counterfactual-base.jpg", "C", source=1, query=2, score=0.99,
+        box=(340, 0, 540, 200), width=640, height=640, original_index=3,
+    )
+    other_member = AuditRawDetection.synthetic(
+        "counterfactual-base.jpg", "C", source=2, query=3, score=0.98,
+        box=(300, 0, 500, 200), width=640, height=640, original_index=4,
+    )
+    fixture = AuditImage(
+        "counterfactual-base.jpg", 640, 640, (target,), (0,), (a,),
+        (c_full, c_local, other_seed, other_member),
+    )
+    prepared = audit_module.prepare_image_audit(fixture)
+    target_cluster = next(
+        index
+        for index, members in enumerate(prepared.standard.cluster_members)
+        if c_full.original_index in members
+    )
+    other_cluster = next(
+        index
+        for index, members in enumerate(prepared.standard.cluster_members)
+        if other_seed.original_index in members
+    )
+
+    counterfactual = audit_module._counterfactual_c_match_predictions(
+        prepared, target_cluster, c_full.global_xyxy
+    )
+
+    assert (
+        prepared.standard.standard_predictions[other_cluster].box
+        != other_seed.global_xyxy
+    )
+    assert counterfactual[other_cluster]["box"] == other_seed.global_xyxy
+    assert (
+        prepared.guarded.standard_predictions[other_cluster].box
+        == other_seed.global_xyxy
+    )
+
+
+def test_same_full_seed_anchor_is_not_counted_as_mixed_recovery():
+    target = (0, 0, 200, 200)
+    a = AuditRawDetection.synthetic(
+        "same-anchor.jpg", "A", score=0.95, box=target,
+        width=640, height=640, original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "same-anchor.jpg", "C", score=0.95, box=target,
+        width=640, height=640, original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "same-anchor.jpg", "C", source=1, query=1, score=0.9,
+        box=(10, 0, 210, 200), width=640, height=640, original_index=2,
+    )
+    fixture = AuditImage(
+        "same-anchor.jpg", 640, 640, (target,), (0,),
+        (a,), (c_full, c_local),
+    )
+
+    prepared = audit_module.prepare_image_audit(fixture)
+    result = audit_module.audit_prepared_image_at_threshold(prepared, 0.75)
+
+    assert prepared.guard_anchors == (c_full,)
+    assert prepared.c_match_predictions[0]["box"] == target
+    assert prepared.guarded.standard_predictions[0].box == target
+    assert result.events == ()
+
+
+@pytest.mark.parametrize(
+    ("full_box", "local_box"),
+    [
+        ((0, 0, 96, 96), (15, 0, 115, 100)),
+        ((0, 0, 75, 100), (30, 0, 170, 100)),
+    ],
+)
+def test_mixed_attribution_reuses_strict_guard_size_eligibility(
+    full_box, local_box
+):
+    target = (0, 0, 100, 100)
+    a = AuditRawDetection.synthetic(
+        "size-boundary.jpg", "A", score=0.9, box=full_box,
+        width=640, height=640, original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "size-boundary.jpg", "C", score=0.9, box=full_box,
+        width=640, height=640, original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "size-boundary.jpg", "C", source=1, query=1, score=0.95,
+        box=local_box, width=640, height=640, original_index=2,
+    )
+    fixture = AuditImage(
+        "size-boundary.jpg", 640, 640, (target,), (0,), (a,),
+        (c_full, c_local),
+    )
+
+    legacy = audit_image_at_threshold(fixture, 0.75)
+    prepared = audit_module.prepare_image_audit(fixture)
+    cached = audit_module.audit_prepared_image_at_threshold(prepared, 0.75)
+
+    assert prepared.guard_anchors == (None,)
+    assert (
+        prepared.guarded.standard_predictions[0].box
+        == c_local.global_xyxy
+    )
+    assert cached.events == legacy.events
+    assert (
+        legacy.events[0].category
+        is AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+    )
+    assert legacy.events[0].counterfactual_recovers is False
 
 
 def test_mixed_geometric_match_lost_to_assignment_is_competition_not_localization():
@@ -232,6 +473,57 @@ def test_out_of_cap_nonmatching_cluster_is_not_attributed_to_truncation():
     event = audit_image_at_threshold(fixture, .75).events[0]
 
     assert event.category is AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+
+
+def test_pre_cap_truncation_check_uses_sealed_global_not_weighted_box():
+    target = (0, 0, 200, 200)
+    a = AuditRawDetection.synthetic(
+        "precap-global.jpg", "A", score=0.1, box=target,
+        width=640, height=640, original_index=1,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "precap-global.jpg", "C", score=0.1, box=target,
+        width=640, height=640, original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "precap-global.jpg", "C", source=1, query=400, score=0.2,
+        box=(40, 0, 240, 200), width=640, height=640,
+        original_index=2,
+    )
+    distractors = tuple(
+        AuditRawDetection.synthetic(
+            "precap-global.jpg", "C", source=2, query=index,
+            score=0.9, box=(300 + 2 * index, 0, 301 + 2 * index, 1),
+            width=640, height=640, original_index=1000 + index,
+        )
+        for index in range(300)
+    )
+    fixture = AuditImage(
+        "precap-global.jpg", 640, 640, (target,), (0,), (a,),
+        (c_full, c_local, *distractors),
+    )
+    prepared = audit_module.prepare_image_audit(fixture)
+
+    assert (
+        audit_module._iou64(
+            prepared.standard.pre_cap_predictions[300].box, target
+        )
+        >= 0.75
+    )
+    assert (
+        prepared.c_pre_cap_match_predictions[300]["box"]
+        == c_local.global_xyxy
+    )
+    legacy = audit_image_at_threshold(fixture, 0.75)
+    cached = audit_module.audit_prepared_image_at_threshold(
+        prepared, 0.75
+    )
+
+    assert cached.events == legacy.events
+    assert (
+        legacy.events[0].category
+        is AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+    )
 
 
 def test_matching_pre_cap_cluster_removed_by_cap_is_attributed_to_truncation():
@@ -752,7 +1044,7 @@ def test_large_view_guard_uses_frozen_full_anchor_order_for_eligible_mixed_clust
     assert guarded.cluster_members == standard.cluster_members
 
 
-def test_large_view_guard_preserves_ineligible_mixed_and_single_source_clusters():
+def test_large_view_guard_uses_global_baseline_for_ineligible_clusters():
     raw = (
         AuditRawDetection.synthetic(
             "i.jpg", "C", source=0, query=0, score=0.9,
@@ -783,7 +1075,36 @@ def test_large_view_guard_preserves_ineligible_mixed_and_single_source_clusters(
 
     guarded = audit_module.apply_large_view_guard(standard, raw)
 
-    assert guarded == standard
+    assert guarded.cluster_members == standard.cluster_members
+    assert any(
+        guarded_prediction.box != standard_prediction.box
+        for guarded_prediction, standard_prediction in zip(
+            guarded.pre_cap_predictions, standard.pre_cap_predictions
+        )
+    )
+    assert tuple(
+        prediction.box for prediction in guarded.pre_cap_predictions
+    ) == tuple(
+        prediction.global_xyxy
+        for prediction in standard.pre_cap_predictions
+    )
+    assert tuple(
+        (
+            prediction.score,
+            prediction.class_id,
+            prediction.source_order,
+            prediction.query_index,
+        )
+        for prediction in guarded.pre_cap_predictions
+    ) == tuple(
+        (
+            prediction.score,
+            prediction.class_id,
+            prediction.source_order,
+            prediction.query_index,
+        )
+        for prediction in standard.pre_cap_predictions
+    )
 
 
 @pytest.mark.parametrize("malformed", ["missing", "duplicate", "wrong_arm"])
@@ -1038,11 +1359,11 @@ def test_guard_invariants_reject_local_only_non_singleton_coordinate_change():
 def test_guard_invariants_reject_size_96_mixed_coordinate_change():
     raw = (
         AuditRawDetection.synthetic(
-            "i.jpg", "C", source=0, query=0, score=0.9,
+            "i.jpg", "C", source=0, query=0, score=0.8,
             box=(0, 0, 96, 96), width=640, height=640, original_index=10,
         ),
         AuditRawDetection.synthetic(
-            "i.jpg", "C", source=1, query=0, score=0.8,
+            "i.jpg", "C", source=1, query=0, score=0.9,
             box=(2, 2, 94, 94), width=640, height=640, original_index=11,
         ),
     )

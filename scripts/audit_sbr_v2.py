@@ -746,6 +746,14 @@ def _metric_row(
     }
 
 
+def _v2_metric_row(
+    image: Mapping[str, Any], prepared: Any
+) -> dict[str, Any]:
+    """Project the invariant-verified guard output into evaluator evidence."""
+
+    return _metric_row(image, prepared.guarded.standard_predictions)
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, AttributionCategory):
         return value.value
@@ -1099,7 +1107,7 @@ def _run_audit(
                 frozen_global_xyxy=True,
             )
         )
-        v2_rows.append(_metric_row(image, guarded.standard_predictions))
+        v2_rows.append(_v2_metric_row(image, prepared))
         for threshold in FROZEN_IOU_THRESHOLDS:
             result = audit_prepared_image_at_threshold(
                 prepared, threshold
@@ -1125,7 +1133,8 @@ def _run_audit(
     ]
     denominator = len(primary_events)
     mixed = sum(
-        event["category"] == AttributionCategory.MIXED_CLUSTER_LOCALIZATION.value
+        event["category"]
+        == AttributionCategory.LOCAL_SEED_COORDINATE_DISPLACEMENT.value
         for event in primary_events
     )
     upper_bound = evaluate_guard_upper_bound(
@@ -1164,7 +1173,7 @@ def _run_audit(
         "primary_ap75": {
             "unique_event_key": ["image_id", "gt_index", "iou_threshold"],
             "denominator": denominator,
-            "mixed_cluster_localization": mixed,
+            "local_seed_coordinate_displacement": mixed,
             "mechanism_share": upper_bound["mechanism_share_ap75"],
             "category_counts": {
                 name: int(primary_counts.get(name, 0))

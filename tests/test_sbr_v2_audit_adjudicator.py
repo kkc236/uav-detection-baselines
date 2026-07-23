@@ -29,7 +29,7 @@ SCHEMA = {
     ],
 }
 CATEGORIES = (
-    "mixed_cluster_localization",
+    "local_seed_coordinate_displacement",
     "final_300_truncation",
     "matching_competition",
     "class_or_candidate_loss",
@@ -106,7 +106,7 @@ def _events() -> list[dict]:
                     "gt_index": gt_index,
                     "iou_threshold": threshold,
                     "category": (
-                        "mixed_cluster_localization"
+                        "local_seed_coordinate_displacement"
                         if gt_index < 3
                         else "other"
                     ),
@@ -139,8 +139,8 @@ def _summarize(events: list[dict]) -> dict:
         "primary_ap75": {
             "unique_event_key": ["image_id", "gt_index", "iou_threshold"],
             "denominator": len(primary),
-            "mixed_cluster_localization": counts[
-                "mixed_cluster_localization"
+            "local_seed_coordinate_displacement": counts[
+                "local_seed_coordinate_displacement"
             ],
             "mechanism_share": 0.6,
             "category_counts": {

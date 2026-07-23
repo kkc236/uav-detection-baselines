@@ -283,3 +283,43 @@ paper claim:
 
 The method must always be reported as five forward views and up to 1,500 query
 opportunities per image, not as zero-overhead or fixed-total-budget inference.
+
+## Amendment — 2026-07-24: Sealed G0 Coordinate Semantics
+
+This dated amendment preserves the original proposal above as an audit trail
+and corrects its description of the frozen G0 evaluator. It supersedes only
+statements that describe Arm C as being evaluated on the score-weighted fused
+coordinates.
+
+The sealed G0 implementation performed class-aware Greedy clustering, but its
+metric-row projection retained `prediction.global_xyxy`. For a multi-member
+cluster this field is the highest-ranked seed detection's global coordinate;
+the separately computed score-weighted `prediction.box` was retained in the
+frozen arm-prediction artifact but was not the coordinate consumed by the G0
+metric evaluator. The observed mechanism is therefore named **local-seed
+coordinate displacement**, not weighted-fusion coordinate drift.
+
+The corrected causal comparison is:
+
+1. Reconstruct the exact frozen Greedy clusters and verify the weighted
+   `prediction.box` against the immutable arm-prediction artifact.
+2. Reproduce Arm C metrics and all attribution matching from every selected or
+   pre-cap cluster's sealed seed `global_xyxy`.
+3. Define V2 from that same complete Arm C seed-coordinate baseline.
+4. For each eligible mixed cluster only, replace the evaluated coordinate with
+   the highest-ranked full-view member's `global_xyxy`. Eligibility remains
+   exact: a full member, a local member, and full-anchor effective size strictly
+   greater than 96 pixels.
+5. Preserve score, class, seed provenance, ordering, cluster membership,
+   pre-cap population, and final `max_det=300`. If the sealed seed coordinate
+   already equals the selected full anchor, the cluster is not counted as a
+   recovered local-seed displacement event.
+6. In a per-event counterfactual, copy the complete final-300 Arm C
+   seed-coordinate baseline and override only the target eligible cluster.
+
+The two audit attempts preceding this amendment stopped at internal consistency
+checks before any audit metric or gate was published or independently
+adjudicated. They are software-diagnostic attempts, not scientific results.
+This correction changes neither data nor model outputs and is not parameter
+tuning: the five original gates, the `0.60` mechanism-share threshold, IoS,
+confidence, size boundary, and `max_det` remain unchanged.
