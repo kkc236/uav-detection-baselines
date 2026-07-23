@@ -4,11 +4,14 @@ from pathlib import Path
 
 import torch
 import yaml
+import pytest
 
 from scripts.validate_tsgr_e0_promotion import (
     EXPECTED_E1_TRAINING,
+    EXPECTED_E1_RUNTIME_SETTINGS,
     EXPECTED_TSGR_CONFIG,
     _atomic_write_locked,
+    _validate_superseded_sidecar,
     validate_authoritative_artifacts,
     validate_production_preflight,
 )
@@ -200,7 +203,18 @@ def test_production_preflight_requires_full_nonaborting_monitor_trace(tmp_path):
             "nonfinite_fields": [],
             "runtime_violation": None,
             "update_monitor_ratio": 0.5,
+            "update_monitor_consecutive": 0,
             "update_monitor_abort": False,
+            "gradient_clipping_mode": "contribution_separated",
+            "auxiliary_finite": True,
+            "pure_stock_preclip_norm": 2.0,
+            "pure_stock_shallow_preclip_norm": 1.0,
+            "pure_stock_clip_coefficient": 1.0,
+            "routed_shallow_preclip_norm": 0.1,
+            "routed_shallow_clip_coefficient": 1.0,
+            "aux_private_preclip_norm": 0.2,
+            "aux_private_clip_coefficient": 1.0,
+            "shallow_applied_ratio": 0.1,
             "p2_entry_count": 0,
             "ordinary_query_count": 300,
         }
@@ -214,6 +228,9 @@ def test_production_preflight_requires_full_nonaborting_monitor_trace(tmp_path):
         "seed": 0,
         "git_commit_start": "FINAL-COMMIT",
         "git_commit_end": "FINAL-COMMIT",
+        "tracked_worktree_clean_at_start": True,
+        "tracked_worktree_clean_at_end": True,
+        "settings": EXPECTED_E1_RUNTIME_SETTINGS,
         "ebc_config": EXPECTED_TSGR_CONFIG,
         "controlled_amp": {
             "init_scale": 128.0,
@@ -233,7 +250,11 @@ def test_production_preflight_requires_full_nonaborting_monitor_trace(tmp_path):
     manifest["signature"] = _json_sha(manifest)
     manifest_path = tmp_path / "e1-run-manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    result = validate_production_preflight(manifest_path, expected_commit="FINAL-COMMIT")
+    result = validate_production_preflight(
+        manifest_path,
+        expected_commit="FINAL-COMMIT",
+        _test_skip_artifact_validation=True,
+    )
     assert result["verified"] is True
     assert result["update_monitor_abort_count"] == 0
 
@@ -246,6 +267,69 @@ def test_production_preflight_requires_full_nonaborting_monitor_trace(tmp_path):
     manifest.pop("signature")
     manifest["signature"] = _json_sha(manifest)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    result = validate_production_preflight(manifest_path, expected_commit="FINAL-COMMIT")
+    result = validate_production_preflight(
+        manifest_path,
+        expected_commit="FINAL-COMMIT",
+        _test_skip_artifact_validation=True,
+    )
     assert result["verified"] is False
     assert any("attempt 74" in error for error in result["errors"])
+
+    records[73]["update_monitor_abort"] = False
+    records[73]["pure_stock_clip_coefficient"] = 0.5
+    evidence_path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    manifest["artifacts"]["optimizer_evidence"].update(
+        bytes=evidence_path.stat().st_size,
+        sha256=_file_sha(evidence_path),
+    )
+    manifest.pop("signature")
+    manifest["signature"] = _json_sha(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    result = validate_production_preflight(
+        manifest_path,
+        expected_commit="FINAL-COMMIT",
+        _test_skip_artifact_validation=True,
+    )
+    assert result["verified"] is False
+    assert any("attempt 74" in error for error in result["errors"])
+
+    records[73]["pure_stock_clip_coefficient"] = 1.0
+    records[73]["update_monitor_consecutive"] = 1
+    evidence_path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    manifest["artifacts"]["optimizer_evidence"].update(
+        bytes=evidence_path.stat().st_size,
+        sha256=_file_sha(evidence_path),
+    )
+    manifest.pop("signature")
+    manifest["signature"] = _json_sha(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    result = validate_production_preflight(
+        manifest_path,
+        expected_commit="FINAL-COMMIT",
+        _test_skip_artifact_validation=True,
+    )
+    assert result["verified"] is False
+    assert any("attempt 74" in error for error in result["errors"])
+
+
+def test_superseded_sidecar_must_bind_same_authority_and_trace_hashes(tmp_path):
+    path = tmp_path / "pending.json"
+    authority = {"protocol_sha256": "P", "initial_state_sha256": "I", "data_sha256": "D"}
+    traces = {"trace_sha256": {"a0": "A", "a0-repeat": "R", "h0": "H0", "h1": "H1"}}
+    payload = {
+        "classification": "MECHANISM_PASS_MONITOR_PENDING",
+        "mechanism_gate_passed": True,
+        "promotion_ready": False,
+        "authority": authority,
+        "traces": traces,
+    }
+    payload["signature"] = _json_sha(payload)
+    _atomic_write_locked(path, payload)
+    assert _validate_superseded_sidecar(path, authority=authority, traces=traces)["sha256"] == _file_sha(path)
+
+    with pytest.raises(SystemExit, match="trace SHA mismatch"):
+        _validate_superseded_sidecar(
+            path,
+            authority=authority,
+            traces={"trace_sha256": {**traces["trace_sha256"], "h1": "OTHER"}},
+        )

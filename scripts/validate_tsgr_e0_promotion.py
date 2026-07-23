@@ -74,6 +74,29 @@ EXPECTED_TSGR_CONFIG = EBCQPConfig(
     p2_c2_grad_scale=0.1,
     contribution_separated_aux_gradients=True,
 ).as_dict()
+EXPECTED_E1_RUNTIME_SETTINGS = {
+    key: EXPECTED_E1_TRAINING[key]
+    for key in (
+        "epochs",
+        "fraction",
+        "imgsz",
+        "batch",
+        "workers",
+        "device",
+        "amp",
+        "save_period",
+        "deterministic",
+        "nbs",
+        "nms",
+        "max_det",
+        "lr0",
+        "lrf",
+        "momentum",
+        "weight_decay",
+        "warmup_epochs",
+    )
+}
+EXPECTED_E1_RUNTIME_SETTINGS["optimizer"] = "auto"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subset", required=True, type=Path)
     parser.add_argument("--a0-repeat", required=True, type=Path)
     parser.add_argument("--production-preflight-manifest", type=Path)
+    parser.add_argument("--production-preflight-commit")
+    parser.add_argument("--supersedes-promotion-sidecar", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -450,7 +475,14 @@ def _relative_signature_distance(
     return numerator / denominator
 
 
-def validate_production_preflight(manifest_path: Path, *, expected_commit: str) -> dict[str, Any]:
+def validate_production_preflight(
+    manifest_path: Path,
+    *,
+    expected_commit: str,
+    approved_authority: Mapping[str, Any] | None = None,
+    source_paths: Mapping[str, Path] | None = None,
+    _test_skip_artifact_validation: bool = False,
+) -> dict[str, Any]:
     errors: list[str] = []
     manifest_path = Path(manifest_path).resolve()
     if not manifest_path.is_file():
@@ -470,6 +502,8 @@ def validate_production_preflight(manifest_path: Path, *, expected_commit: str) 
         errors.append("production preflight identity mismatch")
     if manifest.get("git_commit_start") != expected_commit or manifest.get("git_commit_end") != expected_commit:
         errors.append("production preflight Git commit mismatch")
+    if manifest.get("tracked_worktree_clean_at_start") is not True or manifest.get("tracked_worktree_clean_at_end") is not True:
+        errors.append("production preflight tracked-clean contract mismatch")
     if manifest.get("ebc_config") != EXPECTED_TSGR_CONFIG:
         errors.append("production preflight TSGR config mismatch")
     controlled = manifest.get("controlled_amp") or {}
@@ -482,8 +516,106 @@ def validate_production_preflight(manifest_path: Path, *, expected_commit: str) 
     }
     if controlled != expected_controlled:
         errors.append("production preflight controlled AMP contract mismatch")
+    settings = manifest.get("settings") or {}
+    for field, expected in EXPECTED_E1_RUNTIME_SETTINGS.items():
+        if settings.get(field) != expected:
+            errors.append(f"production preflight setting mismatch: {field}")
 
-    artifact = (manifest.get("artifacts") or {}).get("optimizer_evidence") or {}
+    artifacts = manifest.get("artifacts") or {}
+    protocol_artifact = artifacts.get("protocol_manifest") or {}
+    initial_artifact = artifacts.get("initial_state") or {}
+    protocol_path = Path(protocol_artifact.get("path") or "").resolve()
+    initial_path = Path(initial_artifact.get("path") or "").resolve()
+    production_authority: dict[str, Any] | None = None
+    if _test_skip_artifact_validation:
+        pass
+    elif approved_authority is None or source_paths is None:
+        errors.append("production preflight requires the approved authority and source paths")
+    elif not protocol_path.is_file() or not initial_path.is_file():
+        errors.append("production preflight protocol or initial-state artifact is missing")
+    else:
+        for label, path, record in (
+            ("protocol", protocol_path, protocol_artifact),
+            ("initial-state", initial_path, initial_artifact),
+        ):
+            if record.get("bytes") != path.stat().st_size or record.get("sha256") != _file_sha256(path):
+                errors.append(f"production preflight {label} artifact mismatch")
+        protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+        if protocol.get("git_commit") != expected_commit:
+            errors.append("production preflight protocol Git commit mismatch")
+        frozen_path = protocol_path.parent / "e1-experiment-signature.json"
+        data_path = Path(protocol.get("data", {}).get("path") or "")
+        subset_path = Path(protocol.get("subset", {}).get("path") or "")
+        production_authority = validate_authoritative_artifacts(
+            protocol_path,
+            frozen_path,
+            data_path,
+            initial_path,
+            subset_path,
+            source_paths,
+        )
+        if not production_authority.get("evidence_valid"):
+            errors.extend(
+                f"production authority: {error}" for error in production_authority.get("errors", [])
+            )
+        for field in (
+            "common_initial_fingerprint",
+            "innovation_initial_fingerprint",
+            "dataset",
+            "subset",
+            "category_mapping_sha256",
+            "source_sha256",
+            "environment",
+        ):
+            if production_authority.get(field) != approved_authority.get(field):
+                errors.append(f"production/approved authority mismatch: {field}")
+        if manifest.get("environment") != production_authority.get("environment"):
+            errors.append("production preflight environment mismatch")
+        if settings.get("seed") != 0:
+            errors.append("production preflight setting mismatch: seed")
+        expected_model = (ROOT / "configs" / "rtdetr-l-ebc-qp.yaml").resolve()
+        if Path(settings.get("model") or "").resolve() != expected_model:
+            errors.append("production preflight setting mismatch: model")
+        if Path(settings.get("data") or "").resolve() != data_path.resolve():
+            errors.append("production preflight setting mismatch: data")
+        expected_protocol_summary = {
+            "signature": protocol.get("signature"),
+            "experiment_signature": protocol.get("experiment_signature"),
+            "dataset": protocol.get("dataset"),
+            "subset": protocol.get("subset"),
+            "data_sha256": protocol.get("data", {}).get("sha256"),
+            "initial_state_sha256": protocol.get("initial_state", {}).get("sha256"),
+        }
+        if manifest.get("protocol") != expected_protocol_summary:
+            errors.append("production preflight protocol summary mismatch")
+
+    production_sources = {
+        "source_config": "src/ebc_qp_config.py",
+        "source_decoder": "src/ebc_qp_decoder.py",
+        "source_trainer": "src/rtdetr_ebc_qp.py",
+        "source_launcher": "scripts/train_rtdetr_ebc_qp.py",
+    }
+    if not _test_skip_artifact_validation:
+        for artifact_name, relative_path in production_sources.items():
+            record = artifacts.get(artifact_name) or {}
+            path = Path(record.get("path") or "").resolve()
+            if path != (ROOT / relative_path).resolve() or not path.is_file():
+                errors.append(f"production training source artifact path mismatch: {relative_path}")
+                continue
+            worktree_sha = _file_sha256(path)
+            try:
+                commit_sha = _git_blob_sha256(expected_commit, relative_path)
+            except subprocess.CalledProcessError:
+                errors.append(f"production training source is missing from commit: {relative_path}")
+                continue
+            if (
+                record.get("bytes") != path.stat().st_size
+                or record.get("sha256") != worktree_sha
+                or worktree_sha != commit_sha
+            ):
+                errors.append(f"production training source artifact mismatch: {relative_path}")
+
+    artifact = artifacts.get("optimizer_evidence") or {}
     evidence_path = Path(artifact.get("path") or "").resolve()
     records: list[dict[str, Any]] = []
     if not evidence_path.is_file():
@@ -498,6 +630,7 @@ def validate_production_preflight(manifest_path: Path, *, expected_commit: str) 
     if len(records) != E1_EXPECTED_OPTIMIZER_ATTEMPTS:
         errors.append("production preflight optimizer attempt count mismatch")
     ratios: list[float] = []
+    expected_consecutive = 0
     for index, record in enumerate(records, start=1):
         if record.get("optimizer_attempt") != index:
             errors.append(f"production preflight optimizer attempt {index} is out of order")
@@ -507,11 +640,63 @@ def validate_production_preflight(manifest_path: Path, *, expected_commit: str) 
             errors.append(f"production preflight optimizer attempt {index} has invalid monitor ratio")
             break
         ratios.append(float(ratio))
+        expected_consecutive = expected_consecutive + 1 if float(ratio) > EXPECTED_TSGR_CONFIG["update_ratio_limit"] else 0
+        numeric_fields = (
+            "pure_stock_preclip_norm",
+            "pure_stock_shallow_preclip_norm",
+            "pure_stock_clip_coefficient",
+            "routed_shallow_preclip_norm",
+            "routed_shallow_clip_coefficient",
+            "aux_private_preclip_norm",
+            "aux_private_clip_coefficient",
+            "shallow_applied_ratio",
+        )
+        invalid_numeric = any(
+            isinstance(record.get(field), bool)
+            or not isinstance(record.get(field), (int, float))
+            or not math.isfinite(float(record[field]))
+            or float(record[field]) < 0.0
+            for field in numeric_fields
+        )
+        if invalid_numeric:
+            stock_norm = shallow_stock_norm = route_norm = private_norm = 0.0
+            coefficients_valid = applied_ratio_valid = False
+        else:
+            stock_norm = float(record["pure_stock_preclip_norm"])
+            shallow_stock_norm = float(record["pure_stock_shallow_preclip_norm"])
+            route_norm = float(record["routed_shallow_preclip_norm"])
+            private_norm = float(record["aux_private_preclip_norm"])
+            stock_clip = float(record["pure_stock_clip_coefficient"])
+            route_clip = float(record["routed_shallow_clip_coefficient"])
+            private_clip = float(record["aux_private_clip_coefficient"])
+            applied_ratio = float(record["shallow_applied_ratio"])
+            coefficients_valid = (
+                math.isclose(stock_clip, min(1.0, 10.0 / (stock_norm + 1e-6)), rel_tol=1e-9, abs_tol=1e-12)
+                and math.isclose(route_clip, min(1.0, 10.0 / (route_norm + 1e-6)), rel_tol=1e-9, abs_tol=1e-12)
+                and math.isclose(private_clip, min(1.0, 10.0 / (private_norm + 1e-6)), rel_tol=1e-9, abs_tol=1e-12)
+            )
+            expected_applied_ratio = (
+                route_norm * route_clip / (shallow_stock_norm * stock_clip)
+                if shallow_stock_norm * stock_clip > 0.0
+                else 0.0
+            )
+            applied_ratio_valid = math.isclose(
+                applied_ratio, expected_applied_ratio, rel_tol=1e-9, abs_tol=1e-12
+            )
         if (
             record.get("amp_step_skipped")
             or record.get("nonfinite_fields")
             or record.get("runtime_violation")
             or record.get("update_monitor_abort")
+            or record.get("update_monitor_consecutive") != expected_consecutive
+            or expected_consecutive >= EXPECTED_TSGR_CONFIG["update_ratio_patience"]
+            or record.get("gradient_clipping_mode") != "contribution_separated"
+            or record.get("auxiliary_finite") is not True
+            or invalid_numeric
+            or not coefficients_valid
+            or not applied_ratio_valid
+            or float(record.get("routed_shallow_preclip_norm", 0.0)) <= 0.0
+            or float(record.get("aux_private_preclip_norm", 0.0)) <= 0.0
             or record.get("p2_entry_count") != 0
             or record.get("ordinary_query_count") != 300
             or float(record.get("amp_scale_before", -1)) != E1_CONTROLLED_AMP_SCALE
@@ -532,6 +717,7 @@ def validate_production_preflight(manifest_path: Path, *, expected_commit: str) 
         "update_monitor_ratio_median": sorted(ratios)[len(ratios) // 2] if ratios else None,
         "update_monitor_ratio_max": max(ratios) if ratios else None,
         "update_monitor_abort_count": sum(bool(record.get("update_monitor_abort")) for record in records),
+        "production_authority": production_authority,
     }
 
 
@@ -591,8 +777,50 @@ def _validator_identity() -> dict[str, Any]:
     return {"commit": commit, "sources": records}
 
 
+def _validate_superseded_sidecar(
+    path: Path, *, authority: Mapping[str, Any], traces: Mapping[str, Any]
+) -> dict[str, Any]:
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise SystemExit(f"missing superseded promotion sidecar: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    signature = payload.get("signature")
+    unsigned = dict(payload)
+    unsigned.pop("signature", None)
+    if signature != _json_sha256(unsigned):
+        raise SystemExit("superseded promotion sidecar signature mismatch")
+    sha = _file_sha256(path)
+    checksum_path = path.with_suffix(path.suffix + ".sha256")
+    if not checksum_path.is_file() or checksum_path.read_text(encoding="ascii").split()[0] != sha:
+        raise SystemExit("superseded promotion sidecar checksum mismatch")
+    if (
+        payload.get("classification") != "MECHANISM_PASS_MONITOR_PENDING"
+        or payload.get("mechanism_gate_passed") is not True
+        or payload.get("promotion_ready") is not False
+    ):
+        raise SystemExit("superseded promotion sidecar is not the approved pending state")
+    pending_authority = payload.get("authority") or {}
+    for field in ("protocol_sha256", "initial_state_sha256", "data_sha256"):
+        if pending_authority.get(field) != authority.get(field):
+            raise SystemExit(f"superseded promotion sidecar authority mismatch: {field}")
+    if (payload.get("traces") or {}).get("trace_sha256") != traces.get("trace_sha256"):
+        raise SystemExit("superseded promotion sidecar trace SHA mismatch")
+    return {"path": str(path), "sha256": sha, "signature": signature}
+
+
 def main() -> None:
     args = build_parser().parse_args()
+    production_values = (
+        args.production_preflight_manifest,
+        args.production_preflight_commit,
+        args.supersedes_promotion_sidecar,
+    )
+    if any(value is not None for value in production_values) and not all(
+        value is not None for value in production_values
+    ):
+        raise SystemExit(
+            "production preflight manifest, commit, and superseded sidecar must be provided together"
+        )
     validator_identity = _validator_identity()
     authority = validate_authoritative_artifacts(
         args.protocol_manifest,
@@ -613,10 +841,21 @@ def main() -> None:
     production = (
         validate_production_preflight(
             args.production_preflight_manifest,
-            expected_commit=validator_identity["commit"],
+            expected_commit=str(args.production_preflight_commit),
+            approved_authority=authority,
+            source_paths=_installed_ultralytics_sources(),
         )
         if args.production_preflight_manifest is not None
         else {"verified": False, "errors": ["production preflight is pending"]}
+    )
+    supersedes = (
+        _validate_superseded_sidecar(
+            args.supersedes_promotion_sidecar,
+            authority=authority,
+            traces=traces,
+        )
+        if args.supersedes_promotion_sidecar is not None
+        else None
     )
     promotion_ready = mechanism_gate_passed and bool(production["verified"])
     classification = (
@@ -636,6 +875,7 @@ def main() -> None:
         "promotion_ready": promotion_ready,
         "production_update_monitor_verified": bool(production["verified"]),
         "production_preflight": production,
+        "supersedes": supersedes,
         "authority": authority,
         "traces": traces,
         "training_evidence_commit": authority.get("training_commit"),
