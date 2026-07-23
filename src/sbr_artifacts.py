@@ -311,6 +311,11 @@ canonical_json_dumps = canonical_json
 atomic_write_gzip_jsonl = atomic_write_jsonl_gz
 dataset_content_signature = lambda root, split="val": _content_manifest(Path(root), split)[1]
 validate_finite_legal = _check_value
+atomic_json_dump = atomic_write_json
+atomic_jsonl_gzip = atomic_write_jsonl_gz
+dataset_signature = dataset_content_signature
+source_fingerprint = git_provenance
+collect_environment = environment_info
 
 
 __all__ = [
@@ -320,4 +325,6 @@ __all__ = [
     "environment_info", "protocol_signature",
     "canonical_json_dumps", "atomic_write_gzip_jsonl", "dataset_content_signature",
     "validate_finite_legal", "validate_raw_view_cache",
+    "atomic_json_dump", "atomic_jsonl_gzip", "dataset_signature",
+    "source_fingerprint", "collect_environment",
 ]
