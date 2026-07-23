@@ -410,6 +410,20 @@ class AuditImage:
     ignore_boxes: tuple[Box, ...] = ()
 
 
+@dataclass(frozen=True)
+class PreparedImageAudit:
+    """One-image trusted audit state reused across IoU thresholds."""
+
+    image: AuditImage
+    standard: CClusterReconstruction
+    guarded: CClusterReconstruction
+    invariants: Mapping[str, bool | float]
+    c_match_predictions: tuple[Mapping[str, Any], ...]
+    c_pre_cap_match_predictions: tuple[Mapping[str, Any], ...]
+    full_a_to_c: tuple[tuple[IdentityKey, int], ...]
+    c_by_original_index: tuple[tuple[int, AuditRawDetection], ...]
+
+
 def _iou64(a: Sequence[float], b: Sequence[float]) -> float:
     ax1, ay1, ax2, ay2 = (np.float64(x) for x in a)
     bx1, by1, bx2, by2 = (np.float64(x) for x in b)
@@ -698,6 +712,253 @@ def audit_image_at_threshold(image: Any, iou_threshold: float = 0.75) -> ImageAu
     return ImageAuditResult(tuple(events), am, cm)
 
 
+def prepare_image_audit(image: Any) -> PreparedImageAudit:
+    """Build trusted C reconstruction/guard state exactly once for one image."""
+
+    fixture = _coerce_image(image)
+    a_raw = tuple(fixture.a_detections)
+    c_raw = tuple(fixture.c_detections)
+    if any(
+        not isinstance(item, AuditRawDetection) or item.arm != "A"
+        for item in a_raw
+    ) or any(
+        not isinstance(item, AuditRawDetection) or item.arm != "C"
+        for item in c_raw
+    ):
+        raise ValueError("prepared audit requires exact A/C raw detections")
+    for item in (*a_raw, *c_raw):
+        if (
+            item.image_id != fixture.image_id
+            or item.width != fixture.width
+            or item.height != fixture.height
+        ):
+            raise ValueError("prepared raw detection image provenance disagrees")
+    full_mapping = map_full_a_to_c(a_raw, c_raw)
+    standard = reconstruct_c_clusters(c_raw)
+    guarded = _apply_guard_prevalidated(standard, c_raw)
+    invariants = _verify_guard_prevalidated(
+        standard, guarded, c_raw, guarded_raw_detections=c_raw
+    )
+    c_match_predictions = tuple(
+        {
+            "box": prediction.box,
+            "score": prediction.score,
+            "class_id": prediction.class_id,
+            "source_order": prediction.source_order,
+            "query_index": prediction.query_index,
+            "original_index": members[0],
+        }
+        for prediction, members in zip(
+            standard.standard_predictions, standard.cluster_members
+        )
+    )
+    c_pre_cap_match_predictions = tuple(
+        {
+            "box": prediction.box,
+            "score": prediction.score,
+            "class_id": prediction.class_id,
+            "source_order": prediction.source_order,
+            "query_index": prediction.query_index,
+            "original_index": members[0],
+        }
+        for prediction, members in zip(
+            standard.pre_cap_predictions, standard.cluster_members
+        )
+    )
+    return PreparedImageAudit(
+        image=fixture,
+        standard=standard,
+        guarded=guarded,
+        invariants=invariants,
+        c_match_predictions=c_match_predictions,
+        c_pre_cap_match_predictions=c_pre_cap_match_predictions,
+        full_a_to_c=tuple(full_mapping.items()),
+        c_by_original_index=tuple(
+            (item.original_index, item) for item in c_raw
+        ),
+    )
+
+
+def audit_prepared_image_at_threshold(
+    prepared: PreparedImageAudit, iou_threshold: float = 0.75
+) -> ImageAuditResult:
+    """Attribute one threshold without rebuilding prepared C clusters."""
+
+    if not isinstance(prepared, PreparedImageAudit):
+        raise ValueError("prepared audit state is required")
+    fixture = prepared.image
+    reconstruction = prepared.standard
+    a_raw = tuple(fixture.a_detections)
+    c_preds = reconstruction.standard_predictions
+    c_match_preds = prepared.c_match_predictions
+    am = match_large_targets(
+        a_raw,
+        fixture.gt_boxes,
+        fixture.gt_classes,
+        ignore_boxes=fixture.ignore_boxes,
+        width=fixture.width,
+        height=fixture.height,
+        iou_threshold=iou_threshold,
+    )
+    cm = match_large_targets(
+        c_match_preds,
+        fixture.gt_boxes,
+        fixture.gt_classes,
+        ignore_boxes=fixture.ignore_boxes,
+        width=fixture.width,
+        height=fixture.height,
+        iou_threshold=iou_threshold,
+    )
+    pre_cap_match = _match_large_targets(
+        prepared.c_pre_cap_match_predictions,
+        fixture.gt_boxes,
+        fixture.gt_classes,
+        ignore_boxes=fixture.ignore_boxes,
+        width=fixture.width,
+        height=fixture.height,
+        iou_threshold=float(iou_threshold),
+        prediction_cap=None,
+    )
+    full_mapping = dict(prepared.full_a_to_c)
+    c_by_orig = dict(prepared.c_by_original_index)
+    events: list[AttributionEvent] = []
+    for gt_idx in am.tp_gt_indices:
+        if gt_idx in cm.gt_to_prediction:
+            continue
+        category = AttributionCategory.OTHER
+        recovers = False
+        a_pidx = am.gt_to_prediction[gt_idx]
+        anchor = (
+            a_raw[a_pidx]
+            if a_pidx < len(a_raw)
+            and isinstance(a_raw[a_pidx], AuditRawDetection)
+            else None
+        )
+        anchor_c_index = (
+            full_mapping.get(anchor.identity_key)
+            if anchor is not None
+            else None
+        )
+        cluster_index = (
+            next(
+                (
+                    index
+                    for index, members in enumerate(
+                        reconstruction.cluster_members
+                    )
+                    if anchor_c_index in members
+                ),
+                None,
+            )
+            if anchor_c_index is not None
+            else None
+        )
+        if cluster_index is not None:
+            members = tuple(
+                c_by_orig[index]
+                for index in reconstruction.cluster_members[cluster_index]
+                if index in c_by_orig
+            )
+            mixed = any(
+                member.source_order == 0 for member in members
+            ) and any(member.source_order > 0 for member in members)
+            if mixed and cluster_index < len(c_preds):
+                fulls = [
+                    member for member in members if member.source_order == 0
+                ]
+                best = min(
+                    fulls,
+                    key=lambda member: (
+                        -member.score,
+                        member.source_order,
+                        member.query_index,
+                        member.original_index,
+                    ),
+                )
+                counterfactual = list(c_preds)
+                old = counterfactual[cluster_index]
+                standard_fails_geometry = (
+                    old.class_id != fixture.gt_classes[gt_idx]
+                    or _iou64(old.box, fixture.gt_boxes[gt_idx])
+                    < float(iou_threshold)
+                )
+                if standard_fails_geometry:
+                    counterfactual[cluster_index] = replace(
+                        old, box=best.global_xyxy
+                    )
+                    counterfactual_records = tuple(
+                        {
+                            "box": prediction.box,
+                            "score": prediction.score,
+                            "class_id": prediction.class_id,
+                            "source_order": prediction.source_order,
+                            "query_index": prediction.query_index,
+                            "original_index": cluster_members[0],
+                        }
+                        for prediction, cluster_members in zip(
+                            counterfactual,
+                            reconstruction.cluster_members,
+                        )
+                    )
+                    recovers = gt_idx in match_large_targets(
+                        counterfactual_records,
+                        fixture.gt_boxes,
+                        fixture.gt_classes,
+                        ignore_boxes=fixture.ignore_boxes,
+                        width=fixture.width,
+                        height=fixture.height,
+                        iou_threshold=iou_threshold,
+                    ).gt_to_prediction
+                    if recovers:
+                        category = (
+                            AttributionCategory.MIXED_CLUSTER_LOCALIZATION
+                        )
+        if category is AttributionCategory.OTHER:
+            pre_cap_prediction = pre_cap_match.gt_to_prediction.get(gt_idx)
+            if (
+                pre_cap_prediction is not None
+                and pre_cap_prediction
+                >= len(reconstruction.standard_predictions)
+            ):
+                category = AttributionCategory.FINAL_300_TRUNCATION
+        if category is AttributionCategory.OTHER:
+            for prediction_index, prediction in enumerate(c_match_preds):
+                box, _, class_id, *_ = _prediction_fields(
+                    prediction, prediction_index
+                )
+                if (
+                    class_id == fixture.gt_classes[gt_idx]
+                    and _iou64(box, fixture.gt_boxes[gt_idx])
+                    >= float(iou_threshold)
+                    and prediction_index
+                    not in cm.neutral_prediction_indices
+                ):
+                    category = AttributionCategory.MATCHING_COMPETITION
+                    break
+            else:
+                if not any(
+                    _prediction_fields(prediction, index)[2]
+                    == fixture.gt_classes[gt_idx]
+                    and _iou64(
+                        _prediction_fields(prediction, index)[0],
+                        fixture.gt_boxes[gt_idx],
+                    )
+                    >= float(iou_threshold)
+                    for index, prediction in enumerate(c_match_preds)
+                ):
+                    category = AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+        events.append(
+            AttributionEvent(
+                fixture.image_id,
+                gt_idx,
+                float(iou_threshold),
+                category,
+                recovers,
+            )
+        )
+    return ImageAuditResult(tuple(events), am, cm)
+
+
 def _fuse_float64(cluster: tuple[Detection, ...]) -> Detection:
     seed = cluster[0]
     if len(cluster) == 1:
@@ -802,6 +1063,17 @@ def apply_large_view_guard(
     rebuilt = reconstruct_c_clusters(raw)
     if not _same_reconstruction(reconstruction, rebuilt):
         raise ValueError("standard reconstruction does not match supplied raw data")
+    return _apply_guard_prevalidated(reconstruction, raw)
+
+
+def _apply_guard_prevalidated(
+    reconstruction: CClusterReconstruction,
+    raw_detections: Iterable[AuditRawDetection],
+) -> CClusterReconstruction:
+    """Apply the guard to a reconstruction created from ``raw_detections``."""
+
+    raw = tuple(raw_detections)
+    _raw_detection_hash(raw)
     member_clusters = _validated_cluster_members(reconstruction)
     pre_cap_predictions, selected_predictions = (
         _validated_reconstruction_predictions(reconstruction)
@@ -1049,12 +1321,13 @@ def _same_reconstruction(
         return False
 
 
-def verify_guard_invariants(
+def _verify_guard_invariants_core(
     standard: CClusterReconstruction,
     guarded: CClusterReconstruction,
     raw_detections: Iterable[AuditRawDetection],
     *,
     guarded_raw_detections: Iterable[AuditRawDetection] | None = None,
+    prevalidated: bool,
 ) -> dict[str, bool | float]:
     """Verify that Large-View Guard changed coordinates and nothing else."""
 
@@ -1101,7 +1374,11 @@ def verify_guard_invariants(
         guarded_pre, guarded_selected = _validated_reconstruction_predictions(
             guarded
         )
-        expected = apply_large_view_guard(standard, original_raw)
+        expected = (
+            _apply_guard_prevalidated(standard, original_raw)
+            if prevalidated
+            else apply_large_view_guard(standard, original_raw)
+        )
         expected_pre, expected_selected = _validated_reconstruction_predictions(
             expected
         )
@@ -1196,6 +1473,40 @@ def verify_guard_invariants(
         )
     )
     return result
+
+
+def verify_guard_invariants(
+    standard: CClusterReconstruction,
+    guarded: CClusterReconstruction,
+    raw_detections: Iterable[AuditRawDetection],
+    *,
+    guarded_raw_detections: Iterable[AuditRawDetection] | None = None,
+) -> dict[str, bool | float]:
+    """Verify a standalone guard output against a fresh raw reconstruction."""
+
+    return _verify_guard_invariants_core(
+        standard,
+        guarded,
+        raw_detections,
+        guarded_raw_detections=guarded_raw_detections,
+        prevalidated=False,
+    )
+
+
+def _verify_guard_prevalidated(
+    standard: CClusterReconstruction,
+    guarded: CClusterReconstruction,
+    raw_detections: Iterable[AuditRawDetection],
+    *,
+    guarded_raw_detections: Iterable[AuditRawDetection] | None = None,
+) -> dict[str, bool | float]:
+    return _verify_guard_invariants_core(
+        standard,
+        guarded,
+        raw_detections,
+        guarded_raw_detections=guarded_raw_detections,
+        prevalidated=True,
+    )
 
 
 _GUARD_DELTA_KEYS = (
@@ -1595,6 +1906,7 @@ def evaluate_guard_upper_bound(
 __all__ = [
     "AuditRawDetection",
     "AuditImage",
+    "PreparedImageAudit",
     "AttributionCategory",
     "AttributionEvent",
     "ImageAuditResult",
@@ -1602,6 +1914,8 @@ __all__ = [
     "effective_size",
     "match_large_targets",
     "audit_image_at_threshold",
+    "prepare_image_audit",
+    "audit_prepared_image_at_threshold",
     "group_relevant_raw_rows",
     "map_full_a_to_c",
     "reconstruct_c_clusters",

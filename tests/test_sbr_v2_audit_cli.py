@@ -17,6 +17,7 @@ from src.sbr_artifacts import (
     write_checksums,
 )
 from src.sbr_g0 import FrozenSBRProtocol
+from src.sbr_metrics import evaluate_dataset
 
 
 REQUIRED_OUTPUTS = {
@@ -56,7 +57,6 @@ def _raw(
         "global_xyxy": list(box),
         "score": 0.9,
         "class_id": 0,
-        "fixture_index": index,
         "view_manifest": [
             {
                 "view_id": ("full", "TL", "TR", "BL", "BR")[item],
@@ -106,11 +106,50 @@ def _make_input(
             )
         )
     atomic_write_jsonl_gz(evidence / "raw_views.jsonl.gz", rows)
+    c_box = [40.0, 0.0, 240.0, 200.0] if recoverable else [
+        0.0,
+        0.0,
+        200.0,
+        200.0,
+    ]
+
+    def record(row: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in row.items()
+            if key != "view_manifest"
+        }
+
+    def prediction(box: list[float]) -> dict[str, object]:
+        return {
+            "box": box,
+            "global_xyxy": [0.0, 0.0, 200.0, 200.0],
+            "score": 0.9,
+            "class_id": 0,
+            "source_order": 0,
+            "query_index": 0,
+        }
+
+    c_records = [record(c_full)]
+    if recoverable:
+        c_records.append(record(rows[-1]))
     atomic_write_jsonl_gz(
         evidence / "arm_predictions.jsonl.gz",
         [
-            {"arm": "A", "image_id": "one.jpg", "predictions": []},
-            {"arm": "C", "image_id": "one.jpg", "predictions": []},
+            {
+                "image_id": "one.jpg",
+                "records": [record(a_full)],
+                "predictions": [prediction([0.0, 0.0, 200.0, 200.0])],
+            },
+            {"image_id": "one.jpg", "records": [], "predictions": []},
+            {
+                "image_id": "one.jpg",
+                "records": c_records,
+                "predictions": [prediction(c_box)],
+            },
+            {"image_id": "one.jpg", "records": [], "predictions": []},
+            {"image_id": "one.jpg", "records": [], "predictions": []},
+            {"image_id": "one.jpg", "records": [], "predictions": []},
         ],
     )
     source_commit = "a" * 40
@@ -135,9 +174,38 @@ def _make_input(
         "image_list": image_list,
     }
     atomic_write_json(evidence / "g0_manifest.json", g0_manifest)
+    def metric_row(box: list[float]) -> dict[str, object]:
+        return {
+            "image_id": "one.jpg",
+            "width": 640,
+            "height": 640,
+            "pred_boxes": [box],
+            "pred_scores": [0.9],
+            "pred_classes": [0],
+            "pred_source": [0],
+            "pred_query": [0],
+            "gt_boxes": [[0.0, 0.0, 200.0, 200.0]],
+            "gt_classes": [0],
+            "ignore_boxes": [],
+            "effective_gain": 1.0,
+        }
+
+    g0_metrics = {
+        "A": evaluate_dataset(
+            [metric_row([0.0, 0.0, 200.0, 200.0])]
+        ),
+        "C": evaluate_dataset([metric_row(c_box)]),
+    }
+
+    def json_ready(value):
+        if isinstance(value, dict):
+            return {str(key): json_ready(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_ready(item) for item in value]
+        return value.item() if hasattr(value, "item") else value
+
     atomic_write_json(
-        evidence / "g0_metrics.json",
-        {"A": {"AP-large-SBR": 1.0}, "C": {"AP-large-SBR": 0.0}},
+        evidence / "g0_metrics.json", json_ready(g0_metrics)
     )
     atomic_write_json(
         evidence / "g0_gate.json",
@@ -220,6 +288,27 @@ def _clean_provenance() -> dict[str, object]:
         "untracked": False,
         "source_tree_hash": "e" * 64,
     }
+
+
+def _reseal_changed_input(
+    manifest: Path, evidence: Path, key: str, changed_path: Path
+) -> None:
+    write_checksums(
+        evidence / "checksums.sha256",
+        [p for p in evidence.iterdir() if p.name != "checksums.sha256"],
+        root=evidence,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["files"][key]["sha256"] = sha256_file(changed_path)
+    payload["files"]["original_checksums"]["sha256"] = sha256_file(
+        evidence / "checksums.sha256"
+    )
+    atomic_write_json(manifest, payload)
+
+
+def _gzip_rows(path: Path) -> list[dict[str, object]]:
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle]
 
 
 def test_parser_exposes_only_operational_arguments():
@@ -329,6 +418,7 @@ def test_synthetic_end_to_end_eligible_writes_exact_atomic_contract(
         audit_manifest["original_g0_decision"]["checksums_sha256"]
     ) == 64
     assert audit_manifest["limitations"]
+    assert audit_manifest["primary_command"]["effective_workers"] == 0
     with gzip.open(
         output / "attribution_events.jsonl.gz", "rt", encoding="utf-8"
     ) as fh:
@@ -568,3 +658,184 @@ def test_dataset_image_order_must_match_frozen_list_exactly(
     monkeypatch.setattr(cli, "load_dataset", reordered)
     with pytest.raises(ValueError, match="order"):
         cli.validate_input_manifest(manifest, tmp_path / "out")
+
+
+def test_arm_prediction_records_are_canonical_bound_to_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, evidence, _ = _make_input(tmp_path)
+    arms = evidence / "arm_predictions.jsonl.gz"
+    rows = _gzip_rows(arms)
+    rows[0]["records"][0]["score"] = 0.8
+    atomic_write_jsonl_gz(arms, rows)
+    _reseal_changed_input(manifest, evidence, "arm_predictions", arms)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    with pytest.raises(ValueError, match="records|raw"):
+        cli.run(args)
+
+
+def test_frozen_a_c_predictions_are_exactly_reproduced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, evidence, _ = _make_input(tmp_path)
+    arms = evidence / "arm_predictions.jsonl.gz"
+    rows = _gzip_rows(arms)
+    rows[2]["predictions"][0]["box"][0] = 1.0
+    atomic_write_jsonl_gz(arms, rows)
+    _reseal_changed_input(manifest, evidence, "arm_predictions", arms)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    with pytest.raises(ValueError, match="prediction"):
+        cli.run(args)
+
+
+def test_arm_prediction_requires_exact_six_block_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, evidence, _ = _make_input(tmp_path)
+    arms = evidence / "arm_predictions.jsonl.gz"
+    rows = _gzip_rows(arms)
+    atomic_write_jsonl_gz(arms, rows[:-1])
+    _reseal_changed_input(manifest, evidence, "arm_predictions", arms)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    with pytest.raises(ValueError, match="6|block|row"):
+        cli.run(args)
+
+
+def test_recomputed_a_c_metrics_must_equal_sealed_g0_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, evidence, _ = _make_input(tmp_path)
+    metrics_path = evidence / "g0_metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["A"]["mAP50-95"] += 0.01
+    atomic_write_json(metrics_path, metrics)
+    _reseal_changed_input(manifest, evidence, "g0_metrics", metrics_path)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    with pytest.raises(ValueError, match="metrics"):
+        cli.run(args)
+
+
+def test_primary_reconstructs_c_clusters_exactly_once_per_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+    import src.sbr_v2_audit as audit
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    calls = 0
+    real_reconstruct = audit.reconstruct_c_clusters
+
+    def counted(raw):
+        nonlocal calls
+        calls += 1
+        return real_reconstruct(raw)
+
+    monkeypatch.setattr(audit, "reconstruct_c_clusters", counted)
+    manifest, _, _ = _make_input(tmp_path)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    assert cli.run(args) == 0
+    assert calls == 1
+
+
+def test_nonzero_workers_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, _, _ = _make_input(tmp_path)
+    args = cli.build_parser().parse_args(
+        [
+            "--input-manifest",
+            str(manifest),
+            "--output",
+            str(tmp_path / "out"),
+            "--workers",
+            "1",
+        ]
+    )
+    with pytest.raises(ValueError, match="workers"):
+        cli.run(args)
+
+
+def test_zero_detection_a_c_rows_are_proven_by_empty_frozen_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.audit_sbr_v2 as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda _path: _clean_provenance())
+    manifest, evidence, _ = _make_input(tmp_path)
+    raw_path = evidence / "raw_views.jsonl.gz"
+    arms_path = evidence / "arm_predictions.jsonl.gz"
+    metrics_path = evidence / "g0_metrics.json"
+    atomic_write_jsonl_gz(raw_path, [])
+    arm_rows = _gzip_rows(arms_path)
+    for index in (0, 2):
+        arm_rows[index]["records"] = []
+        arm_rows[index]["predictions"] = []
+    atomic_write_jsonl_gz(arms_path, arm_rows)
+    empty_row = {
+        "image_id": "one.jpg",
+        "width": 640,
+        "height": 640,
+        "pred_boxes": [],
+        "pred_scores": [],
+        "pred_classes": [],
+        "pred_source": [],
+        "pred_query": [],
+        "gt_boxes": [[0.0, 0.0, 200.0, 200.0]],
+        "gt_classes": [0],
+        "ignore_boxes": [],
+        "effective_gain": 1.0,
+    }
+    empty_metrics = evaluate_dataset([empty_row])
+    json_metrics = json.loads(
+        json.dumps(empty_metrics, default=lambda value: value.item())
+    )
+    atomic_write_json(
+        metrics_path, {"A": json_metrics, "C": json_metrics}
+    )
+    write_checksums(
+        evidence / "checksums.sha256",
+        [p for p in evidence.iterdir() if p.name != "checksums.sha256"],
+        root=evidence,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    for key, path in (
+        ("raw_views", raw_path),
+        ("arm_predictions", arms_path),
+        ("g0_metrics", metrics_path),
+        ("original_checksums", evidence / "checksums.sha256"),
+    ):
+        payload["files"][key]["sha256"] = sha256_file(path)
+    atomic_write_json(manifest, payload)
+    args = cli.build_parser().parse_args(
+        ["--input-manifest", str(manifest), "--output", str(tmp_path / "out")]
+    )
+    assert cli.run(args) == 0
+    gate = json.loads(
+        (tmp_path / "out" / "primary_gate.json").read_text(encoding="utf-8")
+    )
+    assert gate["status"] == "SBR_V2_AUDIT_STOP"

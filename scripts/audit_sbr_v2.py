@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 import gzip
 import json
 import math
+from numbers import Real
 import os
 from pathlib import Path
 import shutil
@@ -39,13 +40,10 @@ from src.sbr_v2_audit import (
     AuditImage,
     AuditRawDetection,
     AttributionCategory,
-    apply_large_view_guard,
-    audit_image_at_threshold,
+    audit_prepared_image_at_threshold,
     evaluate_guard_upper_bound,
     group_relevant_raw_rows,
-    map_full_a_to_c,
-    reconstruct_c_clusters,
-    verify_guard_invariants,
+    prepare_image_audit,
 )
 
 
@@ -126,6 +124,12 @@ class ValidatedAuditInput:
     independent_adjudication_sha256: str
     original_checksums_sha256: str
     checkpoint_sha256: str
+
+
+@dataclass(frozen=True)
+class FrozenArmImage:
+    records: tuple[Mapping[str, Any], ...]
+    predictions: tuple[Mapping[str, Any], ...]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -489,6 +493,64 @@ def _iter_jsonl_gz(path: Path) -> Iterable[dict[str, Any]]:
         raise ValueError(f"invalid or truncated gzip JSONL: {path}") from exc
 
 
+def _explicit_mapping_sequence(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, (str, bytes, Mapping)):
+        raise ValueError(f"{name} must be an explicit sequence")
+    try:
+        rows = tuple(value)
+    except TypeError:
+        raise ValueError(f"{name} must be an explicit sequence") from None
+    if any(not isinstance(row, Mapping) for row in rows):
+        raise ValueError(f"{name} rows must be objects")
+    return rows  # type: ignore[return-value]
+
+
+def _load_frozen_arm_predictions(
+    path: Path, image_list: Sequence[str]
+) -> dict[str, dict[str, FrozenArmImage]]:
+    block_arms = ("A", "B", "C", "D", "E", "F")
+    image_ids = tuple(image_list)
+    expected_rows = len(block_arms) * len(image_ids)
+    selected: dict[str, dict[str, FrozenArmImage]] = {"A": {}, "C": {}}
+    seen = 0
+    for index, row in enumerate(_iter_jsonl_gz(path)):
+        if index >= expected_rows:
+            raise ValueError("arm_predictions has more than exact 6*N rows")
+        block_index, image_index = divmod(index, len(image_ids))
+        block_arm = block_arms[block_index]
+        image_id = image_ids[image_index]
+        if row.get("image_id") != image_id:
+            raise ValueError(
+                f"arm_predictions {block_arm} block image order disagrees"
+            )
+        top_arm = row.get("arm")
+        if top_arm is not None and top_arm != block_arm:
+            raise ValueError("arm_predictions top-level arm/block disagrees")
+        records = _explicit_mapping_sequence(
+            row.get("records"), "arm_predictions.records"
+        )
+        predictions = _explicit_mapping_sequence(
+            row.get("predictions"), "arm_predictions.predictions"
+        )
+        if block_arm in selected:
+            if any(record.get("arm") != block_arm for record in records):
+                raise ValueError(
+                    f"arm_predictions {block_arm} records arm disagrees"
+                )
+            selected[block_arm][image_id] = FrozenArmImage(
+                records=records,
+                predictions=predictions,
+            )
+        seen += 1
+    if seen != expected_rows:
+        raise ValueError(
+            f"arm_predictions requires exact 6*N rows, got {seen}"
+        )
+    if any(len(selected[arm]) != len(image_ids) for arm in ("A", "C")):
+        raise ValueError("arm_predictions A/C blocks are incomplete")
+    return selected
+
+
 def _strict_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a nonnegative integer")
@@ -690,6 +752,138 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _raw_record_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in row.items()
+        if key != "view_manifest" and not key.startswith("_audit_")
+    }
+
+
+def _assert_frozen_records(
+    arm: str,
+    image_id: str,
+    raw_rows: Sequence[Mapping[str, Any]],
+    frozen: FrozenArmImage,
+) -> None:
+    expected = [_raw_record_payload(row) for row in raw_rows]
+    if canonical_json_bytes(expected) != canonical_json_bytes(
+        list(frozen.records)
+    ):
+        raise ValueError(
+            f"frozen {arm} records disagree with raw cache for {image_id}"
+        )
+
+
+def _strict_recursive_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+            return False
+        return set(left) == set(right) and all(
+            _strict_recursive_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        if not isinstance(left, (list, tuple)) or not isinstance(
+            right, (list, tuple)
+        ):
+            return False
+        return len(left) == len(right) and all(
+            _strict_recursive_equal(a, b) for a, b in zip(left, right)
+        )
+    if (
+        isinstance(left, Real)
+        and not isinstance(left, bool)
+        and isinstance(right, Real)
+        and not isinstance(right, bool)
+    ):
+        return (
+            math.isfinite(float(left))
+            and math.isfinite(float(right))
+            and float(left) == float(right)
+        )
+    return type(left) is type(right) and left == right
+
+
+def _prediction_identity_from_mapping(
+    prediction: Mapping[str, Any], name: str
+) -> dict[str, Any]:
+    required = (
+        "box",
+        "global_xyxy",
+        "score",
+        "class_id",
+        "source_order",
+        "query_index",
+    )
+    if any(key not in prediction for key in required):
+        raise ValueError(f"{name} prediction identity is incomplete")
+    box = _box(prediction["box"], f"{name}.box")
+    global_box = _box(
+        prediction["global_xyxy"], f"{name}.global_xyxy"
+    )
+    score = prediction["score"]
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, Real)
+        or not math.isfinite(float(score))
+        or not 0.0 <= float(score) <= 1.0
+    ):
+        raise ValueError(f"{name}.score is invalid")
+    return {
+        "box": box,
+        "global_xyxy": global_box,
+        "score": float(score),
+        "class_id": _strict_int(prediction["class_id"], f"{name}.class_id"),
+        "source_order": _strict_int(
+            prediction["source_order"], f"{name}.source_order"
+        ),
+        "query_index": _strict_int(
+            prediction["query_index"], f"{name}.query_index"
+        ),
+    }
+
+
+def _prediction_identity_from_detection(
+    prediction: Any, name: str
+) -> dict[str, Any]:
+    global_box = getattr(prediction, "global_xyxy", None)
+    return _prediction_identity_from_mapping(
+        {
+            "box": getattr(prediction, "box", None),
+            "global_xyxy": global_box,
+            "score": getattr(prediction, "score", None),
+            "class_id": getattr(prediction, "class_id", None),
+            "source_order": getattr(prediction, "source_order", None),
+            "query_index": getattr(prediction, "query_index", None),
+        },
+        name,
+    )
+
+
+def _assert_frozen_predictions(
+    arm: str,
+    image_id: str,
+    predictions: Sequence[Any],
+    frozen: FrozenArmImage,
+) -> None:
+    actual = [
+        _prediction_identity_from_detection(
+            prediction, f"recomputed {arm}[{index}]"
+        )
+        for index, prediction in enumerate(predictions)
+    ]
+    expected = [
+        _prediction_identity_from_mapping(
+            prediction, f"frozen {arm}[{index}]"
+        )
+        for index, prediction in enumerate(frozen.predictions)
+    ]
+    if not _strict_recursive_equal(actual, expected):
+        raise ValueError(
+            f"frozen {arm} predictions disagree for {image_id}"
+        )
+
+
 def _aggregate_invariants(
     per_image: Sequence[tuple[str, Mapping[str, Any], int, int]]
 ) -> dict[str, Any]:
@@ -800,6 +994,9 @@ def _run_audit(
     event_rows: list[dict[str, Any]] = []
     invariant_rows: list[tuple[str, Mapping[str, Any], int, int]] = []
     seen_event_ids: set[tuple[str, int, float]] = set()
+    frozen_arms = _load_frozen_arm_predictions(
+        validated.paths["arm_predictions"], validated.image_list
+    )
 
     grouped = group_relevant_raw_rows(
         _iter_jsonl_gz(validated.paths["raw_views"]),
@@ -823,12 +1020,34 @@ def _run_audit(
                 )
         a_raw = tuple(item for item in parsed if item.arm == "A")
         c_raw = tuple(item for item in parsed if item.arm == "C")
-        map_full_a_to_c(a_raw, c_raw)
-        standard = reconstruct_c_clusters(c_raw)
-        guarded = apply_large_view_guard(standard, c_raw)
-        image_invariants = verify_guard_invariants(
-            standard, guarded, c_raw, guarded_raw_detections=c_raw
+        a_frozen = frozen_arms["A"][group.image_id]
+        c_frozen = frozen_arms["C"][group.image_id]
+        _assert_frozen_records(
+            "A",
+            group.image_id,
+            tuple(row for row in group.rows if row.get("arm") == "A"),
+            a_frozen,
         )
+        _assert_frozen_records(
+            "C",
+            group.image_id,
+            tuple(row for row in group.rows if row.get("arm") == "C"),
+            c_frozen,
+        )
+        fixture = AuditImage(
+            image_id=group.image_id,
+            width=int(image["width"]),
+            height=int(image["height"]),
+            gt_boxes=tuple(tuple(box) for box in image["gt_boxes"]),
+            gt_classes=tuple(int(cls) for cls in image["gt_classes"]),
+            a_detections=a_raw,
+            c_detections=c_raw,
+            ignore_boxes=tuple(tuple(box) for box in image["ignore_boxes"]),
+        )
+        prepared = prepare_image_audit(fixture)
+        standard = prepared.standard
+        guarded = prepared.guarded
+        image_invariants = prepared.invariants
         singleton_indices = [
             index
             for index, members in enumerate(standard.cluster_members)
@@ -849,21 +1068,22 @@ def _run_audit(
         )
 
         a_predictions = tuple(item.to_detection() for item in a_raw)
+        _assert_frozen_predictions(
+            "A", group.image_id, a_predictions, a_frozen
+        )
+        _assert_frozen_predictions(
+            "C",
+            group.image_id,
+            standard.standard_predictions,
+            c_frozen,
+        )
         a_rows.append(_metric_row(image, a_predictions))
         c_rows.append(_metric_row(image, standard.standard_predictions))
         v2_rows.append(_metric_row(image, guarded.standard_predictions))
-        fixture = AuditImage(
-            image_id=group.image_id,
-            width=int(image["width"]),
-            height=int(image["height"]),
-            gt_boxes=tuple(tuple(box) for box in image["gt_boxes"]),
-            gt_classes=tuple(int(cls) for cls in image["gt_classes"]),
-            a_detections=a_raw,
-            c_detections=c_raw,
-            ignore_boxes=tuple(tuple(box) for box in image["ignore_boxes"]),
-        )
         for threshold in FROZEN_IOU_THRESHOLDS:
-            result = audit_image_at_threshold(fixture, threshold)
+            result = audit_prepared_image_at_threshold(
+                prepared, threshold
+            )
             for event in result.events:
                 event_id = (
                     event.image_id,
@@ -896,6 +1116,14 @@ def _run_audit(
         a_tp_to_c_fn_unique_large_gt=denominator,
         invariants=invariants,
     )
+    if not _strict_recursive_equal(
+        _jsonable(upper_bound["a_metrics"]),
+        validated.g0_metrics["A"],
+    ) or not _strict_recursive_equal(
+        _jsonable(upper_bound["c_metrics"]),
+        validated.g0_metrics["C"],
+    ):
+        raise ValueError("recomputed A/C metrics disagree with sealed g0_metrics")
     category_names = [category.value for category in AttributionCategory]
     primary_counts = Counter(event["category"] for event in primary_events)
     secondary: dict[str, Any] = {}
@@ -1057,6 +1285,7 @@ def _write_final_evidence(
                 "input_manifest": str(validated.manifest_path),
                 "output": str(output),
                 "workers": workers,
+                "effective_workers": 0,
             },
             "nondeterministic_runtime": {
                 "seconds": elapsed,
@@ -1086,6 +1315,8 @@ def _write_final_evidence(
 
 def run(args: argparse.Namespace) -> int:
     workers = _strict_int(args.workers, "workers")
+    if workers != 0:
+        raise ValueError("workers is frozen at 0 for deterministic streaming")
     output = Path(args.output).resolve()
     repo_root = Path(__file__).resolve().parents[1]
     audit_provenance = _clean_audit_provenance(repo_root)

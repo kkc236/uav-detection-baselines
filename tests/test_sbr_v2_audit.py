@@ -68,6 +68,69 @@ def test_mixed_anchor_tie_uses_source_query_original_order():
     assert event.counterfactual_recovers is True
 
 
+def test_prepared_audit_matches_threshold_api_and_clusters_once(monkeypatch):
+    a = AuditRawDetection.synthetic(
+        "prepared.jpg",
+        "A",
+        score=0.9,
+        box=(0, 0, 200, 200),
+        width=640,
+        height=640,
+        original_index=0,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "prepared.jpg",
+        "C",
+        score=0.9,
+        box=(0, 0, 200, 200),
+        width=640,
+        height=640,
+        original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "prepared.jpg",
+        "C",
+        source=1,
+        query=1,
+        score=0.9,
+        box=(80, 0, 280, 200),
+        width=640,
+        height=640,
+        original_index=2,
+    )
+    fixture = AuditImage(
+        "prepared.jpg",
+        640,
+        640,
+        ((0, 0, 200, 200),),
+        (0,),
+        (a,),
+        (c_full, c_local),
+    )
+    thresholds = tuple(round(0.50 + index * 0.05, 2) for index in range(10))
+    expected = tuple(
+        audit_image_at_threshold(fixture, threshold).events
+        for threshold in thresholds
+    )
+    calls = 0
+    original = audit_module.reconstruct_c_clusters
+
+    def counted(raw):
+        nonlocal calls
+        calls += 1
+        return original(raw)
+
+    monkeypatch.setattr(audit_module, "reconstruct_c_clusters", counted)
+    prepared = audit_module.prepare_image_audit(fixture)
+    actual = tuple(
+        audit_module.audit_prepared_image_at_threshold(prepared, threshold).events
+        for threshold in thresholds
+    )
+
+    assert actual == expected
+    assert calls == 1
+
+
 def test_mixed_geometric_match_lost_to_assignment_is_competition_not_localization():
     competing_gt = (5, 0, 105, 100)
     target_gt = (0, 0, 100, 100)
