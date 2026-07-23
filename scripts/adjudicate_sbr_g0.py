@@ -179,7 +179,11 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             if row.get("arm") not in valid_arms or row.get("image_id") not in image_ids:
                 raise ValueError("raw-view provenance is invalid")
         for row in arm_rows:
-            if row.get("arm") not in valid_arms or row.get("image_id") not in image_ids:
+            row_arm = row.get("arm")
+            if row_arm is None:
+                records = row.get("records", [])
+                row_arm = records[0].get("arm") if records and isinstance(records[0], Mapping) else None
+            if row_arm not in valid_arms or row.get("image_id") not in image_ids:
                 raise ValueError("arm-prediction provenance is invalid")
 
         recomputed, independent_gate = _recompute_g0a(metrics)

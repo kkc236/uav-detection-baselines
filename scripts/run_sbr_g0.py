@@ -263,7 +263,7 @@ def run(args: argparse.Namespace) -> int:
         assembled = {a: assemble_arm(raw_by_arm[a][0], a, width=image["width"], height=image["height"], view_manifest=raw_by_arm[a][1]) for a in "ABEF"}
         assembled.update(assemble_paired_arms(raw_by_arm["C"][0], width=image["width"], height=image["height"], view_manifest=raw_by_arm["C"][1]))
         for arm, result in assembled.items():
-            arm_rows[arm].append({"image_id": image_id, "predictions": _jsonable(result["predictions"]), "records": result["records"]})
+            arm_rows[arm].append({"arm": arm, "image_id": image_id, "predictions": _jsonable(result["predictions"]), "records": result["records"]})
             metric_rows[arm].append(_rows_for_metrics(result, image))
     metrics = {arm: evaluate_dataset(rows) for arm, rows in metric_rows.items()}
     deltas, gate_status = evaluate_g0a_gate(metrics)
