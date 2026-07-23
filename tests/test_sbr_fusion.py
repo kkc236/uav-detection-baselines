@@ -225,3 +225,52 @@ def test_negative_tile_index_is_invalid():
     good = det((0, 0, 2, 2), 0.9)
     bad = det((0, 0, 2, 2), 0.8, tile_index=-1)
     assert fuse_standard([good, bad]) == (good,)
+
+
+def test_sp_brf_rejects_tile_and_local_box_outside_declared_geometry():
+    local = det(
+        (0, 0, 2, 2),
+        0.8,
+        tile_local_box=(0, 0, 60, 60),
+        tile_bounds=Tile(0, 0, 60, 60, 0),
+    )
+    with pytest.raises(ValueError):
+        border_reliability(local, Tile(0, 0, 60, 60, 0), (50, 50))
+    with pytest.raises(ValueError):
+        border_reliability(
+            det(
+                (0, 0, 2, 2),
+                0.8,
+                tile_local_box=(-1, 0, 10, 10),
+                tile_bounds=Tile(0, 0, 60, 60, 0),
+            ),
+            Tile(0, 0, 60, 60, 0),
+            (100, 100),
+        )
+    with pytest.raises(ValueError):
+        border_reliability(
+            det(
+                (0, 0, 2, 2),
+                0.8,
+                tile_local_box=(0, 0, 61, 10),
+                tile_bounds=Tile(0, 0, 60, 60, 0),
+            ),
+            Tile(0, 0, 60, 60, 0),
+            (100, 100),
+        )
+
+
+def test_sp_brf_validates_full_shape_and_singleton_before_identity():
+    singleton = det((0, 0, 2, 2), 0.8)
+    with pytest.raises(ValueError):
+        fuse_sp_brf((singleton,), full_shape=(0, 100))
+    invalid = det((0, 0, 2, 2), math.nan)
+    with pytest.raises(ValueError):
+        fuse_sp_brf((invalid,), full_shape=(100, 100))
+
+
+def test_sp_brf_rejects_mixed_class_precomputed_cluster():
+    a = det((0, 0, 10, 10), 0.8, cls=0)
+    b = det((1, 1, 9, 9), 0.7, cls=1)
+    with pytest.raises(ValueError):
+        fuse_sp_brf((a, b), full_shape=(100, 100))

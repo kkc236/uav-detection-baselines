@@ -267,6 +267,8 @@ def border_reliability(
     if not _valid_box(detection.tile_local_box):
         raise ValueError("invalid tile-local box")
     left, top, right, bottom = bounds
+    if right > width or bottom > height:
+        raise ValueError("tile exceeds full image bounds")
     tile_w = right - left
     tile_h = bottom - top
     overlap_x = 2.0 * tile_w - width
@@ -278,6 +280,8 @@ def border_reliability(
     if internal_y and overlap_y <= 0:
         raise ValueError("vertical tile overlap must be positive")
     x1, y1, x2, y2 = (float(value) for value in detection.tile_local_box)
+    if x1 < 0.0 or y1 < 0.0 or x2 > tile_w or y2 > tile_h:
+        raise ValueError("tile-local box exceeds tile bounds")
     reliabilities: list[float] = []
     if left > 0:
         reliabilities.append(x1 / (overlap_x / 2.0))
@@ -300,15 +304,18 @@ def fuse_sp_brf(
     members = tuple(cluster)
     if not members:
         raise ValueError("cluster must not be empty")
+    _full_shape(full_shape)
+    if not all(isinstance(member, Detection) for member in members):
+        raise ValueError("cluster members must be Detection instances")
+    if not all(_valid_detection(member) for member in members):
+        raise ValueError("invalid detection in SP-BRF cluster")
+    if len({member.class_id for member in members}) != 1:
+        raise ValueError("SP-BRF clusters must be class-consistent")
     seed = members[0]
     if len(members) == 1:
         return seed
-    if not all(isinstance(member, Detection) for member in members):
-        raise ValueError("cluster members must be Detection instances")
     weights: list[float] = []
     for member in members:
-        if not _valid_detection(member):
-            raise ValueError("invalid detection in SP-BRF cluster")
         tile = member.tile_bounds
         weights.append(float(member.score) * (1.0 + border_reliability(member, tile, full_shape)))
     total = sum(weights)
