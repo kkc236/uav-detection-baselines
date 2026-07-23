@@ -18,7 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.ebc_qp_config import EBCQPConfig, SOURCE_SHA256
-from src.ebc_qp_protocol import build_initial_state, dataset_signature, write_d2_subset
+from src.ebc_qp_protocol import (
+    E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+    E1_CONTROLLED_AMP_SCALE,
+    E1_EXPECTED_OPTIMIZER_ATTEMPTS,
+    build_initial_state,
+    dataset_signature,
+    write_d2_subset,
+)
 from src.rtdetr_ebc_qp import EBCQPDetectionModel
 
 
@@ -34,6 +41,33 @@ def main() -> None:
     args = build_parser().parse_args()
     manifest = prepare_protocol(args.data, output_dir=args.output_dir, seed=args.seed)
     print(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def build_e1_training_contract() -> dict:
+    return {
+        "epochs": 10,
+        "fraction": 1.0,
+        "imgsz": 640,
+        "batch": 8,
+        "workers": 8,
+        "device": "0",
+        "amp": True,
+        "controlled_amp_scale": E1_CONTROLLED_AMP_SCALE,
+        "controlled_amp_growth_interval": E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+        "expected_optimizer_attempts": E1_EXPECTED_OPTIMIZER_ATTEMPTS,
+        "save_period": -1,
+        "retained_zero_based_epoch_checkpoints": [7, 8, 9],
+        "deterministic": True,
+        "nbs": 64,
+        "nms": False,
+        "max_det": 300,
+        "optimizer": "MuSGD",
+        "lr0": 0.01,
+        "lrf": 0.01,
+        "momentum": 0.937,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3.0,
+    }
 
 
 def prepare_protocol(data_file: str | Path, *, output_dir: Path, seed: int) -> dict:
@@ -66,29 +100,7 @@ def prepare_protocol(data_file: str | Path, *, output_dir: Path, seed: int) -> d
         "source_sha256": SOURCE_SHA256,
         "git_commit": git_commit,
         "environment": environment,
-        "e1_training": {
-            "epochs": 10,
-            "fraction": 1.0,
-            "imgsz": 640,
-            "batch": 8,
-            "workers": 8,
-            "device": "0",
-            "amp": True,
-            "controlled_amp_scale": 256.0,
-            "controlled_amp_growth_interval": 2**31 - 1,
-            "save_period": -1,
-            "retained_zero_based_epoch_checkpoints": [7, 8, 9],
-            "deterministic": True,
-            "nbs": 64,
-            "nms": False,
-            "max_det": 300,
-            "optimizer": "MuSGD",
-            "lr0": 0.01,
-            "lrf": 0.01,
-            "momentum": 0.937,
-            "weight_decay": 0.0005,
-            "warmup_epochs": 3.0,
-        },
+        "e1_training": build_e1_training_contract(),
         "tsgr_config": EBCQPConfig(
             lambda_p2=0.1,
             lambda_ebc=0.0,

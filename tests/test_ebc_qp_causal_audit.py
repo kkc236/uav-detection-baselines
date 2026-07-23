@@ -18,6 +18,7 @@ from scripts.audit_ebc_qp_aux_causality import (
     resolved_audit_steps,
     resolved_run_name,
     tensor_structure_fingerprint,
+    validate_audit_cli_args,
     validate_controlled_amp_runtime,
 )
 from src.ebc_qp_causal_audit import (
@@ -230,8 +231,8 @@ def test_controlled_amp_runtime_rejects_silent_fp32_fallback():
         def get_scale(self):
             return self.scale
 
-    config = {"enabled": True, "init_scale": 256.0}
-    validate_controlled_amp_runtime(True, Scaler(True, 256.0), config)
+    config = {"enabled": True, "init_scale": 128.0}
+    validate_controlled_amp_runtime(True, Scaler(True, 128.0), config)
     with pytest.raises(RuntimeError, match="requires AMP to remain enabled"):
         validate_controlled_amp_runtime(False, Scaler(False, 1.0), config)
     with pytest.raises(RuntimeError, match="scale mismatch"):
@@ -303,7 +304,7 @@ def test_compare_audit_runs_rejects_batch_or_optimizer_mismatch():
         compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), broken_probe)
 
     broken_controlled_amp = _run("aux-audit", clip=1.0, stock_delta=0.1)
-    broken_controlled_amp["controlled_amp"] = {"enabled": True, "init_scale": 256.0}
+    broken_controlled_amp["controlled_amp"] = {"enabled": True, "init_scale": 128.0}
     with pytest.raises(ValueError, match="controlled AMP configuration mismatch"):
         compare_audit_runs(_run("a0", clip=1.0, stock_delta=0.1), broken_controlled_amp)
 
@@ -325,14 +326,51 @@ def _tsgr_run(arm: str) -> dict:
         "model.1.weight": {"l2": 0.04 if arm == "h1" else 0.0, "max_abs": 0.04 if arm == "h1" else 0.0},
         "model.2.weight": {"l2": 0.0, "max_abs": 0.0},
     }
+    base_step = deepcopy(_run("a0", clip=1.0, stock_delta=0.1)["steps"][0])
+    base_step.update(
+        amp_scale_before=128.0,
+        amp_scale_after=128.0,
+        gradient_clipping_mode="contribution_separated" if is_auxiliary else "legacy_combined",
+        aux_private_grad_total_norm=1.0 if is_auxiliary else 0.0,
+        routed_shallow_grad_total_norm=0.05 if arm == "h1" else 0.0,
+        routed_shallow_clip_coefficient=1.0,
+        p2_entry_count=0,
+        ordinary_query_count=300,
+        stock_grad_preclip_parameters={
+            "model.0.weight": {"l2": 0.6},
+            "model.1.weight": {"l2": 0.8},
+            "model.2.weight": {"l2": 2.0},
+        },
+        stock_delta_sha256={
+            "model.0.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
+            "model.1.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
+            "model.2.weight": "DEEP",
+        },
+    )
+    steps = []
+    for index in range(1, 101):
+        step = deepcopy(base_step)
+        step.update(
+            optimizer_step=index,
+            optimizer_attempt=index,
+            successful_update=True,
+            successful_update_index=index,
+        )
+        steps.append(step)
     return {
         "arm": arm,
-        "target_optimizer_steps": 1,
-        "completed_successful_updates": 1,
+        "target_optimizer_steps": 100,
+        "attempted_optimizer_steps": 100,
+        "completed_successful_updates": 100,
         "common_initial_fingerprint": "COMMON",
         "initial_state_sha256": "INITIAL",
         "optimizer_common_manifest": {"model.0.weight": {"param_group": "muon"}},
-        "controlled_amp": {"enabled": True},
+        "controlled_amp": {
+            "enabled": True,
+            "init_scale": 128.0,
+            "growth_interval": 2**31 - 1,
+            "require_zero_skips": True,
+        },
         "ebc_config": (
             {
                 "p2_c2_grad_scale": eta,
@@ -356,28 +394,7 @@ def _tsgr_run(arm: str) -> dict:
             "p2_entry_count": 0,
             "ordinary_query_count": 300,
         },
-        "steps": [
-            {
-                "amp_step_skipped": False,
-                "gradient_clipping_mode": "contribution_separated" if is_auxiliary else "legacy_combined",
-                "clip_coefficient": 1.0,
-                "stock_only_clip_coefficient": 1.0,
-                "routed_shallow_grad_total_norm": 0.05 if arm == "h1" else 0.0,
-                "routed_shallow_clip_coefficient": 1.0,
-                "p2_entry_count": 0,
-                "ordinary_query_count": 300,
-                "stock_grad_preclip_parameters": {
-                    "model.0.weight": {"l2": 0.6},
-                    "model.1.weight": {"l2": 0.8},
-                    "model.2.weight": {"l2": 2.0},
-                },
-                "stock_delta_sha256": {
-                    "model.0.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
-                    "model.1.weight": "SHALLOW-H1" if arm == "h1" else "SHALLOW-H0",
-                    "model.2.weight": "DEEP",
-                },
-            }
-        ],
+        "steps": steps,
     }
 
 
@@ -393,7 +410,36 @@ def test_tsgr_e0b_comparator_enforces_exact_gradient_boundary_and_ratio():
     assert any("escaped" in error for error in result["errors"])
 
 
-def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
+def test_tsgr_e0b_comparator_rejects_non_100_step_or_non_amp128_traces():
+    short = _tsgr_run("a0")
+    short["target_optimizer_steps"] = 32
+    short["attempted_optimizer_steps"] = 32
+    short["completed_successful_updates"] = 32
+    short["steps"] = short["steps"][:32]
+    result = compare_tsgr_audit_runs(short, _tsgr_run("h0"), _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("exactly 100" in error for error in result["errors"])
+
+    wrong_config = _tsgr_run("h0")
+    wrong_config["controlled_amp"]["init_scale"] = 256.0
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), wrong_config, _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("fixed AMP128" in error for error in result["errors"])
+
+    drift = _tsgr_run("h1")
+    drift["steps"][73]["amp_scale_after"] = 64.0
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), drift)
+    assert result["passed"] is False
+    assert any("optimizer attempt 74" in error and "AMP scale" in error for error in result["errors"])
+
+    invalid_attempt = _tsgr_run("a0")
+    invalid_attempt["steps"][4]["model_parameters_finite"] = False
+    result = compare_tsgr_audit_runs(invalid_attempt, _tsgr_run("h0"), _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("optimizer attempt 5" in error and "model_parameters_finite" in error for error in result["errors"])
+
+
+def test_audit_cli_freezes_amp128_100_steps_for_a0_h0_h1(tmp_path):
     parser = build_parser()
     common = [
         "--initial-state",
@@ -432,20 +478,46 @@ def test_audit_cli_freezes_100_steps_and_shared_training_settings(tmp_path):
     assert build_audit_settings(repeat) == build_audit_settings(a0)
     assert resolved_run_name(repeat) == "e0-a0-repeat-seed0"
 
-    controlled = parser.parse_args(["--arm", "a0", *common, "--controlled-amp-scale", "256"])
-    assert resolved_audit_steps(controlled) == 32
-    assert resolved_run_name(controlled) == "e0-a0-seed0-controlled-amp256-32step"
-    assert controlled_amp_config(controlled) == {
-        "enabled": True,
-        "init_scale": 256.0,
-        "growth_interval": 1000,
-        "require_zero_skips": True,
-    }
-    controlled_100 = parser.parse_args(
-        ["--arm", "h1", *common, "--controlled-amp-scale", "256", "--controlled-amp-steps", "100"]
-    )
-    assert resolved_audit_steps(controlled_100) == 100
-    assert resolved_run_name(controlled_100) == "e0-h1-seed0-controlled-amp256-100step"
+    for arm in ("a0", "h0", "h1"):
+        controlled = parser.parse_args(["--arm", arm, *common, "--controlled-amp-scale", "128"])
+        assert resolved_audit_steps(controlled) == 100
+        assert resolved_run_name(controlled) == f"e0-{arm}-seed0-controlled-amp128-100step"
+        assert controlled_amp_config(controlled) == {
+            "enabled": True,
+            "init_scale": 128.0,
+            "growth_interval": 2**31 - 1,
+            "require_zero_skips": True,
+        }
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["--arm", "h1", *common, "--controlled-amp-scale", "128", "--controlled-amp-steps", "32"]
+        )
+
+
+def test_audit_cli_rejects_or_accepts_controlled_options_as_one_unit(tmp_path):
+    parser = build_parser()
+    common = [
+        "--arm",
+        "a0",
+        "--initial-state",
+        str(tmp_path / "initial.pt"),
+        "--protocol-manifest",
+        str(tmp_path / "protocol.json"),
+        "--data",
+        str(tmp_path / "data.yaml"),
+        "--output",
+        str(tmp_path / "audit.json"),
+    ]
+
+    validate_audit_cli_args(parser.parse_args(common))
+    validate_audit_cli_args(parser.parse_args([*common, "--smoke"]))
+    validate_audit_cli_args(parser.parse_args([*common, "--controlled-amp-scale", "128"]))
+
+    with pytest.raises(SystemExit, match="requires --controlled-amp-scale"):
+        validate_audit_cli_args(parser.parse_args([*common, "--controlled-amp-steps", "100"]))
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        validate_audit_cli_args(parser.parse_args([*common, "--smoke", "--controlled-amp-scale", "128"]))
 
 
 def test_gradient_alignment_uses_the_applied_contributions():

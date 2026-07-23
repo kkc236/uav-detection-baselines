@@ -28,7 +28,7 @@ from src.ebc_qp_config import (
 from src.ebc_qp_decoder import EBCQPDecoder, register_ebc_qp_decoder
 from src.ebc_qp_diagnostics import MechanismDiagnosticsAccumulator
 from src.ebc_qp_metrics import TinyDetectionMetrics, validation_xy_gain
-from src.ebc_qp_protocol import load_initial_state
+from src.ebc_qp_protocol import E1_CONTROLLED_AMP_GROWTH_INTERVAL, load_initial_state
 from src.ebc_qp_stock_diagnostics import StockQueryProbe, StockTinyQueryAccumulator
 
 
@@ -574,7 +574,7 @@ class PairedProtocolOptimizerMixin:
                 "cuda",
                 enabled=True,
                 init_scale=float(self.controlled_amp_scale),
-                growth_interval=2**31 - 1,
+                growth_interval=E1_CONTROLLED_AMP_GROWTH_INTERVAL,
             )
             if float(self.scaler.get_scale()) != float(self.controlled_amp_scale):
                 raise RuntimeError("controlled AMP scale initialization failed")

@@ -20,7 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.ebc_qp_config import EBCQPConfig, SOURCE_SHA256
-from src.ebc_qp_protocol import dataset_signature, state_fingerprint, subset_signature
+from src.ebc_qp_protocol import (
+    E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+    E1_CONTROLLED_AMP_SCALE,
+    E1_EXPECTED_OPTIMIZER_ATTEMPTS,
+    dataset_signature,
+    state_fingerprint,
+    subset_signature,
+)
 from src.rtdetr_ebc_qp import EBCQPTrainer, PairedControlTrainer
 
 
@@ -115,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quality-weighted-ebc", action="store_true")
     parser.add_argument("--learnable-fusion-gamma", action="store_true")
     parser.add_argument("--disable-query-injection", action="store_true")
-    parser.add_argument("--controlled-amp-scale", type=float, choices=(256.0,))
+    parser.add_argument("--controlled-amp-scale", type=float, choices=(E1_CONTROLLED_AMP_SCALE,))
     parser.add_argument("--smoke", action="store_true")
     return parser
 
@@ -224,8 +231,8 @@ def validate_protocol(args: argparse.Namespace) -> None:
     if args.quality_weighted_ebc and args.learnable_fusion_gamma:
         raise SystemExit("quality-weighted EBC and fusion gamma are mutually exclusive")
     if args.stage == "e1":
-        if args.controlled_amp_scale != 256.0:
-            raise SystemExit("E1 requires controlled AMP scale 256")
+        if args.controlled_amp_scale != E1_CONTROLLED_AMP_SCALE:
+            raise SystemExit(f"E1 requires controlled AMP scale {int(E1_CONTROLLED_AMP_SCALE)}")
         if args.smoke:
             raise SystemExit("E1 does not permit smoke settings")
         if args.device != "0":
@@ -408,6 +415,10 @@ def write_e1_run_manifest(args: argparse.Namespace, settings: dict, trainer) -> 
             records.append(json.loads(line))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid E1 optimizer evidence: {error}") from error
+    if len(records) != E1_EXPECTED_OPTIMIZER_ATTEMPTS:
+        raise RuntimeError(
+            f"E1 requires exactly {E1_EXPECTED_OPTIMIZER_ATTEMPTS} optimizer attempts, got {len(records)}"
+        )
     if not records or [record.get("optimizer_attempt") for record in records] != list(range(1, len(records) + 1)):
         raise RuntimeError("E1 optimizer evidence attempts are missing or non-contiguous")
     if any(record.get("amp_step_skipped") for record in records):
@@ -416,7 +427,11 @@ def write_e1_run_manifest(args: argparse.Namespace, settings: dict, trainer) -> 
         raise RuntimeError("E1 optimizer evidence contains non-finite fields")
     if any(record.get("runtime_violation") for record in records):
         raise RuntimeError("E1 optimizer evidence contains a runtime protocol violation")
-    if any(float(record.get("amp_scale_before", -1)) != 256.0 for record in records):
+    if any(
+        float(record.get("amp_scale_before", -1)) != E1_CONTROLLED_AMP_SCALE
+        or float(record.get("amp_scale_after", -1)) != E1_CONTROLLED_AMP_SCALE
+        for record in records
+    ):
         raise RuntimeError("E1 optimizer evidence contains a changed AMP scale")
     if args.arm == "tsgr-p2" and any(
         record.get("p2_entry_count") != 0 or record.get("ordinary_query_count") != 300 for record in records
@@ -484,7 +499,8 @@ def write_e1_run_manifest(args: argparse.Namespace, settings: dict, trainer) -> 
         "settings": settings,
         "controlled_amp": {
             "init_scale": args.controlled_amp_scale,
-            "growth_interval": 2**31 - 1,
+            "growth_interval": E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+            "expected_optimizer_attempts": E1_EXPECTED_OPTIMIZER_ATTEMPTS,
             "optimizer_attempts": len(records),
             "skipped_attempts": 0,
         },

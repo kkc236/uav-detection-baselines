@@ -30,7 +30,12 @@ from src.ebc_qp_causal_audit import (  # noqa: E402
     capture_tensor_sha256,
     validate_audit_attempt,
 )
-from src.ebc_qp_protocol import state_fingerprint  # noqa: E402
+from src.ebc_qp_protocol import (  # noqa: E402
+    E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+    E1_CONTROLLED_AMP_SCALE,
+    TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS,
+    state_fingerprint,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,8 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--steps", type=int, default=100, choices=(100,))
     parser.add_argument("--smoke", action="store_true")
-    parser.add_argument("--controlled-amp-scale", type=float, choices=(256.0,))
-    parser.add_argument("--controlled-amp-steps", type=int, default=32, choices=(32, 100))
+    parser.add_argument("--controlled-amp-scale", type=float, choices=(E1_CONTROLLED_AMP_SCALE,))
+    parser.add_argument(
+        "--controlled-amp-steps",
+        type=int,
+        default=None,
+        choices=(TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS,),
+    )
     parser.add_argument("--seed", type=int, default=0, choices=(0,))
     parser.add_argument("--device", default="0")
     parser.add_argument("--project", type=Path, default=Path("/mnt/uav/runs/ebc-qp-e0-causal-audit"))
@@ -52,14 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolved_audit_steps(args: argparse.Namespace) -> int:
     if args.controlled_amp_scale is not None:
-        return int(args.controlled_amp_steps)
+        return int(args.controlled_amp_steps or TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS)
     return 1 if args.smoke else int(args.steps)
 
 
 def resolved_run_name(args: argparse.Namespace) -> str:
     if args.controlled_amp_scale is not None:
         scale = int(args.controlled_amp_scale)
-        return f"e0-{args.arm}-seed0-controlled-amp{scale}-{args.controlled_amp_steps}step"
+        return f"e0-{args.arm}-seed0-controlled-amp{scale}-{resolved_audit_steps(args)}step"
     suffix = "-smoke" if args.smoke else ""
     return f"e0-{args.arm}-seed0{suffix}"
 
@@ -69,9 +79,16 @@ def controlled_amp_config(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "enabled": enabled,
         "init_scale": float(args.controlled_amp_scale) if enabled else None,
-        "growth_interval": 1000 if enabled else None,
+        "growth_interval": E1_CONTROLLED_AMP_GROWTH_INTERVAL if enabled else None,
         "require_zero_skips": enabled,
     }
+
+
+def validate_audit_cli_args(args: argparse.Namespace) -> None:
+    if args.smoke and args.controlled_amp_scale is not None:
+        raise SystemExit("--smoke and --controlled-amp-scale are mutually exclusive")
+    if args.controlled_amp_scale is None and args.controlled_amp_steps is not None:
+        raise SystemExit("--controlled-amp-steps requires --controlled-amp-scale")
 
 
 def build_audit_ebc_config(arm: str):
@@ -900,10 +917,7 @@ def _build_evidence_metadata(args: argparse.Namespace, settings: dict[str, Any],
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.smoke and args.controlled_amp_scale is not None:
-        raise SystemExit("--smoke and --controlled-amp-scale are mutually exclusive")
-    if args.controlled_amp_scale is None and args.controlled_amp_steps != 32:
-        raise SystemExit("--controlled-amp-steps requires --controlled-amp-scale")
+    validate_audit_cli_args(args)
     manifest = _validate_protocol(args)
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite existing audit trace: {args.output}")

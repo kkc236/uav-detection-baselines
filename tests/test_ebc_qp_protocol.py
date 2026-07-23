@@ -13,6 +13,17 @@ from src.ebc_qp_protocol import (
     state_fingerprint,
     write_d2_subset,
 )
+from scripts.prepare_ebc_qp_protocol import build_e1_training_contract
+
+
+def test_e1_training_contract_freezes_amp128_without_growth():
+    contract = build_e1_training_contract()
+
+    assert contract["controlled_amp_scale"] == 128.0
+    assert contract["controlled_amp_growth_interval"] == 2**31 - 1
+    assert contract["expected_optimizer_attempts"] == 145
+    assert contract["save_period"] == -1
+    assert contract["retained_zero_based_epoch_checkpoints"] == [7, 8, 9]
 
 
 def test_d2_subset_is_order_independent_exact_ten_percent_and_hash_locked(tmp_path: Path):

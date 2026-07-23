@@ -7,6 +7,12 @@ from typing import Mapping
 
 import torch
 
+from src.ebc_qp_protocol import (
+    E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+    E1_CONTROLLED_AMP_SCALE,
+    TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS,
+)
+
 
 STOCK_GROUPS = (
     "backbone_pre_c2",
@@ -399,13 +405,39 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
     targets = {trace.get("target_optimizer_steps") for trace in (a0, h0, h1)}
     if len(targets) != 1:
         errors.append("E0b target optimizer-step counts differ")
+    if targets != {TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS}:
+        errors.append(f"E0b traces must target exactly {TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS} optimizer attempts")
+    expected_amp = {
+        "enabled": True,
+        "init_scale": E1_CONTROLLED_AMP_SCALE,
+        "growth_interval": E1_CONTROLLED_AMP_GROWTH_INTERVAL,
+        "require_zero_skips": True,
+    }
     for trace in (a0, h0, h1):
+        arm = trace.get("arm")
+        steps = trace.get("steps", [])
+        if trace.get("attempted_optimizer_steps") != TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS:
+            errors.append(f"{arm} did not attempt exactly {TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS} optimizer steps")
+        if len(steps) != TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS:
+            errors.append(f"{arm} trace does not contain exactly {TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS} attempts")
         if trace.get("completed_successful_updates") != trace.get("target_optimizer_steps"):
-            errors.append(f"{trace.get('arm')} did not complete its successful-update target")
-        if any(step.get("amp_step_skipped") for step in trace.get("steps", [])):
-            errors.append(f"{trace.get('arm')} contains an AMP skip")
-        if not trace.get("controlled_amp", {}).get("enabled"):
-            errors.append(f"{trace.get('arm')} is not a controlled-AMP trace")
+            errors.append(f"{arm} did not complete its successful-update target")
+        if trace.get("controlled_amp") != expected_amp:
+            errors.append(f"{arm} is not a fixed AMP128 trace")
+        for index, step in enumerate(steps, start=1):
+            if step.get("optimizer_attempt") != index:
+                errors.append(f"{arm} optimizer attempt {index} is missing or out of order")
+                break
+            violations = validate_audit_attempt(step)
+            if violations:
+                errors.append(f"{arm} optimizer attempt {index}: {'; '.join(violations)}")
+                break
+            if (
+                float(step.get("amp_scale_before", -1)) != E1_CONTROLLED_AMP_SCALE
+                or float(step.get("amp_scale_after", -1)) != E1_CONTROLLED_AMP_SCALE
+            ):
+                errors.append(f"{arm} optimizer attempt {index} changed the fixed AMP scale")
+                break
 
     paired_fields = ("common_initial_fingerprint", "initial_state_sha256", "optimizer_common_manifest")
     for field in paired_fields:

@@ -106,15 +106,19 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
     evidence = {
         "optimizer_attempt": 1,
         "amp_step_skipped": False,
-        "amp_scale_before": 256.0,
-        "amp_scale_after": 256.0,
+        "amp_scale_before": 128.0,
+        "amp_scale_after": 128.0,
         "nonfinite_fields": [],
         "runtime_violation": None,
         "shallow_applied_ratio": 0.0,
         "p2_entry_count": None,
         "ordinary_query_count": None,
     }
-    (run_dir / "optimizer-evidence.jsonl").write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    records = [{**evidence, "optimizer_attempt": attempt} for attempt in range(1, 146)]
+    (run_dir / "optimizer-evidence.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
     for name in ("last.pt", "best.pt"):
         (weights / name).write_bytes(name.encode())
     for epoch in (7, 8, 9):
@@ -123,7 +127,7 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
                 "epoch": epoch,
                 "ema": {"weight": torch.tensor([float(epoch)])},
                 "optimizer": {"state": {0: {"step": epoch}}},
-                "scaler": {"scale": 256.0},
+                "scaler": {"scale": 128.0},
                 "updates": epoch + 1,
             },
             weights / f"epoch{epoch}.pt",
@@ -147,7 +151,7 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
     args = SimpleNamespace(
         arm="control",
         seed=0,
-        controlled_amp_scale=256.0,
+        controlled_amp_scale=128.0,
         protocol_manifest=protocol_path,
         initial_state=initial_path,
     )
@@ -157,8 +161,63 @@ def test_e1_run_manifest_closes_optimizer_results_and_checkpoint_evidence(tmp_pa
     result = launcher.write_e1_run_manifest(args, settings, trainer)
 
     assert result["results"]["epochs"] == 10
+    assert result["controlled_amp"]["init_scale"] == 128.0
     assert result["controlled_amp"]["skipped_attempts"] == 0
     assert (run_dir / "e1-run-manifest.json").is_file()
+
+
+def _write_minimal_e1_optimizer_evidence(run_dir: Path, records: list[dict]) -> tuple[SimpleNamespace, dict, object]:
+    run_dir.mkdir(parents=True)
+    (run_dir / "optimizer-evidence.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(arm="control", controlled_amp_scale=128.0)
+    settings = {"project": str(run_dir.parent), "name": run_dir.name}
+    trainer = SimpleNamespace(save_dir=run_dir)
+    return args, settings, trainer
+
+
+def _valid_e1_optimizer_records() -> list[dict]:
+    return [
+        {
+            "optimizer_attempt": attempt,
+            "amp_step_skipped": False,
+            "amp_scale_before": 128.0,
+            "amp_scale_after": 128.0,
+            "nonfinite_fields": [],
+            "runtime_violation": None,
+            "shallow_applied_ratio": 0.0,
+            "p2_entry_count": None,
+            "ordinary_query_count": None,
+        }
+        for attempt in range(1, 146)
+    ]
+
+
+@pytest.mark.parametrize("attempt_count", [144, 146])
+def test_e1_run_manifest_requires_exact_145_optimizer_attempts(tmp_path: Path, attempt_count: int):
+    records = _valid_e1_optimizer_records()[:attempt_count]
+    if attempt_count == 146:
+        records.append({**records[-1], "optimizer_attempt": 146})
+    args, settings, trainer = _write_minimal_e1_optimizer_evidence(tmp_path / "run", records)
+
+    with pytest.raises(RuntimeError, match="exactly 145 optimizer attempts"):
+        launcher.write_e1_run_manifest(args, settings, trainer)
+
+
+@pytest.mark.parametrize(("before", "after"), [(256.0, 128.0), (128.0, 256.0)])
+def test_e1_run_manifest_rejects_amp_scale_drift_before_or_after(
+    tmp_path: Path,
+    before: float,
+    after: float,
+):
+    records = _valid_e1_optimizer_records()
+    records[72].update(amp_scale_before=before, amp_scale_after=after)
+    args, settings, trainer = _write_minimal_e1_optimizer_evidence(tmp_path / "run", records)
+
+    with pytest.raises(RuntimeError, match="changed AMP scale"):
+        launcher.write_e1_run_manifest(args, settings, trainer)
 
 
 def test_e1_tail_checkpoint_validation_rejects_extra_or_non_resumable_files(tmp_path: Path):
@@ -168,7 +227,7 @@ def test_e1_tail_checkpoint_validation_rejects_extra_or_non_resumable_files(tmp_
         "epoch": 7,
         "ema": {"weight": torch.tensor([1.0])},
         "optimizer": {"state": {0: {"step": 1}}},
-        "scaler": {"scale": 256.0},
+        "scaler": {"scale": 128.0},
         "updates": 1,
     }
     for epoch in (7, 8, 9):
@@ -190,7 +249,7 @@ def test_e1_tsgr_tail_checkpoint_requires_ebc_metadata(tmp_path: Path):
     checkpoint = {
         "ema": {"weight": torch.tensor([1.0])},
         "optimizer": {"state": {0: {"step": 1}}},
-        "scaler": {"scale": 256.0},
+        "scaler": {"scale": 128.0},
         "updates": 1,
     }
     for epoch in (7, 8, 9):

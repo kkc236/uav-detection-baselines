@@ -10,6 +10,10 @@ from torch import nn
 
 
 INNOVATION_MODULES = frozenset({"p2_adapter", "p2_bbox_head", "p2_fusion_gamma", "p2_quality_head"})
+E1_CONTROLLED_AMP_SCALE = 128.0
+E1_CONTROLLED_AMP_GROWTH_INTERVAL = 2**31 - 1
+E1_EXPECTED_OPTIMIZER_ATTEMPTS = 145
+TSGR_E0_EXPECTED_OPTIMIZER_ATTEMPTS = 100
 
 
 def select_hashed_subset(

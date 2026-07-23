@@ -218,7 +218,7 @@ def test_tsgr_p2_is_the_frozen_minimal_contribution_separated_e1_arm():
             "--name",
             "paired",
             "--controlled-amp-scale",
-            "256",
+            "128",
         ]
     )
 
@@ -251,7 +251,7 @@ def test_e1_control_uses_the_stock_model_and_frozen_controlled_amp():
             "--initial-state",
             "init.pt",
             "--controlled-amp-scale",
-            "256",
+            "128",
         ]
     )
 
@@ -278,7 +278,7 @@ def test_tsgr_p2_rejects_legacy_feature_switches(flag: str):
             "--initial-state",
             "init.pt",
             "--controlled-amp-scale",
-            "256",
+            "128",
             flag,
         ]
     )
@@ -289,7 +289,7 @@ def test_tsgr_p2_rejects_legacy_feature_switches(flag: str):
 
 def test_e1_rejects_non_e1_arms_and_missing_controlled_amp():
     wrong_arm = build_parser().parse_args(
-        ["--stage", "e1", "--arm", "a2", "--initial-state", "init.pt", "--controlled-amp-scale", "256"]
+        ["--stage", "e1", "--arm", "a2", "--initial-state", "init.pt", "--controlled-amp-scale", "128"]
     )
     missing_amp = build_parser().parse_args(
         ["--stage", "e1", "--arm", "tsgr-p2", "--initial-state", "init.pt"]
@@ -297,8 +297,15 @@ def test_e1_rejects_non_e1_arms_and_missing_controlled_amp():
 
     with pytest.raises(SystemExit, match="E1 arm"):
         validate_protocol(wrong_arm)
-    with pytest.raises(SystemExit, match="controlled AMP scale 256"):
+    with pytest.raises(SystemExit, match="controlled AMP scale 128"):
         validate_protocol(missing_amp)
+
+
+def test_e1_rejects_the_superseded_amp256_scale():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["--stage", "e1", "--arm", "control", "--controlled-amp-scale", "256"]
+        )
 
 
 def test_auto_optimizer_is_locked_to_musgd_without_rewriting_lr_or_momentum():
