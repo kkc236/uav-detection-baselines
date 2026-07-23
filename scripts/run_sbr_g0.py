@@ -8,6 +8,7 @@ Only operational arguments are exposed.  Scientific constants live in
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, is_dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -148,6 +149,8 @@ def evaluate_g0a_gate(metrics: Mapping[str, Mapping[str, Any]]) -> tuple[dict[st
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "to_dict"):
         return _jsonable(value.to_dict())
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
     if isinstance(value, Mapping):
         return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
