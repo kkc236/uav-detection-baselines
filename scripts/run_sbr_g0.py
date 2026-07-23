@@ -270,8 +270,8 @@ def run(args: argparse.Namespace) -> int:
     atomic_write_json(output / "g0_manifest.json", {"mode": args.mode, "source": source, "source_hash": source_hash, "checkpoint": str(checkpoint), "checkpoint_hash": checkpoint_hash, "dataset_signature": dataset["dataset_signature"], "image_count": dataset["image_count"], "image_list": dataset["image_list"], "protocol": protocol.__dict__, "protocol_hash": proto_hash, "environment": environment_info()})
     atomic_write_jsonl_gz(output / "raw_views.jsonl.gz", raw_rows)
     atomic_write_jsonl_gz(output / "arm_predictions.jsonl.gz", [x for rows in arm_rows.values() for x in rows])
-    atomic_write_json(output / "g0_metrics.json", metrics)
-    atomic_write_json(output / "g0_deltas.json", deltas)
+    atomic_write_json(output / "g0_metrics.json", _jsonable(metrics))
+    atomic_write_json(output / "g0_deltas.json", _jsonable(deltas))
     adjudication_status = "NOT_RUN"
     status = "SBR_S0_COMPLETE" if args.mode == "s0" else ("SBR_G0A_PASS" if gate_status == "SBR_G0A_PASS" and adjudication_status != "NOT_RUN" else "SBR_G0A_FAIL")
     atomic_write_json(output / "g0_gate.json", {**expected, "status": status})
