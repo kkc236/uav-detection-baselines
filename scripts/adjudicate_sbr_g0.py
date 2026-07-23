@@ -69,6 +69,14 @@ def _hash(value: Any, name: str) -> str:
     return result.lower()
 
 
+def _source_id(value: Any) -> str:
+    """Git commits are normally SHA-1 (40 hex chars); accept SHA-256 repos too."""
+    result = str(value or "")
+    if len(result) not in (40, 64) or any(ch not in HEX64 for ch in result):
+        raise ValueError("manifest.source_hash is not a Git object digest")
+    return result.lower()
+
+
 def _verify_checksums(root: Path) -> list[str]:
     checksum_file = root / "checksums.sha256"
     lines = checksum_file.read_text(encoding="utf-8").splitlines()
@@ -147,7 +155,7 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
         if not isinstance(manifest, Mapping) or manifest.get("mode") != "g0-a":
             raise ValueError("evidence is not a G0-A manifest")
         expected = {
-            "source_hash": _hash(manifest.get("source_hash"), "manifest.source_hash"),
+            "source_hash": _source_id(manifest.get("source_hash")),
             "checkpoint_hash": _hash(manifest.get("checkpoint_hash"), "manifest.checkpoint_hash"),
             "dataset_signature": _hash(manifest.get("dataset_signature"), "manifest.dataset_signature"),
             "protocol_hash": _hash(manifest.get("protocol_hash"), "manifest.protocol_hash"),

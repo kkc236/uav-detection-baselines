@@ -8,7 +8,7 @@ from src.sbr_artifacts import atomic_write_json, atomic_write_jsonl_gz, write_ch
 def _evidence(tmp_path: Path) -> Path:
     root = tmp_path / "evidence"
     root.mkdir()
-    digest = "a" * 64
+    digest = "a" * 40  # Git commit IDs are SHA-1 in the production runner.
     images = [f"{i:04d}.jpg" for i in range(548)]
     manifest = {
         "mode": "g0-a",
