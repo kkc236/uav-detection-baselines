@@ -335,6 +335,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+def _json_sha256(payload: object) -> str:
+    content = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(content).hexdigest().upper()
+
+
+def _runtime_environment_record() -> dict[str, Any]:
+    import ultralytics
+
+    return {
+        "python": platform.python_version(),
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "ultralytics": ultralytics.__version__,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    }
+
+
 def _validate_protocol(args: argparse.Namespace) -> dict[str, Any]:
     for path, label in (
         (args.initial_state, "initial state"),
@@ -344,6 +361,13 @@ def _validate_protocol(args: argparse.Namespace) -> dict[str, Any]:
         if not path.is_file():
             raise SystemExit(f"missing {label}: {path}")
     manifest = json.loads(args.protocol_manifest.read_text(encoding="utf-8"))
+    if manifest.get("format_version") != 1:
+        raise SystemExit("protocol manifest format_version mismatch")
+    signature = manifest.get("signature")
+    unsigned_manifest = dict(manifest)
+    unsigned_manifest.pop("signature", None)
+    if not signature or signature != _json_sha256(unsigned_manifest):
+        raise SystemExit("protocol manifest signature mismatch")
     expected_state = str(args.initial_state.resolve())
     expected_data = str(args.data.resolve())
     if manifest.get("initial_state", {}).get("path") != expected_state:
@@ -352,8 +376,21 @@ def _validate_protocol(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit("protocol manifest initial-state hash mismatch")
     if manifest.get("data", {}).get("path") != expected_data:
         raise SystemExit("protocol manifest data path mismatch")
+    if manifest.get("data", {}).get("sha256") != _sha256(args.data):
+        raise SystemExit("protocol manifest data hash mismatch")
     if manifest.get("seed") != args.seed:
         raise SystemExit("protocol manifest seed mismatch")
+    from src.ebc_qp_config import SOURCE_SHA256
+
+    if manifest.get("source_sha256") != SOURCE_SHA256:
+        raise SystemExit("protocol manifest source lock mismatch")
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if manifest.get("git_commit") != commit:
+        raise SystemExit("protocol manifest git commit mismatch")
+    if manifest.get("environment") != _runtime_environment_record():
+        raise SystemExit("protocol manifest environment mismatch")
+    if not manifest.get("experiment_signature"):
+        raise SystemExit("protocol manifest experiment signature missing")
     return manifest
 
 
@@ -903,6 +940,11 @@ def _build_evidence_metadata(args: argparse.Namespace, settings: dict[str, Any],
         "protocol_manifest_path": str(args.protocol_manifest.resolve()),
         "protocol_manifest_sha256": _sha256(args.protocol_manifest),
         "protocol_signature": manifest.get("signature"),
+        "experiment_signature": manifest.get("experiment_signature"),
+        "dataset": manifest.get("dataset"),
+        "category_mapping_sha256": manifest.get("category_mapping_sha256"),
+        "subset": manifest.get("subset"),
+        "source_sha256": manifest.get("source_sha256"),
         "data_path": str(args.data.resolve()),
         "data_sha256": _sha256(args.data),
         "python": platform.python_version(),

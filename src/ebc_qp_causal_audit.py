@@ -400,6 +400,9 @@ def compare_audit_runs(control: dict, auxiliary: dict, *, tolerance: float = 1e-
 def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 1e-12) -> dict:
     """Apply the preregistered E0b gate to contribution-separated A0/H0/H1 traces."""
     errors: list[str] = []
+    for trace in (a0, h0, h1):
+        if trace.get("format_version") != 1:
+            errors.append(f"{trace.get('arm')} E0b trace format_version must be 1")
     if (a0.get("arm"), h0.get("arm"), h1.get("arm")) != ("a0", "h0", "h1"):
         errors.append("E0b arms must be a0, h0, and h1")
     targets = {trace.get("target_optimizer_steps") for trace in (a0, h0, h1)}
@@ -438,11 +441,57 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
             ):
                 errors.append(f"{arm} optimizer attempt {index} changed the fixed AMP scale")
                 break
+            if step.get("optimizer_step") != index or step.get("successful_update_index") != index:
+                errors.append(f"{arm} optimizer attempt {index} has an invalid successful-update sequence")
+                break
+            if not step.get("successful_update") or step.get("amp_step_skipped"):
+                errors.append(f"{arm} optimizer attempt {index} was not a successful zero-skip update")
+                break
+
+    evidence_fields = (
+        "git_commit",
+        "sources",
+        "protocol_manifest_sha256",
+        "protocol_signature",
+        "data_sha256",
+        "python",
+        "platform",
+        "torch",
+        "cuda_runtime",
+        "ultralytics",
+        "cuda_available",
+        "gpu",
+    )
+    for field in evidence_fields:
+        values = [trace.get("evidence", {}).get(field) for trace in (a0, h0, h1)]
+        if any(value is None for value in values) or not (values[0] == values[1] == values[2]):
+            errors.append(f"E0b pairing mismatch: evidence.{field}")
+    normalized_settings = []
+    for trace in (a0, h0, h1):
+        settings = dict(trace.get("evidence", {}).get("settings") or {})
+        for arm_specific in ("data", "model", "name", "project"):
+            settings.pop(arm_specific, None)
+        normalized_settings.append(settings)
+    if not normalized_settings[0] or not (
+        normalized_settings[0] == normalized_settings[1] == normalized_settings[2]
+    ):
+        errors.append("E0b pairing mismatch: arm-invariant training settings")
 
     paired_fields = ("common_initial_fingerprint", "initial_state_sha256", "optimizer_common_manifest")
     for field in paired_fields:
         if not (a0.get(field) == h0.get(field) == h1.get(field)):
             errors.append(f"E0b pairing mismatch: {field}")
+    for index, steps in enumerate(zip(a0.get("steps", []), h0.get("steps", []), h1.get("steps", [])), start=1):
+        for field, label in (
+            ("epoch", "epoch sequence"),
+            ("batch_fingerprints", "batch sequence"),
+            ("rng_before_forward", "random-state sequence"),
+            ("optimizer_groups", "optimizer runtime-group sequence"),
+        ):
+            values = [step.get(field) for step in steps]
+            if any(value is None for value in values) or not (values[0] == values[1] == values[2]):
+                errors.append(f"E0b {label} mismatch at optimizer attempt {index}")
+                break
     probe_fields = (
         "batch_fingerprint",
         "rng_before_forward",
@@ -463,6 +512,9 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
 
     h0_signatures = h0.get("p2_only_stock_grad_parameters", {})
     h1_signatures = h1.get("p2_only_stock_grad_parameters", {})
+    for arm, signatures in (("H0", h0_signatures), ("H1", h1_signatures)):
+        if not signatures or not _signatures_finite(signatures):
+            errors.append(f"{arm} P2-only common gradient signatures are missing or non-finite")
     h0_nonzero = [name for name, record in h0_signatures.items() if float(record.get("max_abs", 0.0)) > tolerance]
     if h0_nonzero:
         errors.append(f"H0 has common P2-only gradients: {h0_nonzero[:5]}")
@@ -483,38 +535,104 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
         errors.append("H1 did not produce finite nonzero P2-only gradients in both model.0 and model.1")
     if h1_forbidden:
         errors.append(f"H1 P2-only gradient escaped model.0/1: {h1_forbidden[:5]}")
-    h0_aux = float(h0.get("p2_only_aux_private_grad_l2", 0.0))
-    h1_aux = float(h1.get("p2_only_aux_private_grad_l2", 0.0))
-    if h0_aux <= tolerance or h1_aux <= tolerance:
+    h0_aux = _finite_float(h0.get("p2_only_aux_private_grad_l2"))
+    h1_aux = _finite_float(h1.get("p2_only_aux_private_grad_l2"))
+    if h0_aux is None or h1_aux is None:
+        errors.append("H0/H1 auxiliary-private P2-only gradient is non-finite")
+        h0_aux = h1_aux = 0.0
+    elif h0_aux <= tolerance or h1_aux <= tolerance:
         errors.append("H0/H1 auxiliary-private P2-only gradient is missing")
     elif not isclose(h0_aux, h1_aux, rel_tol=1e-6, abs_tol=tolerance):
         errors.append("H0/H1 auxiliary-private P2-only gradients differ")
 
+    from src.ebc_qp_config import EBCQPConfig
+
+    if a0.get("ebc_config") is not None:
+        errors.append("A0 must not have an EBC/P2 configuration")
     for trace in (h0, h1):
-        config = trace.get("ebc_config") or {}
         expected_eta = 0.0 if trace.get("arm") == "h0" else 0.1
-        if config.get("p2_c2_grad_scale") != expected_eta:
-            errors.append(f"{trace.get('arm')} eta mismatch")
-        if config.get("lambda_p2") != 0.1 or not config.get("contribution_separated_aux_gradients"):
-            errors.append(f"{trace.get('arm')} is not the frozen contribution-separated TSGR config")
-        if config.get("query_injection_enabled") or config.get("lambda_ebc") != 0.0:
-            errors.append(f"{trace.get('arm')} enables a forbidden stock-coupling feature")
+        expected_config = EBCQPConfig(
+            lambda_p2=0.1,
+            lambda_quality=0.0,
+            lambda_ebc=0.0,
+            learnable_fusion_gamma=False,
+            query_injection_enabled=False,
+            quality_gated_p2=False,
+            p2_c2_grad_scale=expected_eta,
+            contribution_separated_aux_gradients=True,
+        ).as_dict()
+        if trace.get("ebc_config") != expected_config:
+            errors.append(f"{trace.get('arm')} is not the frozen minimal P2-only config")
+    for trace in (a0, h0, h1):
         if trace.get("initial_probe", {}).get("p2_entry_count") != 0:
             errors.append(f"{trace.get('arm')} initial probe injected P2 queries")
         if trace.get("initial_probe", {}).get("ordinary_query_count") != 300:
             errors.append(f"{trace.get('arm')} initial query count is not 300")
         for step in trace.get("steps", []):
-            if step.get("gradient_clipping_mode") != "contribution_separated":
-                errors.append(f"{trace.get('arm')} did not use contribution-separated clipping")
+            expected_mode = "legacy_combined" if trace.get("arm") == "a0" else "contribution_separated"
+            if step.get("gradient_clipping_mode") != expected_mode:
+                errors.append(f"{trace.get('arm')} did not use the expected {expected_mode} clipping mode")
                 break
             if step.get("p2_entry_count") != 0 or step.get("ordinary_query_count") != 300:
                 errors.append(f"{trace.get('arm')} query integrity failed")
                 break
-            if not _nested_close(
-                step.get("clip_coefficient"), step.get("stock_only_clip_coefficient"), tolerance
+            attempt = step.get("optimizer_attempt")
+            stock_norm = _finite_float(step.get("stock_grad_total_norm"))
+            route_norm = _finite_float(step.get("routed_shallow_grad_total_norm"))
+            private_norm = _finite_float(step.get("aux_private_grad_total_norm"))
+            if (
+                stock_norm is None
+                or route_norm is None
+                or private_norm is None
+                or min(stock_norm, route_norm, private_norm) < 0.0
             ):
+                errors.append(f"{trace.get('arm')} optimizer attempt {attempt} has non-finite or negative gradient norms")
+                break
+            expected_stock_clip = _clip_coefficient(stock_norm)
+            if not _nested_close(step.get("stock_only_clip_coefficient"), expected_stock_clip, tolerance):
+                errors.append(f"{trace.get('arm')} optimizer attempt {attempt} stock clip coefficient was not recomputed")
+                break
+            if not _nested_close(step.get("clip_coefficient"), expected_stock_clip, tolerance):
                 errors.append(f"{trace.get('arm')} auxiliary gradients changed the stock clip coefficient")
                 break
+            if trace.get("arm") != "a0":
+                if private_norm <= tolerance:
+                    errors.append(
+                        f"{trace.get('arm')} optimizer attempt {attempt} has no auxiliary-private gradient"
+                    )
+                    break
+                if not bool(step.get("routed_shallow_grad_finite")):
+                    errors.append(f"{trace.get('arm')} optimizer attempt {attempt} routed gradient is non-finite")
+                    break
+                if not _nested_close(
+                    step.get("routed_shallow_clip_coefficient"), _clip_coefficient(route_norm), tolerance
+                ):
+                    errors.append(
+                        f"{trace.get('arm')} optimizer attempt {attempt} routed shallow clip coefficient was not recomputed"
+                    )
+                    break
+                routed_signatures = step.get("routed_shallow_grad_parameters") or {}
+                if trace.get("arm") == "h1" and (
+                    not routed_signatures or not _signatures_finite(routed_signatures)
+                ):
+                    errors.append(f"h1 optimizer attempt {attempt} routed signatures are missing or non-finite")
+                    break
+                escaped = [
+                    name
+                    for name, record in routed_signatures.items()
+                    if float(record.get("max_abs", 0.0)) > tolerance
+                    and classify_tsgr_gradient_boundary(name) != "routed_shallow"
+                ]
+                if escaped:
+                    errors.append(f"{trace.get('arm')} optimizer attempt {attempt} routed gradient escaped model.0/1")
+                    break
+                if not _nested_close(
+                    step.get("aux_private_clip_coefficient"), _clip_coefficient(private_norm), tolerance
+                ):
+                    errors.append(
+                        f"{trace.get('arm')} optimizer attempt {attempt} auxiliary-private clip coefficient was not recomputed"
+                    )
+                    break
 
     h1_first = (h1.get("steps") or [{}])[0]
     shallow_p2_norm = _signature_subset_l2(
@@ -540,6 +658,9 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
         applied_ratios.append(
             route_norm * route_coefficient / (stock_shallow_norm * stock_coefficient + 1e-12)
         )
+        if route_norm <= tolerance:
+            errors.append(f"H1 optimizer attempt {step.get('optimizer_attempt')} has no routed shallow gradient")
+            break
     applied_ratio_median = median(applied_ratios) if applied_ratios else 0.0
     preclip_ratio_median = median(preclip_ratios) if preclip_ratios else 0.0
     if not 0.01 <= applied_ratio_median <= 0.25:
@@ -552,20 +673,22 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
     if a0.get("steps") and h0.get("steps"):
         a0_delta = a0["steps"][0].get("stock_delta_sha256", {})
         h0_delta = h0["steps"][0].get("stock_delta_sha256", {})
-        divergent = [name for name in sorted(set(a0_delta).intersection(h0_delta)) if a0_delta[name] != h0_delta[name]]
-        if divergent:
-            errors.append(f"H0 first update differs from A0: {divergent[:5]}")
+        if set(a0_delta) != set(h0_delta):
+            errors.append("H0 first update parameter keyset differs from A0")
+        else:
+            divergent = [name for name in sorted(a0_delta) if a0_delta[name] != h0_delta[name]]
+            if divergent:
+                errors.append(f"H0 first update differs from A0: {divergent[:5]}")
     if h0.get("steps") and h1.get("steps"):
         h0_delta = h0["steps"][0].get("stock_delta_sha256", {})
         h1_delta = h1["steps"][0].get("stock_delta_sha256", {})
-        deep_names = {
-            name
-            for name in set(h0_delta).intersection(h1_delta)
-            if classify_tsgr_gradient_boundary(name) == "forbidden_common"
-        }
-        divergent = [name for name in sorted(deep_names) if h0_delta[name] != h1_delta[name]]
-        if divergent:
-            errors.append(f"H1 first update changed forbidden deep parameters: {divergent[:5]}")
+        if set(h0_delta) != set(h1_delta):
+            errors.append("H0/H1 first update parameter keysets differ")
+        else:
+            deep_names = {name for name in h0_delta if classify_tsgr_gradient_boundary(name) == "forbidden_common"}
+            divergent = [name for name in sorted(deep_names) if h0_delta[name] != h1_delta[name]]
+            if divergent:
+                errors.append(f"H1 first update changed forbidden deep parameters: {divergent[:5]}")
 
     return {
         "passed": not errors,
@@ -579,6 +702,20 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
         "h1_routed_nonzero_parameter_count": len(h1_allowed),
         "h1_forbidden_nonzero_parameter_count": len(h1_forbidden),
     }
+
+
+def _signatures_finite(signatures: Mapping[str, Mapping[str, object]]) -> bool:
+    for record in signatures.values():
+        for value in record.values():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            if not isfinite(float(value)):
+                return False
+    return True
+
+
+def _clip_coefficient(norm: float, *, max_norm: float = 10.0) -> float:
+    return min(1.0, max_norm / (norm + 1e-6))
 
 
 def compare_a0_repeats(reference: dict, repeat: dict) -> dict:

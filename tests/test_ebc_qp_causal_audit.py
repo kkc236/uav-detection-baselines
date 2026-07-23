@@ -1,5 +1,9 @@
+import hashlib
 import json
+import platform
+import subprocess
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -8,6 +12,7 @@ from torch import nn
 from scripts.audit_ebc_qp_aux_causality import (
     _clip_coefficient_from_norm,
     _json_safe,
+    _validate_protocol,
     batch_fingerprint,
     build_audit_ebc_config,
     build_audit_settings,
@@ -332,7 +337,10 @@ def _tsgr_run(arm: str) -> dict:
         amp_scale_after=128.0,
         gradient_clipping_mode="contribution_separated" if is_auxiliary else "legacy_combined",
         aux_private_grad_total_norm=1.0 if is_auxiliary else 0.0,
+        aux_private_clip_coefficient=1.0,
         routed_shallow_grad_total_norm=0.05 if arm == "h1" else 0.0,
+        routed_shallow_grad_parameters=deepcopy(p2_signatures) if arm == "h1" else {},
+        routed_shallow_grad_finite=True,
         routed_shallow_clip_coefficient=1.0,
         p2_entry_count=0,
         ordinary_query_count=300,
@@ -355,9 +363,43 @@ def _tsgr_run(arm: str) -> dict:
             optimizer_attempt=index,
             successful_update=True,
             successful_update_index=index,
+            epoch=(index - 1) // 20,
+            batch_fingerprints=[f"B{index}"],
+            rng_before_forward=[f"R{index}"],
         )
         steps.append(step)
     return {
+        "format_version": 1,
+        "evidence": {
+            "git_commit": "RUN-COMMIT",
+            "sources": {"audit.py": "AUDIT-SHA", "trainer.py": "TRAINER-SHA"},
+            "settings": {
+                "epochs": 10,
+                "fraction": 1.0,
+                "imgsz": 640,
+                "batch": 8,
+                "workers": 8,
+                "device": "0",
+                "seed": 0,
+                "optimizer": "auto",
+                "amp": True,
+                "model": "rtdetr-l.yaml" if arm == "a0" else "rtdetr-l-ebc-qp.yaml",
+                "name": f"e0-{arm}",
+            },
+            "protocol_manifest_path": "/protocol.json",
+            "protocol_manifest_sha256": "PROTOCOL-SHA",
+            "protocol_signature": "PROTOCOL-SIGNATURE",
+            "experiment_signature": "EXPERIMENT-SIGNATURE",
+            "data_path": "/data.yaml",
+            "data_sha256": "DATA-SHA",
+            "python": "3.11.0",
+            "platform": "Linux",
+            "torch": "2.7.0",
+            "cuda_runtime": "12.8",
+            "ultralytics": "8.4.90",
+            "cuda_available": True,
+            "gpu": "GPU",
+        },
         "arm": arm,
         "target_optimizer_steps": 100,
         "attempted_optimizer_steps": 100,
@@ -371,17 +413,7 @@ def _tsgr_run(arm: str) -> dict:
             "growth_interval": 2**31 - 1,
             "require_zero_skips": True,
         },
-        "ebc_config": (
-            {
-                "p2_c2_grad_scale": eta,
-                "lambda_p2": 0.1,
-                "lambda_ebc": 0.0,
-                "query_injection_enabled": False,
-                "contribution_separated_aux_gradients": True,
-            }
-            if is_auxiliary
-            else None
-        ),
+        "ebc_config": build_audit_ebc_config(arm).as_dict() if is_auxiliary else None,
         "p2_only_stock_grad_parameters": p2_signatures if is_auxiliary else {},
         "p2_only_aux_private_grad_l2": 1.0 if is_auxiliary else 0.0,
         "initial_probe": {
@@ -437,6 +469,127 @@ def test_tsgr_e0b_comparator_rejects_non_100_step_or_non_amp128_traces():
     result = compare_tsgr_audit_runs(invalid_attempt, _tsgr_run("h0"), _tsgr_run("h1"))
     assert result["passed"] is False
     assert any("optimizer attempt 5" in error and "model_parameters_finite" in error for error in result["errors"])
+
+
+def test_tsgr_e0b_comparator_rejects_identity_and_per_attempt_pairing_drift():
+    wrong_commit = _tsgr_run("h1")
+    wrong_commit["evidence"]["git_commit"] = "OTHER-COMMIT"
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), wrong_commit)
+    assert result["passed"] is False
+    assert any("evidence.git_commit" in error for error in result["errors"])
+
+    wrong_batch = _tsgr_run("h0")
+    wrong_batch["steps"][73]["batch_fingerprints"] = ["OTHER-BATCH"]
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), wrong_batch, _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("batch sequence" in error and "74" in error for error in result["errors"])
+
+    missing_rng = _tsgr_run("h1")
+    missing_rng["steps"][73].pop("rng_before_forward")
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), missing_rng)
+    assert result["passed"] is False
+    assert any("random-state sequence" in error and "74" in error for error in result["errors"])
+
+    wrong_optimizer = _tsgr_run("h1")
+    wrong_optimizer["steps"][73]["optimizer_groups"][0]["lr"] = 0.25
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), wrong_optimizer)
+    assert result["passed"] is False
+    assert any("optimizer runtime-group sequence" in error and "74" in error for error in result["errors"])
+
+
+def test_tsgr_e0b_comparator_rejects_config_nonfinite_signature_and_unverified_clipping():
+    toxic_config = _tsgr_run("h0")
+    toxic_config["ebc_config"]["learnable_fusion_gamma"] = True
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), toxic_config, _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("frozen minimal P2-only config" in error for error in result["errors"])
+
+    nonfinite = _tsgr_run("h0")
+    nonfinite["p2_only_stock_grad_parameters"]["model.0.weight"]["l2"] = "NaN"
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), nonfinite, _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("non-finite" in error for error in result["errors"])
+
+    bad_clip = _tsgr_run("h1")
+    bad_clip["steps"][73]["routed_shallow_clip_coefficient"] = 0.5
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), _tsgr_run("h0"), bad_clip)
+    assert result["passed"] is False
+    assert any("routed shallow clip coefficient" in error and "74" in error for error in result["errors"])
+
+    missing_private = _tsgr_run("h0")
+    missing_private["steps"][73]["aux_private_grad_total_norm"] = 0.0
+    result = compare_tsgr_audit_runs(_tsgr_run("a0"), missing_private, _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("no auxiliary-private gradient" in error and "74" in error for error in result["errors"])
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def _json_sha256(payload):
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return hashlib.sha256(data).hexdigest().upper()
+
+
+def test_audit_protocol_validation_recomputes_manifest_and_data_hashes(tmp_path, monkeypatch):
+    from src.ebc_qp_config import SOURCE_SHA256
+    import scripts.audit_ebc_qp_aux_causality as audit_script
+
+    initial = tmp_path / "initial.pt"
+    data = tmp_path / "data.yaml"
+    protocol = tmp_path / "protocol.json"
+    initial.write_bytes(b"initial")
+    data.write_text("path: /dataset\n", encoding="utf-8")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    runtime_environment = {
+        "python": platform.python_version(),
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "ultralytics": "8.4.90",
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    }
+    monkeypatch.setattr(
+        audit_script,
+        "_runtime_environment_record",
+        lambda: runtime_environment,
+        raising=False,
+    )
+    manifest = {
+        "format_version": 1,
+        "seed": 0,
+        "experiment_signature": "EXPERIMENT",
+        "data": {"path": str(data.resolve()), "sha256": _sha256(data)},
+        "initial_state": {"path": str(initial.resolve()), "sha256": _sha256(initial)},
+        "source_sha256": SOURCE_SHA256,
+        "git_commit": commit,
+        "environment": runtime_environment,
+    }
+    manifest["signature"] = _json_sha256(manifest)
+    protocol.write_text(json.dumps(manifest), encoding="utf-8")
+    args = SimpleNamespace(initial_state=initial, protocol_manifest=protocol, data=data, seed=0)
+    assert _validate_protocol(args)["signature"] == manifest["signature"]
+
+    data.write_text("path: /changed\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="data hash mismatch"):
+        _validate_protocol(args)
+
+    data.write_text("path: /dataset\n", encoding="utf-8")
+    changed = deepcopy(manifest)
+    changed["source_sha256"] = {**SOURCE_SHA256, "head.py": "CHANGED"}
+    protocol.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(SystemExit, match="signature mismatch"):
+        _validate_protocol(args)
+
+    changed["signature"] = _json_sha256({key: value for key, value in changed.items() if key != "signature"})
+    protocol.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(SystemExit, match="source lock mismatch"):
+        _validate_protocol(args)
 
 
 def test_audit_cli_freezes_amp128_100_steps_for_a0_h0_h1(tmp_path):
