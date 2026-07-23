@@ -118,6 +118,7 @@ def _run(arm: str, *, clip: float, stock_delta: float, batch: str = "B", skipped
                 "clip_coefficient": None if skipped else clip,
                 "stock_only_clip_coefficient": None if skipped else 1.0,
                 "stock_grad_total_norm": 3.0,
+                "clip_total_norm": 3.0,
                 "aux_private_grad_total_norm": 20.0 if arm == "aux-audit" else 0.0,
                 "clip_norm_partition_relative_error": "NaN" if skipped else 0.0,
                 "amp_step_skipped": skipped,
@@ -521,6 +522,20 @@ def test_tsgr_e0b_comparator_rejects_config_nonfinite_signature_and_unverified_c
     result = compare_tsgr_audit_runs(_tsgr_run("a0"), missing_private, _tsgr_run("h1"))
     assert result["passed"] is False
     assert any("no auxiliary-private gradient" in error and "74" in error for error in result["errors"])
+
+
+def test_tsgr_e0b_a0_validates_each_independently_reduced_clip_norm():
+    a0 = _tsgr_run("a0")
+    for step in a0["steps"]:
+        step["clip_total_norm"] = 3.000001
+        step["clip_coefficient"] = min(1.0, 10.0 / (3.000001 + 1e-6))
+    result = compare_tsgr_audit_runs(a0, _tsgr_run("h0"), _tsgr_run("h1"))
+    assert result["passed"] is True
+
+    a0["steps"][73]["clip_coefficient"] = 0.5
+    result = compare_tsgr_audit_runs(a0, _tsgr_run("h0"), _tsgr_run("h1"))
+    assert result["passed"] is False
+    assert any("applied clip coefficient" in error and "74" in error for error in result["errors"])
 
 
 def _sha256(path):

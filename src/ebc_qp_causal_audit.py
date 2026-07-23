@@ -592,8 +592,15 @@ def compare_tsgr_audit_runs(a0: dict, h0: dict, h1: dict, *, tolerance: float = 
             if not _nested_close(step.get("stock_only_clip_coefficient"), expected_stock_clip, tolerance):
                 errors.append(f"{trace.get('arm')} optimizer attempt {attempt} stock clip coefficient was not recomputed")
                 break
-            if not _nested_close(step.get("clip_coefficient"), expected_stock_clip, tolerance):
-                errors.append(f"{trace.get('arm')} auxiliary gradients changed the stock clip coefficient")
+            applied_clip_expected = expected_stock_clip
+            if trace.get("arm") == "a0":
+                total_norm = _finite_float(step.get("clip_total_norm"))
+                if total_norm is None or total_norm < 0.0:
+                    errors.append(f"a0 optimizer attempt {attempt} has an invalid total gradient norm")
+                    break
+                applied_clip_expected = _clip_coefficient(total_norm)
+            if not _nested_close(step.get("clip_coefficient"), applied_clip_expected, tolerance):
+                errors.append(f"{trace.get('arm')} optimizer attempt {attempt} applied clip coefficient was not recomputed")
                 break
             if trace.get("arm") != "a0":
                 if private_norm <= tolerance:
