@@ -212,6 +212,16 @@ def _letterbox(image: np.ndarray, imgsz: int) -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim < 2:
         raise ValueError("image must have at least two dimensions")
+    try:
+        from ultralytics.data.augment import LetterBox
+    except Exception:
+        LetterBox = None
+    if LetterBox is not None:
+        out = LetterBox(
+            new_shape=(imgsz, imgsz), auto=False, scale_fill=False,
+            scaleup=False, center=True, padding_value=114,
+        )(image=arr)
+        return np.asarray(out)
     h, w = arr.shape[:2]
     gain = min(float(imgsz) / w, float(imgsz) / h, 1.0)
     rw, rh = max(1, int(round(w * gain))), max(1, int(round(h * gain)))
@@ -277,17 +287,31 @@ def collect_raw_views(
         crop = arr if view.tile is None else arr[view.tile.top : view.tile.bottom, view.tile.left : view.tile.right]
         square = _letterbox(crop, view.imgsz)
         rows = _prediction_rows(predict_square(square, view.imgsz))
-        kept = [r for r in rows if math.isfinite(r[1]) and r[1] >= FrozenSBRProtocol().conf]
+        validated = []
+        for box, score, cls, query in rows:
+            try:
+                coords = tuple(float(x) for x in box)
+            except (TypeError, ValueError):
+                raise ValueError("predictor box must contain four numeric values") from None
+            if len(coords) != 4 or not all(math.isfinite(x) for x in coords):
+                raise ValueError("predictor box must be finite xyxy")
+            if coords[2] <= coords[0] or coords[3] <= coords[1]:
+                raise ValueError("predictor box must be a non-empty xyxy rectangle")
+            if not math.isfinite(float(score)) or not 0.0 <= float(score) <= 1.0:
+                raise ValueError("predictor score must be finite in [0,1]")
+            if isinstance(cls, bool) or int(cls) != cls or int(cls) < 0:
+                raise ValueError("predictor class must be a non-negative integer")
+            if isinstance(query, bool) or int(query) != query or int(query) < 0:
+                raise ValueError("predictor query must be a non-negative integer")
+            validated.append((coords, float(score), int(cls), int(query)))
+        kept = [r for r in validated if r[1] >= FrozenSBRProtocol().conf]
         kept.sort(key=lambda r: (-r[1], r[3]))
         for box, score, cls, query in kept[: FrozenSBRProtocol().max_det]:
-            try:
-                records.append(
-                    RawViewRecord.from_prediction(
-                        view, box, score, cls, query, width, height, image_id=image_id
-                    )
+            records.append(
+                RawViewRecord.from_prediction(
+                    view, box, score, cls, query, width, height, image_id=image_id
                 )
-            except (TypeError, ValueError):
-                continue
+            )
     return tuple(records)
 
 
@@ -307,6 +331,33 @@ def assemble_arm(
 
     p = protocol or FrozenSBRProtocol()
     records = tuple(raw_records)
+    if len(records) > p.max_det * max(1, len(build_arm_views(arm, width, height, p))):
+        raise ValueError("raw records exceed protocol maximum")
+    expected_views = {v.view_id: v for v in build_arm_views(arm, width, height, p)}
+    per_view: dict[str, int] = {}
+    for r in records:
+        if not isinstance(r, RawViewRecord):
+            raise ValueError("assemble_arm requires RawViewRecord values")
+        if r.width != width or r.height != height:
+            raise ValueError("raw record image dimensions mismatch")
+        if r.view_id not in expected_views or r.source_order != expected_views[r.view_id].source_order:
+            # Arm D explicitly consumes Arm C records.
+            if arm.upper() == "D" and r.arm == "C":
+                c_views = {v.view_id: v for v in build_arm_views("C", width, height, p)}
+                if r.view_id not in c_views or r.source_order != c_views[r.view_id].source_order:
+                    raise ValueError("raw record view metadata mismatch")
+            else:
+                raise ValueError("raw record view metadata mismatch")
+        per_view[r.view_id] = per_view.get(r.view_id, 0) + 1
+    if any(count > p.max_det for count in per_view.values()):
+        raise ValueError("per-view raw records exceed max_det")
+    for r in records:
+        if r.tile_bounds is not None:
+            tw = r.tile_bounds[2] - r.tile_bounds[0]
+            th = r.tile_bounds[3] - r.tile_bounds[1]
+            x1, y1, x2, y2 = r.view_xyxy
+            if x1 < 0 or y1 < 0 or x2 > tw or y2 > th:
+                raise ValueError("tile-local box exceeds tile bounds")
     records_dict = [r.to_dict() if isinstance(r, RawViewRecord) else dict(r) for r in records]
     raw_bytes = _canonical(records_dict)
     detections = tuple(
@@ -315,18 +366,7 @@ def assemble_arm(
             source_order=r.source_order, query_index=r.query_index,
             view_xyxy=r.view_xyxy, global_xyxy=r.global_xyxy,
             network_xyxy=r.network_xyxy,
-            tile_local_box=(
-                tuple(
-                    np.asarray(r.view_xyxy, dtype=float)
-                    .reshape(1, 4)
-                    .clip(
-                        [0.0, 0.0, 0.0, 0.0],
-                        [float(r.tile_bounds[2] - r.tile_bounds[0]), float(r.tile_bounds[3] - r.tile_bounds[1]),
-                         float(r.tile_bounds[2] - r.tile_bounds[0]), float(r.tile_bounds[3] - r.tile_bounds[1])]
-                    )[0]
-                )
-                if r.tile_bounds is not None else None
-            ),
+            tile_local_box=r.view_xyxy if r.tile_bounds is not None else None,
             global_box=r.global_xyxy, tile_bounds=r.tile_bounds,
             transform=r.transform, tile_index=(r.source_order - 1 if r.tile_bounds else None),
         )
@@ -352,7 +392,24 @@ def assemble_arm(
     }
 
 
+def assemble_paired_arms(
+    raw_records: Iterable[RawViewRecord], *, width: int, height: int,
+    protocol: FrozenSBRProtocol | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Assemble C and D from one immutable C raw-view collection."""
+
+    records = tuple(raw_records)
+    if any(r.arm != "C" for r in records):
+        raise ValueError("paired C/D assembly requires Arm C raw records")
+    c = assemble_arm(records, "C", width=width, height=height, protocol=protocol)
+    d = assemble_arm(records, "D", width=width, height=height, protocol=protocol)
+    if c["raw_hash"] != d["raw_hash"] or c["cluster_hash"] != d["cluster_hash"]:
+        raise ValueError("C/D raw or cluster hashes differ")
+    return {"C": c, "D": d}
+
+
 __all__ = [
     "FrozenSBRProtocol", "ViewSpec", "RawViewRecord", "build_arm_views",
     "collect_raw_views", "assemble_arm",
+    "assemble_paired_arms",
 ]
