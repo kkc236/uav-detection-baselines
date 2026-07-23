@@ -161,6 +161,14 @@ def run(args: argparse.Namespace) -> int:
             raise ValueError("g0-b/c require --gate")
         validate_prior_gate(args.gate, expected)
     predict = _load_predictor(checkpoint, args.device)
+    # Cache inference by exact square bytes so shared views (B/C/D and full
+    # views) execute once while each arm receives independent raw metadata.
+    predict_cache: dict[tuple[int, bytes], Any] = {}
+    def cached_predict(square: np.ndarray, imgsz: int):
+        key = (int(imgsz), np.ascontiguousarray(square).tobytes())
+        if key not in predict_cache:
+            predict_cache[key] = predict(square, imgsz)
+        return predict_cache[key]
     raw_rows, arm_rows = [], {a: [] for a in "ABCDEF"}
     metric_rows = {a: [] for a in "ABCDEF"}
     started = time.time()
@@ -170,7 +178,7 @@ def run(args: argparse.Namespace) -> int:
         image_id = image["relative_path"]
         raw_by_arm = {}
         for arm in "ABCDEF":
-            raw, manifest = collect_raw_views(array, arm, predict, image_id=image_id, return_manifest=True)
+            raw, manifest = collect_raw_views(array, arm, cached_predict, image_id=image_id, return_manifest=True)
             raw_by_arm[arm] = (raw, manifest)
             raw_rows.extend([dict(r.to_dict(), view_manifest=manifest) for r in raw])
         assembled = {a: assemble_arm(raw_by_arm[a][0], a, width=image["width"], height=image["height"], view_manifest=raw_by_arm[a][1]) for a in "ABEF"}
