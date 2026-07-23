@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Mapping
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import numpy as np
 
@@ -165,6 +167,103 @@ def _safe_target(root: Path, relative: str) -> tuple[Path, str]:
     if root != target.parent and root not in target.parents:
         raise ValueError(f"unsafe checksum path: {relative}")
     return target, relative_path.as_posix()
+
+
+def _portable_path(uri: Any, *, base: Path, name: str) -> Path:
+    if not isinstance(uri, str) or not uri.strip():
+        raise ValueError(f"{name} local URI is missing")
+    direct = Path(uri)
+    if direct.is_absolute():
+        return direct.resolve()
+    parsed = urlparse(uri)
+    if parsed.scheme and parsed.scheme.lower() != "file":
+        raise ValueError(f"{name} uses unsupported non-local URI scheme")
+    if parsed.scheme.lower() == "file":
+        if parsed.netloc not in ("", "localhost"):
+            raise ValueError(f"{name} uses a remote file authority")
+        value = url2pathname(unquote(parsed.path))
+        if (
+            os.name == "nt"
+            and len(value) >= 3
+            and value[0] in "/\\"
+            and value[2] == ":"
+        ):
+            value = value[1:]
+        path = Path(value)
+        if not path.is_absolute():
+            raise ValueError(f"{name} file URI is not absolute")
+        return path.resolve()
+    return (base / direct).resolve()
+
+
+def _verify_input_chain(
+    audit_manifest: Mapping[str, Any], *, evidence_root: Path
+) -> tuple[Path, str, int]:
+    input_record = audit_manifest.get("input_manifest")
+    if not isinstance(input_record, Mapping):
+        raise ValueError("input manifest provenance is missing")
+    input_manifest_path = _portable_path(
+        input_record.get("uri"),
+        base=evidence_root,
+        name="audit input manifest",
+    )
+    if not input_manifest_path.is_file():
+        raise ValueError("audit input manifest local file is missing")
+    recorded_manifest_hash = _digest(
+        input_record.get("sha256"), "input manifest hash"
+    )
+    actual_manifest_hash = _sha256_file(input_manifest_path)
+    if actual_manifest_hash != recorded_manifest_hash:
+        raise ValueError("input manifest bytes disagree with recorded SHA-256")
+    input_manifest = _read_json(input_manifest_path)
+    if not isinstance(input_manifest, Mapping):
+        raise ValueError("input manifest is not an object")
+    if input_manifest.get("schema_version") != "sbr-v2-audit-input/v1":
+        raise ValueError("input manifest schema version mismatch")
+    input_files = input_manifest.get("files")
+    audit_inputs = audit_manifest.get("inputs")
+    if not isinstance(input_files, Mapping) or not isinstance(
+        audit_inputs, Mapping
+    ):
+        raise ValueError("input manifest file mappings are missing")
+    if set(input_files) != set(audit_inputs):
+        raise ValueError("input manifest and audit manifest input keys disagree")
+    for key in sorted(input_files):
+        portable_entry = input_files[key]
+        audit_entry = audit_inputs[key]
+        if not isinstance(portable_entry, Mapping) or not isinstance(
+            audit_entry, Mapping
+        ):
+            raise ValueError(f"input manifest entry {key} is invalid")
+        portable_path = _portable_path(
+            portable_entry.get("uri"),
+            base=input_manifest_path.parent,
+            name=f"input manifest file {key}",
+        )
+        audit_path = _portable_path(
+            audit_entry.get("uri"),
+            base=evidence_root,
+            name=f"audit manifest input {key}",
+        )
+        if portable_path != audit_path:
+            raise ValueError(
+                f"input manifest and audit manifest URI disagree: {key}"
+            )
+        portable_hash = _digest(
+            portable_entry.get("sha256"), f"input manifest {key} SHA-256"
+        )
+        audit_hash = _digest(
+            audit_entry.get("sha256"), f"audit manifest {key} SHA-256"
+        )
+        if portable_hash != audit_hash:
+            raise ValueError(
+                f"input manifest and audit manifest SHA-256 disagree: {key}"
+            )
+        if not portable_path.is_file():
+            raise ValueError(f"input file is missing: {key}")
+        if _sha256_file(portable_path) != portable_hash:
+            raise ValueError(f"input file bytes disagree with SHA-256: {key}")
+    return input_manifest_path, actual_manifest_hash, len(input_files)
 
 
 def _verify_checksums(root: Path) -> set[str]:
@@ -578,7 +677,7 @@ def _verify_primary_gate(
     return expected_status, True
 
 
-def _git_provenance(script_path: Path) -> dict[str, Any]:
+def _capture_self_state(script_path: Path) -> dict[str, Any]:
     repo = script_path.parent.parent
 
     def git(*args: str) -> str:
@@ -590,15 +689,60 @@ def _git_provenance(script_path: Path) -> dict[str, Any]:
         )
         return result.stdout.strip()
 
-    try:
-        commit = _digest(git("rev-parse", "HEAD"), "git commit", lengths=(40, 64))
-        tree = _digest(
-            git("rev-parse", "HEAD^{tree}"), "git tree", lengths=(40, 64)
-        )
-        clean = git("status", "--porcelain") == ""
-        return {"commit": commit, "tree": tree, "clean": clean}
-    except Exception as exc:
-        return {"commit": None, "tree": None, "clean": False, "error": str(exc)}
+    commit = _digest(
+        git("rev-parse", "HEAD"), "git commit", lengths=(40, 64)
+    )
+    tree = _digest(
+        git("rev-parse", "HEAD^{tree}"), "git tree", lengths=(40, 64)
+    )
+    clean = git("status", "--porcelain", "--untracked-files=all") == ""
+    return {
+        "commit": commit,
+        "tree": tree,
+        "clean": clean,
+        "script_sha256": _sha256_file(script_path),
+        "repo_root": str(repo.resolve()),
+    }
+
+
+def _validated_clean_self_state(state: Any, name: str) -> dict[str, Any]:
+    if not isinstance(state, Mapping):
+        raise ValueError(f"adjudicator source {name} state is missing")
+    normalized = {
+        "commit": _digest(
+            state.get("commit"),
+            f"adjudicator source {name} commit",
+            lengths=(40, 64),
+        ),
+        "tree": _digest(
+            state.get("tree"),
+            f"adjudicator source {name} tree",
+            lengths=(40, 64),
+        ),
+        "script_sha256": _digest(
+            state.get("script_sha256"),
+            f"adjudicator source {name} script SHA-256",
+        ),
+        "repo_root": str(
+            Path(str(state.get("repo_root", ""))).resolve()
+        ),
+        "clean": state.get("clean") is True,
+    }
+    if not normalized["clean"]:
+        raise ValueError(f"adjudicator source {name} worktree is not clean")
+    return normalized
+
+
+def _assert_same_self_state(
+    expected: Mapping[str, Any],
+    actual: Any,
+    name: str,
+) -> dict[str, Any]:
+    normalized = _validated_clean_self_state(actual, name)
+    for key in ("commit", "tree", "script_sha256", "repo_root"):
+        if normalized[key] != expected[key]:
+            raise ValueError(f"adjudicator source changed at {name}: {key}")
+    return normalized
 
 
 def _atomic_write_json(path: Path, value: Any) -> None:
@@ -658,17 +802,43 @@ def _finish_report(report: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
-def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
+def adjudicate_evidence(
+    evidence: Path | str,
+    expected_primary_checksums_sha256: str,
+) -> dict[str, Any]:
     """Independently adjudicate a primary SBR-V2 evidence directory."""
 
     root = Path(evidence).resolve()
     script_path = Path(__file__).resolve()
     checksums_verified = False
+    primary_anchor_verified = False
     manifest: Mapping[str, Any] = {}
+    start_state: dict[str, Any] | None = None
+    primary_anchor: str | None = None
     report: dict[str, Any]
     try:
+        primary_anchor = _digest(
+            expected_primary_checksums_sha256,
+            "expected primary checksums SHA-256",
+        )
+        start_state = _validated_clean_self_state(
+            _capture_self_state(script_path), "at start"
+        )
+        repo_root = Path(start_state["repo_root"])
+        if root == repo_root or repo_root in root.parents:
+            raise ValueError(
+                "evidence output must be outside the adjudicator source repo"
+            )
         if not root.is_dir():
             raise ValueError(f"evidence directory does not exist: {root}")
+        primary_checksum_path = root / "checksums.sha256"
+        if not primary_checksum_path.is_file():
+            raise ValueError("primary checksums.sha256 is missing")
+        if _sha256_file(primary_checksum_path) != primary_anchor:
+            raise ValueError(
+                "external primary checksum anchor does not match checksums.sha256"
+            )
+        primary_anchor_verified = True
         missing = [
             name for name in REQUIRED_PRIMARY if not (root / name).is_file()
         ]
@@ -683,6 +853,9 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             raise ValueError("audit manifest is not an object")
         manifest = manifest_value
         _verify_schema_and_hashes(root, manifest)
+        input_manifest_path, input_manifest_hash, input_count = (
+            _verify_input_chain(manifest, evidence_root=root)
+        )
         events = _read_events(root / "attribution_events.jsonl.gz")
         summary = _read_json(root / "attribution_summary.json")
         denominator, mixed, mechanism_share = _verify_summary(events, summary)
@@ -699,11 +872,10 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             upper_gate,
             invariants_passed,
         )
-        input_manifest = manifest.get("input_manifest")
-        if not isinstance(input_manifest, Mapping):
-            raise ValueError("input manifest provenance is missing")
-        input_manifest_hash = _digest(
-            input_manifest.get("sha256"), "input manifest hash"
+        _assert_same_self_state(
+            start_state,
+            _capture_self_state(script_path),
+            "before evidence write",
         )
         passed = independent_gate == "SBR_V2_AUDIT_ELIGIBLE"
         report = {
@@ -716,6 +888,8 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             "independent_gate": independent_gate,
             "primary_gate_status": str(primary_gate.get("status", "")),
             "primary_gate_agrees": primary_agrees,
+            "primary_checksum_anchor_verified": True,
+            "primary_checksums_sha256": primary_anchor,
             "checksums_verified": True,
             "checksums_regenerated": True,
             "event_count": len(events),
@@ -726,11 +900,14 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             "large_ap_tolerance": -0.005,
             "invariants_passed": invariants_passed,
             "input_manifest_sha256": input_manifest_hash,
+            "input_manifest_uri": str(input_manifest_path),
+            "verified_input_file_count": input_count,
             "primary_audit_manifest_sha256": _sha256_file(
                 root / "audit_manifest.json"
             ),
-            "adjudicator_script_sha256": _sha256_file(script_path),
-            "adjudicator_git": _git_provenance(script_path),
+            "adjudicator_script_sha256": start_state["script_sha256"],
+            "adjudicator_source": start_state,
+            "source_stability_verified": True,
             "environment": _environment(),
         }
     except Exception as exc:
@@ -744,6 +921,8 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
             "decision": "FAIL",
             "independent_gate": "SBR_V2_AUDIT_STOP",
             "primary_gate_agrees": False,
+            "primary_checksum_anchor_verified": primary_anchor_verified,
+            "primary_checksums_sha256": primary_anchor,
             "checksums_verified": checksums_verified,
             "checksums_regenerated": checksums_verified,
             "input_manifest_sha256": input_hash,
@@ -752,8 +931,13 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
                 if (root / "audit_manifest.json").is_file()
                 else None
             ),
-            "adjudicator_script_sha256": _sha256_file(script_path),
-            "adjudicator_git": _git_provenance(script_path),
+            "adjudicator_script_sha256": (
+                start_state["script_sha256"]
+                if start_state is not None
+                else _sha256_file(script_path)
+            ),
+            "adjudicator_source": start_state,
+            "source_stability_verified": False,
             "environment": _environment(),
             "error": str(exc),
         }
@@ -761,6 +945,47 @@ def adjudicate_evidence(evidence: Path | str) -> dict[str, Any]:
     _atomic_write_json(root / "independent_adjudication.json", report)
     if checksums_verified:
         _write_checksums(root)
+    if report.get("decision") == "PASS":
+        try:
+            if start_state is None:
+                raise ValueError("adjudicator source start state is missing")
+            _assert_same_self_state(
+                start_state,
+                _capture_self_state(script_path),
+                "after evidence write",
+            )
+        except Exception as exc:
+            report = {
+                "status": "SBR_V2_AUDIT_INDEPENDENT_FAIL",
+                "decision": "FAIL",
+                "independent_gate": "SBR_V2_AUDIT_STOP",
+                "primary_gate_agrees": False,
+                "primary_checksum_anchor_verified": primary_anchor_verified,
+                "primary_checksums_sha256": primary_anchor,
+                "checksums_verified": checksums_verified,
+                "checksums_regenerated": checksums_verified,
+                "input_manifest_sha256": (
+                    manifest.get("input_manifest", {}).get("sha256")
+                    if isinstance(manifest.get("input_manifest"), Mapping)
+                    else None
+                ),
+                "primary_audit_manifest_sha256": _sha256_file(
+                    root / "audit_manifest.json"
+                ),
+                "adjudicator_script_sha256": start_state[
+                    "script_sha256"
+                ],
+                "adjudicator_source": start_state,
+                "source_stability_verified": False,
+                "environment": _environment(),
+                "error": str(exc),
+            }
+            _finish_report(report)
+            _atomic_write_json(
+                root / "independent_adjudication.json", report
+            )
+            if checksums_verified:
+                _write_checksums(root)
     return report
 
 
@@ -769,11 +994,18 @@ def build_parser() -> argparse.ArgumentParser:
         description="Independently adjudicate SBR-V2 causal-audit evidence"
     )
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument(
+        "--expected-primary-checksums-sha256",
+        required=True,
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    report = adjudicate_evidence(build_parser().parse_args(argv).evidence)
+    args = build_parser().parse_args(argv)
+    report = adjudicate_evidence(
+        args.evidence, args.expected_primary_checksums_sha256
+    )
     print(json.dumps(report, sort_keys=True, allow_nan=False))
     return 0 if report.get("decision") == "PASS" else 1
 

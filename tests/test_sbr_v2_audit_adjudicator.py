@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
 
 SCHEMA_VERSION = "sbr-v2-audit-evidence/v1"
 SCHEMA = {
@@ -74,6 +76,26 @@ def _reseal(root: Path) -> None:
     (root / "checksums.sha256").write_text(text, encoding="utf-8")
 
 
+def _primary_anchor(root: Path) -> str:
+    return _sha(root / "checksums.sha256")
+
+
+@pytest.fixture(autouse=True)
+def _stable_clean_adjudicator_source(monkeypatch):
+    import scripts.adjudicate_sbr_v2_audit as adjudicator
+
+    state = {
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+        "clean": True,
+        "script_sha256": "c" * 64,
+        "repo_root": str(Path(__file__).parents[1].resolve()),
+    }
+    monkeypatch.setattr(
+        adjudicator, "_capture_self_state", lambda *_args: dict(state)
+    )
+
+
 def _events() -> list[dict]:
     rows = []
     for threshold in THRESHOLDS:
@@ -135,6 +157,37 @@ def _summarize(events: list[dict]) -> dict:
 def _eligible_primary_fixture(tmp_path: Path) -> Path:
     root = tmp_path / "primary"
     root.mkdir()
+    inputs_root = tmp_path / "frozen-inputs"
+    inputs_root.mkdir()
+    input_keys = (
+        "g0_manifest",
+        "raw_views",
+        "arm_predictions",
+        "g0_metrics",
+        "g0_gate",
+        "independent_adjudication",
+        "original_checksums",
+        "checkpoint",
+        "image_list",
+        "dataset_yaml",
+    )
+    input_paths = {}
+    for index, key in enumerate(input_keys):
+        path = inputs_root / f"{key}.bin"
+        path.write_bytes(f"frozen-{index}-{key}".encode("utf-8"))
+        input_paths[key] = path
+    input_manifest_path = inputs_root / "audit_input.json"
+    input_manifest = {
+        "schema_version": "sbr-v2-audit-input/v1",
+        "files": {
+            key: {
+                "uri": path.name,
+                "sha256": _sha(path),
+            }
+            for key, path in input_paths.items()
+        },
+    }
+    _write_json(input_manifest_path, input_manifest)
     events = _events()
     _write_events(root / "attribution_events.jsonl.gz", events)
     _write_json(root / "attribution_summary.json", _summarize(events))
@@ -220,8 +273,15 @@ def _eligible_primary_fixture(tmp_path: Path) -> Path:
             "secondary_iou_thresholds": list(THRESHOLDS),
         },
         "input_manifest": {
-            "uri": "/frozen/input_manifest.json",
-            "sha256": "1" * 64,
+            "uri": str(input_manifest_path.resolve()),
+            "sha256": _sha(input_manifest_path),
+        },
+        "inputs": {
+            key: {
+                "uri": str(path.resolve()),
+                "sha256": _sha(path),
+            }
+            for key, path in input_paths.items()
         },
         "audit_source": {
             "commit": "2" * 40,
@@ -251,7 +311,8 @@ def test_adjudicator_recomputes_eligible_gate_without_primary_import(tmp_path):
     from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
 
     root = _eligible_primary_fixture(tmp_path)
-    report = adjudicate_evidence(root)
+    anchor = _primary_anchor(root)
+    report = adjudicate_evidence(root, anchor)
 
     assert report["decision"] == "PASS"
     assert report["status"] == "SBR_V2_AUDIT_INDEPENDENT_PASS"
@@ -260,7 +321,10 @@ def test_adjudicator_recomputes_eligible_gate_without_primary_import(tmp_path):
     assert report["checksums_regenerated"] is True
     assert report["primary_gate_agrees"] is True
     assert report["event_count"] == 50
-    assert report["input_manifest_sha256"] == "1" * 64
+    manifest = json.loads((root / "audit_manifest.json").read_text())
+    assert report["input_manifest_sha256"] == manifest["input_manifest"]["sha256"]
+    assert report["primary_checksums_sha256"] == anchor
+    assert _primary_anchor(root) != anchor
 
 
 def test_adjudicator_imports_only_stdlib_and_numpy():
@@ -291,6 +355,7 @@ def test_adjudicator_imports_only_stdlib_and_numpy():
         "sys",
         "tempfile",
         "typing",
+        "urllib",
         "numpy",
     }
     assert not {"src", "scripts"} & imported
@@ -300,13 +365,14 @@ def test_adjudicator_fails_on_checksum_tampering_without_resealing(tmp_path):
     from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
 
     root = _eligible_primary_fixture(tmp_path)
+    anchor = _primary_anchor(root)
     summary = json.loads(
         (root / "attribution_summary.json").read_text(encoding="utf-8")
     )
     summary["primary_ap75"]["denominator"] = 99
     _write_json(root / "attribution_summary.json", summary)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, anchor)
 
     assert report["decision"] == "FAIL"
     assert report["checksums_verified"] is False
@@ -331,7 +397,7 @@ def test_adjudicator_fails_on_resealed_event_summary_tampering(tmp_path):
     _write_json(root / "audit_manifest.json", manifest)
     _reseal(root)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "summary" in report["error"].lower()
@@ -344,7 +410,7 @@ def test_adjudicator_rejects_checksum_path_escape(tmp_path):
     with (root / "checksums.sha256").open("a", encoding="utf-8") as fh:
         fh.write(f"{'a' * 64}  ../escape\n")
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "unsafe" in report["error"].lower()
@@ -373,7 +439,7 @@ def test_adjudicator_rejects_nonfinite_event_even_if_resealed(tmp_path):
     _write_json(root / "audit_manifest.json", manifest)
     _reseal(root)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "non-finite" in report["error"].lower()
@@ -396,7 +462,7 @@ def test_adjudicator_rejects_duplicate_event_id(tmp_path):
     _write_json(root / "audit_manifest.json", manifest)
     _reseal(root)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "duplicate" in report["error"].lower()
@@ -420,7 +486,7 @@ def test_adjudicator_recomputes_mechanism_and_upper_bound_gates(tmp_path):
     _write_json(root / "audit_manifest.json", manifest)
     _reseal(root)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "upper-bound" in report["error"].lower()
@@ -450,7 +516,7 @@ def test_adjudicator_fails_on_gate_or_invariant_disagreement(tmp_path):
         _write_json(root / "audit_manifest.json", manifest)
         _reseal(root)
 
-        report = adjudicate_evidence(root)
+        report = adjudicate_evidence(root, _primary_anchor(root))
 
         assert report["decision"] == "FAIL"
         assert mutation in report["error"].lower()
@@ -472,7 +538,7 @@ def test_adjudicator_rejects_false_per_image_invariant(tmp_path):
     _write_json(root / "audit_manifest.json", manifest)
     _reseal(root)
 
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
 
     assert report["decision"] == "FAIL"
     assert "per-image invariant" in report["error"].lower()
@@ -504,17 +570,182 @@ def test_adjudicator_rejects_boolean_summary_count_or_gate_flag(tmp_path):
         _write_json(root / "audit_manifest.json", manifest)
         _reseal(root)
 
-        report = adjudicate_evidence(root)
+        report = adjudicate_evidence(root, _primary_anchor(root))
 
         assert report["decision"] == "FAIL"
         assert mutation in report["error"].lower()
+
+
+def test_external_primary_checksum_anchor_blocks_full_reseal(tmp_path):
+    from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
+
+    root = _eligible_primary_fixture(tmp_path)
+    trusted_anchor = _primary_anchor(root)
+    events = _load_events(root / "attribution_events.jsonl.gz")
+    for event in events:
+        event["image_id"] = "images/rewritten.jpg"
+    _write_events(root / "attribution_events.jsonl.gz", events)
+    _write_json(root / "attribution_summary.json", _summarize(events))
+    for name in (
+        "upper_bound_metrics.json",
+        "invariants.json",
+        "primary_gate.json",
+    ):
+        _write_json(root / name, json.loads((root / name).read_text()))
+    manifest = json.loads((root / "audit_manifest.json").read_text())
+    manifest["deterministic_artifact_hashes"] = {
+        name: _sha(root / name)
+        for name in (
+            "attribution_events.jsonl.gz",
+            "attribution_summary.json",
+            "upper_bound_metrics.json",
+            "invariants.json",
+            "primary_gate.json",
+        )
+    }
+    manifest["deterministic_evidence_hash"] = hashlib.sha256(
+        _canonical(manifest["deterministic_artifact_hashes"])
+    ).hexdigest()
+    _write_json(root / "audit_manifest.json", manifest)
+    _reseal(root)
+
+    report = adjudicate_evidence(root, trusted_anchor)
+
+    assert report["decision"] == "FAIL"
+    assert report["checksums_verified"] is False
+    assert report["checksums_regenerated"] is False
+    assert "external primary checksum anchor" in report["error"].lower()
+
+
+def test_adjudicator_requires_external_anchor_in_api_and_cli(tmp_path):
+    from scripts.adjudicate_sbr_v2_audit import (
+        adjudicate_evidence,
+        build_parser,
+    )
+
+    root = _eligible_primary_fixture(tmp_path)
+    with pytest.raises(TypeError):
+        adjudicate_evidence(root)
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--evidence", str(root)])
+    args = build_parser().parse_args(
+        [
+            "--evidence",
+            str(root),
+            "--expected-primary-checksums-sha256",
+            _primary_anchor(root),
+        ]
+    )
+    assert args.expected_primary_checksums_sha256 == _primary_anchor(root)
+
+
+def test_adjudicator_verifies_real_input_manifest_and_input_bytes(tmp_path):
+    from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
+
+    for mutation in ("input-bytes", "input-manifest"):
+        case = tmp_path / mutation
+        case.mkdir()
+        root = _eligible_primary_fixture(case)
+        trusted_anchor = _primary_anchor(root)
+        audit_manifest = json.loads(
+            (root / "audit_manifest.json").read_text()
+        )
+        raw_path = Path(audit_manifest["inputs"]["raw_views"]["uri"])
+        raw_path.write_bytes(b"attacker-replaced-raw-input")
+        if mutation == "input-manifest":
+            input_manifest_path = Path(
+                audit_manifest["input_manifest"]["uri"]
+            )
+            input_manifest = json.loads(input_manifest_path.read_text())
+            input_manifest["files"]["raw_views"]["sha256"] = _sha(raw_path)
+            _write_json(input_manifest_path, input_manifest)
+
+        report = adjudicate_evidence(root, trusted_anchor)
+
+        assert report["decision"] == "FAIL"
+        assert "input manifest" in report["error"].lower() or "input file" in report[
+            "error"
+        ].lower()
+
+
+def test_adjudicator_supports_file_uris_and_rejects_remote_inputs(tmp_path):
+    from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
+
+    for mode in ("file-uri", "remote"):
+        case = tmp_path / mode
+        case.mkdir()
+        root = _eligible_primary_fixture(case)
+        path = root / "audit_manifest.json"
+        manifest = json.loads(path.read_text())
+        if mode == "file-uri":
+            manifest["input_manifest"]["uri"] = Path(
+                manifest["input_manifest"]["uri"]
+            ).as_uri()
+            for entry in manifest["inputs"].values():
+                entry["uri"] = Path(entry["uri"]).as_uri()
+        else:
+            manifest["input_manifest"]["uri"] = "https://invalid/audit.json"
+        _write_json(path, manifest)
+        _reseal(root)
+
+        report = adjudicate_evidence(root, _primary_anchor(root))
+
+        if mode == "file-uri":
+            assert report["decision"] == "PASS"
+        else:
+            assert report["decision"] == "FAIL"
+            assert "non-local" in report["error"].lower()
+
+
+def test_adjudicator_refuses_dirty_or_changing_own_source(
+    tmp_path, monkeypatch
+):
+    import scripts.adjudicate_sbr_v2_audit as adjudicator
+
+    clean = {
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+        "clean": True,
+        "script_sha256": "c" * 64,
+        "repo_root": str(Path(__file__).parents[1].resolve()),
+    }
+    for mutation in ("dirty", "changes-after-write"):
+        case = tmp_path / mutation
+        case.mkdir()
+        root = _eligible_primary_fixture(case)
+        anchor = _primary_anchor(root)
+        if mutation == "dirty":
+            dirty = {**clean, "clean": False}
+            monkeypatch.setattr(
+                adjudicator,
+                "_capture_self_state",
+                lambda *_args: dict(dirty),
+            )
+        else:
+            states = iter(
+                [
+                    dict(clean),
+                    dict(clean),
+                    {**clean, "tree": "d" * 40, "clean": False},
+                ]
+            )
+            monkeypatch.setattr(
+                adjudicator,
+                "_capture_self_state",
+                lambda *_args: next(states),
+            )
+
+        report = adjudicator.adjudicate_evidence(root, anchor)
+
+        assert report["decision"] == "FAIL"
+        assert "adjudicator source" in report["error"].lower()
 
 
 def test_output_hash_has_explicit_non_self_referential_semantics(tmp_path):
     from scripts.adjudicate_sbr_v2_audit import adjudicate_evidence
 
     root = _eligible_primary_fixture(tmp_path)
-    report = adjudicate_evidence(root)
+    report = adjudicate_evidence(root, _primary_anchor(root))
     written = json.loads(
         (root / "independent_adjudication.json").read_text(encoding="utf-8")
     )
