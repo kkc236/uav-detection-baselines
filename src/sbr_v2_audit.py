@@ -963,18 +963,21 @@ def _fuse_float64(cluster: tuple[Detection, ...]) -> Detection:
     seed = cluster[0]
     if len(cluster) == 1:
         return seed
-    weights = np.asarray([member.score for member in cluster], dtype=np.float64)
-    total = np.sum(weights, dtype=np.float64)
-    if not np.isfinite(total) or total <= np.float64(0.0):
+    # Match the frozen ``sbr_fusion._fuse_cluster`` accumulation order
+    # bit-for-bit. NumPy reductions may use pairwise summation and differ by
+    # an ulp on larger legal clusters.
+    total = sum(float(member.score) for member in cluster)
+    if not math.isfinite(total) or total <= 0.0:
         box = seed.box
     else:
-        coordinates = np.asarray(
-            [member.box for member in cluster], dtype=np.float64
+        box = tuple(
+            sum(
+                float(member.score) * float(member.box[index])
+                for member in cluster
+            )
+            / total
+            for index in range(4)
         )
-        fused = np.sum(
-            coordinates * weights[:, np.newaxis], axis=0, dtype=np.float64
-        ) / total
-        box = tuple(float(value) for value in fused)
     return Detection(
         box=box,
         score=max(member.score for member in cluster),

@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError, replace
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -606,6 +607,52 @@ def test_reconstructed_clusters_use_strict_ios_and_original_raw_indices():
         nested_tile.to_detection(),
     )
     assert result.pre_cap_predictions[1] is result.standard_predictions[1]
+
+
+def test_reconstructed_fusion_matches_legacy_python_sum_bit_for_bit():
+    rng = random.Random(2)
+    scores = [rng.uniform(0.001, 1.0) for _ in range(16)]
+    boxes = []
+    for _ in range(16):
+        x, y = rng.uniform(0, 10), rng.uniform(0, 10)
+        width, height = rng.uniform(100, 110), rng.uniform(100, 110)
+        boxes.append((x, y, x + width, y + height))
+    raw = tuple(
+        AuditRawDetection.synthetic(
+            "legacy-sum.jpg",
+            "C",
+            source=0,
+            query=index,
+            score=score,
+            box=box,
+            width=640,
+            height=640,
+            original_index=index,
+        )
+        for index, (score, box) in enumerate(zip(scores, boxes))
+    )
+    ordered = sorted(
+        raw,
+        key=lambda item: (
+            -item.score,
+            item.source_order,
+            item.query_index,
+            item.original_index,
+        ),
+    )
+    total = sum(float(item.score) for item in ordered)
+    expected = tuple(
+        sum(
+            float(item.score) * float(item.global_xyxy[coordinate])
+            for item in ordered
+        )
+        / total
+        for coordinate in range(4)
+    )
+
+    result = reconstruct_c_clusters(raw)
+
+    assert result.pre_cap_predictions[0].box == expected
 
 
 def test_reconstructed_pre_cap_order_uses_frozen_deterministic_tie_breaks():

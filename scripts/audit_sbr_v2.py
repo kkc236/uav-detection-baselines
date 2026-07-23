@@ -715,12 +715,22 @@ def _parse_raw_detection(
 def _metric_row(
     image: Mapping[str, Any],
     predictions: Sequence[Any],
+    *,
+    frozen_global_xyxy: bool = False,
 ) -> dict[str, Any]:
+    boxes = [
+        (
+            getattr(prediction, "global_xyxy", None)
+            if frozen_global_xyxy
+            else prediction.box
+        )
+        for prediction in predictions
+    ]
     return {
         "image_id": image["relative_path"],
         "width": int(image["width"]),
         "height": int(image["height"]),
-        "pred_boxes": [list(prediction.box) for prediction in predictions],
+        "pred_boxes": [list(box) for box in boxes],
         "pred_scores": [float(prediction.score) for prediction in predictions],
         "pred_classes": [int(prediction.class_id) for prediction in predictions],
         "pred_source": [int(prediction.source_order) for prediction in predictions],
@@ -1077,8 +1087,18 @@ def _run_audit(
             standard.standard_predictions,
             c_frozen,
         )
-        a_rows.append(_metric_row(image, a_predictions))
-        c_rows.append(_metric_row(image, standard.standard_predictions))
+        a_rows.append(
+            _metric_row(
+                image, a_predictions, frozen_global_xyxy=True
+            )
+        )
+        c_rows.append(
+            _metric_row(
+                image,
+                standard.standard_predictions,
+                frozen_global_xyxy=True,
+            )
+        )
         v2_rows.append(_metric_row(image, guarded.standard_predictions))
         for threshold in FROZEN_IOU_THRESHOLDS:
             result = audit_prepared_image_at_threshold(

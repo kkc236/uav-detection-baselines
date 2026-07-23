@@ -17,6 +17,7 @@ from src.sbr_artifacts import (
     write_checksums,
 )
 from src.sbr_g0 import FrozenSBRProtocol
+from src.sbr_fusion import Detection
 from src.sbr_metrics import evaluate_dataset
 
 
@@ -39,6 +40,7 @@ def _raw(
     box: tuple[float, float, float, float],
     *,
     index: int,
+    score: float = 0.9,
 ) -> dict[str, object]:
     tile = None if source == 0 else [0, 0, 384, 384]
     view_id = ("full", "TL", "TR", "BL", "BR")[source]
@@ -55,7 +57,7 @@ def _raw(
         "network_xyxy": list(box),
         "view_xyxy": list(box),
         "global_xyxy": list(box),
-        "score": 0.9,
+        "score": score,
         "class_id": 0,
         "view_manifest": [
             {
@@ -103,15 +105,25 @@ def _make_input(
                 1,
                 (80.0, 0.0, 280.0, 200.0),
                 index=2,
+                score=0.95,
             )
         )
     atomic_write_jsonl_gz(evidence / "raw_views.jsonl.gz", rows)
-    c_box = [40.0, 0.0, 240.0, 200.0] if recoverable else [
-        0.0,
-        0.0,
-        200.0,
-        200.0,
-    ]
+    c_box = (
+        [
+            80.0 * 0.95 / 1.85,
+            0.0,
+            (200.0 * 0.9 + 280.0 * 0.95) / 1.85,
+            200.0,
+        ]
+        if recoverable
+        else [
+            0.0,
+            0.0,
+            200.0,
+            200.0,
+        ]
+    )
 
     def record(row: dict[str, object]) -> dict[str, object]:
         return {
@@ -120,14 +132,25 @@ def _make_input(
             if key != "view_manifest"
         }
 
-    def prediction(box: list[float]) -> dict[str, object]:
+    def prediction(
+        box: list[float],
+        *,
+        global_box: list[float] | None = None,
+        score: float = 0.9,
+        source: int = 0,
+        query: int = 0,
+    ) -> dict[str, object]:
         return {
             "box": box,
-            "global_xyxy": [0.0, 0.0, 200.0, 200.0],
-            "score": 0.9,
+            "global_xyxy": (
+                [0.0, 0.0, 200.0, 200.0]
+                if global_box is None
+                else global_box
+            ),
+            "score": score,
             "class_id": 0,
-            "source_order": 0,
-            "query_index": 0,
+            "source_order": source,
+            "query_index": query,
         }
 
     c_records = [record(c_full)]
@@ -145,7 +168,19 @@ def _make_input(
             {
                 "image_id": "one.jpg",
                 "records": c_records,
-                "predictions": [prediction(c_box)],
+                "predictions": [
+                    prediction(
+                        c_box,
+                        global_box=(
+                            [80.0, 0.0, 280.0, 200.0]
+                            if recoverable
+                            else None
+                        ),
+                        score=0.95 if recoverable else 0.9,
+                        source=1 if recoverable else 0,
+                        query=1 if recoverable else 0,
+                    )
+                ],
             },
             {"image_id": "one.jpg", "records": [], "predictions": []},
             {"image_id": "one.jpg", "records": [], "predictions": []},
@@ -174,16 +209,22 @@ def _make_input(
         "image_list": image_list,
     }
     atomic_write_json(evidence / "g0_manifest.json", g0_manifest)
-    def metric_row(box: list[float]) -> dict[str, object]:
+    def metric_row(
+        box: list[float],
+        *,
+        score: float = 0.9,
+        source: int = 0,
+        query: int = 0,
+    ) -> dict[str, object]:
         return {
             "image_id": "one.jpg",
             "width": 640,
             "height": 640,
             "pred_boxes": [box],
-            "pred_scores": [0.9],
+            "pred_scores": [score],
             "pred_classes": [0],
-            "pred_source": [0],
-            "pred_query": [0],
+            "pred_source": [source],
+            "pred_query": [query],
             "gt_boxes": [[0.0, 0.0, 200.0, 200.0]],
             "gt_classes": [0],
             "ignore_boxes": [],
@@ -194,7 +235,20 @@ def _make_input(
         "A": evaluate_dataset(
             [metric_row([0.0, 0.0, 200.0, 200.0])]
         ),
-        "C": evaluate_dataset([metric_row(c_box)]),
+        "C": evaluate_dataset(
+            [
+                metric_row(
+                    (
+                        [80.0, 0.0, 280.0, 200.0]
+                        if recoverable
+                        else c_box
+                    ),
+                    score=0.95 if recoverable else 0.9,
+                    source=1 if recoverable else 0,
+                    query=1 if recoverable else 0,
+                )
+            ]
+        ),
     }
 
     def json_ready(value):
@@ -839,3 +893,30 @@ def test_zero_detection_a_c_rows_are_proven_by_empty_frozen_records(
         (tmp_path / "out" / "primary_gate.json").read_text(encoding="utf-8")
     )
     assert gate["status"] == "SBR_V2_AUDIT_STOP"
+
+
+def test_frozen_g0_metrics_use_global_xyxy_not_fused_box():
+    import scripts.audit_sbr_v2 as cli
+
+    image = {
+        "relative_path": "one.jpg",
+        "width": 640,
+        "height": 640,
+        "gt_boxes": [],
+        "gt_classes": [],
+        "ignore_boxes": [],
+    }
+    prediction = Detection(
+        box=(40.0, 0.0, 240.0, 200.0),
+        global_xyxy=(80.0, 0.0, 280.0, 200.0),
+        score=0.9,
+        class_id=0,
+        source_order=1,
+        query_index=7,
+    )
+
+    row = cli._metric_row(
+        image, [prediction], frozen_global_xyxy=True
+    )
+
+    assert row["pred_boxes"] == [[80.0, 0.0, 280.0, 200.0]]
