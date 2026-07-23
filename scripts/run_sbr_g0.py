@@ -163,16 +163,16 @@ def run(args: argparse.Namespace) -> int:
     predict = _load_predictor(checkpoint, args.device)
     # Cache inference by exact square bytes so shared views (B/C/D and full
     # views) execute once while each arm receives independent raw metadata.
-    predict_cache: dict[tuple[int, bytes], Any] = {}
-    def cached_predict(square: np.ndarray, imgsz: int):
-        key = (int(imgsz), np.ascontiguousarray(square).tobytes())
-        if key not in predict_cache:
-            predict_cache[key] = predict(square, imgsz)
-        return predict_cache[key]
     raw_rows, arm_rows = [], {a: [] for a in "ABCDEF"}
     metric_rows = {a: [] for a in "ABCDEF"}
     started = time.time()
     for image in dataset["images"]:
+        predict_cache: dict[tuple[int, bytes], Any] = {}
+        def cached_predict(square: np.ndarray, imgsz: int):
+            key = (int(imgsz), np.ascontiguousarray(square).tobytes())
+            if key not in predict_cache:
+                predict_cache[key] = predict(square, imgsz)
+            return predict_cache[key]
         with Image.open(image["path"]) as im:
             array = np.asarray(im.convert("RGB"))
         image_id = image["relative_path"]
