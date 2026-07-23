@@ -628,11 +628,11 @@ def _parse_raw_detection(
     if row.get("view_id") != VIEW_BY_SOURCE[source]:
         raise ValueError("raw view_id/source_order disagreement")
     _validate_view_manifest(row, arm)
+    # The frozen runner retained finite detector boxes slightly outside the
+    # network canvas, then clamped only the inverse-mapped view/global boxes.
     network = _box(row.get("network_xyxy"), "network_xyxy")
     view = _box(row.get("view_xyxy"), "view_xyxy")
     global_box = _box(row.get("global_xyxy"), "global_xyxy")
-    if min(network) < 0.0:
-        raise ValueError("network_xyxy must stay in the network frame")
     tile_value = row.get("tile_bounds")
     expected_view = {
         view.source_order: view

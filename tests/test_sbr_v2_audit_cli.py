@@ -920,3 +920,76 @@ def test_frozen_g0_metrics_use_global_xyxy_not_fused_box():
     )
 
     assert row["pred_boxes"] == [[80.0, 0.0, 280.0, 200.0]]
+
+
+@pytest.mark.parametrize(
+    ("arm", "source", "network_box", "view_box", "global_box"),
+    [
+        (
+            "C",
+            2,
+            [-0.4688, 0.0, 20.0, 20.0],
+            [0.0, 0.0, 20.0, 20.0],
+            [256.0, 0.0, 276.0, 20.0],
+        ),
+        (
+            "A",
+            0,
+            [630.0, 630.0, 641.25, 641.0],
+            [630.0, 630.0, 640.0, 640.0],
+            [630.0, 630.0, 640.0, 640.0],
+        ),
+    ],
+)
+def test_raw_parser_accepts_legacy_network_overflow_after_view_clamp(
+    arm, source, network_box, view_box, global_box
+):
+    import scripts.audit_sbr_v2 as cli
+
+    row = _raw(
+        "one.jpg",
+        arm,
+        source,
+        0,
+        tuple(global_box),
+        index=0,
+    )
+    row["network_xyxy"] = network_box
+    row["view_xyxy"] = view_box
+    if source == 2:
+        row["tile_bounds"] = [256, 0, 640, 384]
+    row["_audit_original_index"] = 0
+
+    detection = cli._parse_raw_detection(
+        row, expected_image_id="one.jpg"
+    )
+
+    assert detection.network_xyxy == tuple(network_box)
+    assert detection.view_xyxy == tuple(view_box)
+    assert detection.global_xyxy == tuple(global_box)
+
+
+@pytest.mark.parametrize(
+    "network_box",
+    [
+        [float("nan"), 0.0, 20.0, 20.0],
+        [0.0, 0.0, float("inf"), 20.0],
+        [10.0, 0.0, 10.0, 20.0],
+    ],
+)
+def test_raw_parser_still_rejects_invalid_network_geometry(network_box):
+    import scripts.audit_sbr_v2 as cli
+
+    row = _raw(
+        "one.jpg",
+        "A",
+        0,
+        0,
+        (0.0, 0.0, 20.0, 20.0),
+        index=0,
+    )
+    row["network_xyxy"] = network_box
+    row["_audit_original_index"] = 0
+
+    with pytest.raises(ValueError, match="network_xyxy"):
+        cli._parse_raw_detection(row, expected_image_id="one.jpg")
