@@ -1047,13 +1047,18 @@ def test_large_view_guard_changes_rank_301_pre_cap_without_changing_top300():
     assert guarded.cluster_members[:300] == standard.cluster_members[:300]
 
 
-def _evidence_row(image_id, *, predicts=True, source=0):
+def _evidence_row(
+    image_id, *, predicts=True, source=0, prediction_box=None
+):
     gt_box = (0, 0, 120, 120)
+    resolved_prediction_box = (
+        gt_box if prediction_box is None else prediction_box
+    )
     return {
         "image_id": image_id,
         "width": 640,
         "height": 640,
-        "pred_boxes": [gt_box] if predicts else [],
+        "pred_boxes": [resolved_prediction_box] if predicts else [],
         "pred_scores": [0.9] if predicts else [],
         "pred_classes": [0] if predicts else [],
         "pred_source": [source] if predicts else [],
@@ -1072,7 +1077,14 @@ def _upper_bound_evidence(count=1, *, c_recovers=False):
     ]
     c_rows = [
         _evidence_row(
-            f"i{index}.jpg", predicts=c_recovers, source=0
+            f"i{index}.jpg",
+            predicts=True,
+            source=0,
+            prediction_box=(
+                (0, 0, 120, 120)
+                if c_recovers
+                else (30, 30, 150, 150)
+            ),
         )
         for index in range(count)
     ]
@@ -1260,6 +1272,30 @@ def test_guard_upper_bound_rejects_forged_loss_denominator():
             mixed_localization_unique_large_gt=1,
             a_tp_to_c_fn_unique_large_gt=5,
             invariants={"passed": True},
+        )
+
+
+def test_guard_upper_bound_rejects_v2_prediction_metadata_changes():
+    a_rows, c_rows, v2_rows = _upper_bound_evidence()
+    v2_rows[0]["pred_scores"] = [0.99]
+    v2_rows[0]["pred_source"] = [4]
+    v2_rows[0]["pred_query"] = [99]
+
+    with pytest.raises(ValueError):
+        audit_module.evaluate_guard_upper_bound(
+            a_rows, c_rows, v2_rows,
+            mixed_localization_unique_large_gt=1,
+            a_tp_to_c_fn_unique_large_gt=1,
+            invariants={
+                "raw_hash_equal": True,
+                "cluster_hash_equal": True,
+                "cluster_count_equal": True,
+                "scores_equal": True,
+                "classes_equal": True,
+                "selected_cluster_ids_equal": True,
+                "singleton_preservation": 1.0,
+                "passed": True,
+            },
         )
 
 

@@ -1401,6 +1401,21 @@ def _ground_truth_signature(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _prediction_metadata_signature(
+    row: Mapping[str, Any],
+) -> tuple[Any, ...]:
+    return (
+        len(row["pred_boxes"]),
+        tuple(
+            _canonical_float(score, "pred_score")
+            for score in row["pred_scores"]
+        ),
+        tuple(row["pred_classes"]),
+        tuple(row["pred_source"]),
+        tuple(row["pred_query"]),
+    )
+
+
 def _validate_aligned_evidence(
     a_rows: Sequence[Mapping[str, Any]],
     c_rows: Sequence[Mapping[str, Any]],
@@ -1425,6 +1440,12 @@ def _validate_aligned_evidence(
         ):
             raise ValueError(
                 "A/C/V2 image order or ground-truth evidence disagrees"
+            )
+        if _prediction_metadata_signature(
+            c_row
+        ) != _prediction_metadata_signature(v2_row):
+            raise ValueError(
+                "C/V2 prediction metadata must be canonical-identical"
             )
     return normalized_a, normalized_c, normalized_v2
 
