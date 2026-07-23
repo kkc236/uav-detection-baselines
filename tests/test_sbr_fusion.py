@@ -2,7 +2,16 @@ import math
 
 import pytest
 
-from src.sbr_fusion import Detection, fuse_standard, greedy_ios_clusters, intersection_over_smaller
+from src.sbr_fusion import (
+    Detection,
+    border_reliability,
+    fuse_sp_brf,
+    fuse_sp_brf_from_clusters,
+    fuse_standard,
+    greedy_ios_clusters,
+    intersection_over_smaller,
+)
+from src.sbr_geometry import Tile
 
 
 def det(box, score, cls=0, source=0, query=0, **kwargs):
@@ -109,4 +118,110 @@ def test_protocol_rejects_nonfrozen_threshold_and_max_det():
 def test_invalid_provenance_or_indices_are_dropped(kwargs):
     good = det((0, 0, 2, 2), 0.9)
     bad = det((0, 0, 2, 2), 0.8, **kwargs)
+    assert fuse_standard([good, bad]) == (good,)
+
+
+def test_sp_brf_full_view_reliability_is_one():
+    full = det((0, 0, 10, 10), 0.8)
+    assert border_reliability(full, None, (100, 100)) == pytest.approx(1.0)
+
+
+def test_sp_brf_each_internal_edge_uses_exact_overlap_over_two():
+    tile = Tile(20, 20, 80, 80, 1)
+    # 60x60 tile over 100x100 image gives exact 20px overlap, denominator 10.
+    assert border_reliability(
+        det((0, 0, 10, 10), 0.8, tile_local_box=(2, 5, 58, 55), tile_bounds=tile),
+        tile,
+        (100, 100),
+    ) == pytest.approx(0.2)
+    assert border_reliability(
+        det((0, 0, 10, 10), 0.8, tile_local_box=(2, 5, 50, 55), tile_bounds=tile),
+        tile,
+        (100, 100),
+    ) == pytest.approx(0.2)
+    assert border_reliability(
+        det((0, 0, 10, 10), 0.8, tile_local_box=(25, 1, 50, 55), tile_bounds=tile),
+        tile,
+        (100, 100),
+    ) == pytest.approx(0.1)
+    assert border_reliability(
+        det((0, 0, 10, 10), 0.8, tile_local_box=(25, 5, 50, 59), tile_bounds=tile),
+        tile,
+        (100, 100),
+    ) == pytest.approx(0.1)
+
+
+def test_sp_brf_ignores_real_image_edges_and_takes_minimum_across_edges():
+    tile = Tile(0, 0, 60, 60, 0)
+    # Left/top are real boundaries; right/bottom are artificial. Minimum is
+    # the bottom reliability (2 / (40 / 2) = 0.1).
+    local = det(
+        (0, 0, 10, 10),
+        0.8,
+        tile_local_box=(0, 0, 58, 58),
+        tile_bounds=tile,
+    )
+    assert border_reliability(local, tile, (80, 80)) == pytest.approx(0.1)
+
+
+def test_sp_brf_reliability_has_no_applicable_edge_fallback_and_is_clipped():
+    tile = Tile(0, 0, 100, 100, 0)
+    local = det((0, 0, 2, 2), 0.8, tile_local_box=(0, 0, 100, 100), tile_bounds=tile)
+    assert border_reliability(local, tile, (100, 100)) == pytest.approx(1.0)
+
+
+def test_sp_brf_rejects_missing_local_metadata_and_zero_overlap():
+    tile = Tile(20, 0, 80, 100, 1)
+    missing = det((0, 0, 2, 2), 0.8)
+    with pytest.raises(ValueError):
+        border_reliability(missing, tile, (100, 100))
+    zero_overlap_tile = Tile(50, 0, 100, 100, 1)
+    local = det(
+        (0, 0, 2, 2),
+        0.8,
+        tile_local_box=(0, 0, 50, 100),
+        tile_bounds=zero_overlap_tile,
+    )
+    with pytest.raises(ValueError):
+        border_reliability(local, zero_overlap_tile, (100, 100))
+
+
+def test_sp_brf_two_and_three_member_weighted_coordinates_and_seed_class():
+    tile = Tile(0, 0, 60, 100, 0)
+    a = det((0, 0, 10, 10), 0.8, cls=3, tile_local_box=(10, 10, 30, 30), tile_bounds=tile)
+    b = det((2, 2, 12, 12), 0.4, cls=3, tile_local_box=(58, 10, 60, 30), tile_bounds=tile)
+    c = det((4, 4, 14, 14), 0.2, cls=3, tile_local_box=(30, 10, 50, 30), tile_bounds=tile)
+    # Tile overlap is 20, so b has right reliability 0 and a/c have r=1.
+    out = fuse_sp_brf((a, b, c), full_shape=(100, 100))
+    wa, wb, wc = 0.8 * 2.0, 0.4 * 1.0, 0.2 * 2.0
+    total = wa + wb + wc
+    assert out.box == pytest.approx(tuple(
+        (wa * a.box[i] + wb * b.box[i] + wc * c.box[i]) / total for i in range(4)
+    ))
+    assert out.score == pytest.approx(0.8)
+    assert out.class_id == 3
+    assert out.members == (a, b, c)
+
+
+def test_sp_brf_singleton_is_identity_and_clusters_match_standard():
+    a = det((0, 0, 10, 10), 0.8, source=1)
+    b = det((1, 1, 9, 9), 0.7, source=2)
+    standard_clusters = greedy_ios_clusters([a, b])
+    sp = fuse_sp_brf_from_clusters(standard_clusters, full_shape=(100, 100))
+    assert sp[0].members == (a, b)
+    singleton = det((20, 20, 30, 30), 0.2, source=4)
+    assert fuse_sp_brf((singleton,), full_shape=(100, 100)) is singleton
+
+
+def test_sp_brf_from_clusters_is_deterministic_and_capped_at_300():
+    detections = [det((i, 0, i + 1, 1), 0.1, source=i // 2, query=i) for i in range(301)]
+    clusters = greedy_ios_clusters(detections)
+    out = fuse_sp_brf_from_clusters(clusters, full_shape=(1000, 10))
+    assert len(out) == 300
+    assert all(x is y for x, y in zip(out, detections[:300]))
+
+
+def test_negative_tile_index_is_invalid():
+    good = det((0, 0, 2, 2), 0.9)
+    bad = det((0, 0, 2, 2), 0.8, tile_index=-1)
     assert fuse_standard([good, bad]) == (good,)
