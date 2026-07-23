@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import json
 import math
-from numbers import Integral
+from numbers import Integral, Real
 from typing import Any
 
 import numpy as np
@@ -50,6 +50,15 @@ def _validated_box(name: str, value: object) -> Box:
     ):
         raise ValueError(f"{name} must be a finite nondegenerate xyxy box")
     return box  # type: ignore[return-value]
+
+
+def _validated_score(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be finite and within [0,1]")
+    result = float(value)
+    if not math.isfinite(result) or not 0.0 <= result <= 1.0:
+        raise ValueError(f"{name} must be finite and within [0,1]")
+    return result
 
 
 def _validated_tile_bounds(
@@ -411,7 +420,14 @@ def _iou64(a: Sequence[float], b: Sequence[float]) -> float:
 
 def _prediction_fields(prediction: Any, index: int) -> tuple[Box, float, int, int, int, int]:
     if isinstance(prediction, AuditRawDetection):
-        return prediction.global_xyxy, prediction.score, prediction.class_id, prediction.source_order, prediction.query_index, prediction.original_index
+        return (
+            _validated_box("prediction", prediction.global_xyxy),
+            _validated_score("prediction score", prediction.score),
+            _strict_nonnegative_int("class_id", prediction.class_id),
+            _strict_nonnegative_int("source_order", prediction.source_order),
+            _strict_nonnegative_int("query_index", prediction.query_index),
+            _strict_nonnegative_int("original_index", prediction.original_index),
+        )
     if not isinstance(prediction, Detection):
         if isinstance(prediction, Mapping):
             box = prediction.get("box", prediction.get("global_xyxy"))
@@ -422,16 +438,44 @@ def _prediction_fields(prediction: Any, index: int) -> tuple[Box, float, int, in
             original = prediction.get("original_index", index)
             if box is None or score is None or cls is None:
                 raise ValueError("prediction mapping is missing fields")
-            return _validated_box("prediction", box), float(score), int(cls), int(source), int(query), int(original)
+            return (
+                _validated_box("prediction", box),
+                _validated_score("prediction score", score),
+                _strict_nonnegative_int("class_id", cls),
+                _strict_nonnegative_int("source_order", source),
+                _strict_nonnegative_int("query_index", query),
+                _strict_nonnegative_int("original_index", original),
+            )
         # Accept metrics-style prediction objects without coupling this module to them.
         if all(hasattr(prediction, n) for n in ("box", "score")):
             cls = getattr(prediction, "class_id", getattr(prediction, "cls", None))
             source = getattr(prediction, "source_order", getattr(prediction, "source", 0))
             query = getattr(prediction, "query_index", getattr(prediction, "query", 0))
             if cls is not None:
-                return _validated_box("prediction", prediction.box), float(prediction.score), int(cls), int(source), int(query), int(getattr(prediction, "original_index", index))
+                return (
+                    _validated_box("prediction", prediction.box),
+                    _validated_score("prediction score", prediction.score),
+                    _strict_nonnegative_int("class_id", cls),
+                    _strict_nonnegative_int("source_order", source),
+                    _strict_nonnegative_int("query_index", query),
+                    _strict_nonnegative_int(
+                        "original_index",
+                        getattr(prediction, "original_index", index),
+                    ),
+                )
         raise ValueError("predictions must be Detection or prediction-like records")
-    return prediction.box, float(prediction.score), int(prediction.class_id), int(prediction.source_order), int(prediction.query_index), index
+    if not prediction._metadata_valid:
+        raise ValueError("prediction metadata must use strict integer fields")
+    return (
+        _validated_box("prediction", prediction.box),
+        _validated_score("prediction score", prediction.score),
+        _strict_nonnegative_int("class_id", prediction.class_id),
+        _strict_nonnegative_int("source_order", prediction.source_order),
+        _strict_nonnegative_int("query_index", prediction.query_index),
+        _strict_nonnegative_int(
+            "original_index", getattr(prediction, "original_index", index)
+        ),
+    )
 
 
 def _ioa64(pred_box: Sequence[float], ignore_box: Sequence[float]) -> float:
@@ -440,34 +484,37 @@ def _ioa64(pred_box: Sequence[float], ignore_box: Sequence[float]) -> float:
     return float(np.float64(inter) / (np.float64(p[2] - p[0]) * np.float64(p[3] - p[1])))
 
 
-def match_large_targets(
+def _match_large_targets(
     predictions: Iterable[Any], gt_boxes: Sequence[Sequence[float]], gt_classes: Sequence[int],
     *, ignore_boxes: Sequence[Sequence[float]] | None = None, width: int, height: int,
-    iou_threshold: float, max_det: int = 300, conf_threshold: float = 0.001,
+    iou_threshold: float, prediction_cap: int | None,
 ) -> LargeMatchResult:
-    """Match predictions to large targets using the frozen evaluator order."""
-    if not math.isfinite(float(iou_threshold)) or not 0.0 <= float(iou_threshold) <= 1.0:
-        raise ValueError("iou_threshold must be finite in [0,1]")
-    if isinstance(max_det, bool) or not isinstance(max_det, Integral) or int(max_det) != 300:
-        raise ValueError("max_det is frozen at 300")
-    if isinstance(conf_threshold, bool) or not isinstance(conf_threshold, (float, np.floating)) or float(conf_threshold) != 0.001:
-        raise ValueError("conf_threshold is frozen at 0.001")
+    validated_width = _positive_dimension("width", width)
+    validated_height = _positive_dimension("height", height)
     boxes = tuple(_validated_box("gt box", b) for b in gt_boxes)
+    ignore = tuple(_validated_box("ignore box", b) for b in (ignore_boxes or ()))
     classes = tuple(_strict_nonnegative_int("gt class", c) for c in gt_classes)
     if len(boxes) != len(classes):
         raise ValueError("gt_boxes and gt_classes lengths must agree")
-    selected = tuple(i for i, b in enumerate(boxes) if effective_size(b, width=width, height=height) > 96.0)
+    selected = tuple(
+        i
+        for i, box in enumerate(boxes)
+        if effective_size(
+            box, width=validated_width, height=validated_height
+        )
+        > 96.0
+    )
     raw = tuple(predictions)
     eligible = []
     for i, p in enumerate(raw):
         box, score, cls, source, query, original = _prediction_fields(p, i)
-        if not math.isfinite(float(score)) or float(score) < float(conf_threshold):
+        if score < 0.001:
             continue
-        eligible.append((i, p, box, float(score), cls, source, query, original))
+        eligible.append((i, p, box, score, cls, source, query, original))
     eligible.sort(key=lambda x: (-x[3], x[5], x[6], x[7]))
-    eligible = eligible[:300]
+    if prediction_cap is not None:
+        eligible = eligible[:prediction_cap]
     neutral: list[int] = []
-    ignore = tuple(ignore_boxes or ())
     for item in eligible:
         if any(_ioa64(item[2], b) >= 0.5 for b in ignore):
             neutral.append(item[0])
@@ -485,6 +532,35 @@ def match_large_targets(
         if any(classes[i] == pcls and i not in matched_gt and _iou64(pbox, boxes[i]) >= float(iou_threshold) for i in range(len(boxes)) if i not in selected):
             neutral.append(pidx)
     return LargeMatchResult(p2g, g2p, tuple(sorted(set(neutral))), selected, tuple(item[1] for item in eligible))
+
+
+def match_large_targets(
+    predictions: Iterable[Any], gt_boxes: Sequence[Sequence[float]], gt_classes: Sequence[int],
+    *, ignore_boxes: Sequence[Sequence[float]] | None = None, width: int, height: int,
+    iou_threshold: float, max_det: int = 300, conf_threshold: float = 0.001,
+) -> LargeMatchResult:
+    """Match predictions to large targets using the frozen evaluator order."""
+    if (
+        isinstance(iou_threshold, bool)
+        or not isinstance(iou_threshold, Real)
+        or not math.isfinite(float(iou_threshold))
+        or not 0.0 <= float(iou_threshold) <= 1.0
+    ):
+        raise ValueError("iou_threshold must be finite in [0,1]")
+    if isinstance(max_det, bool) or not isinstance(max_det, Integral) or int(max_det) != 300:
+        raise ValueError("max_det is frozen at 300")
+    if isinstance(conf_threshold, bool) or not isinstance(conf_threshold, (float, np.floating)) or float(conf_threshold) != 0.001:
+        raise ValueError("conf_threshold is frozen at 0.001")
+    return _match_large_targets(
+        predictions,
+        gt_boxes,
+        gt_classes,
+        ignore_boxes=ignore_boxes,
+        width=width,
+        height=height,
+        iou_threshold=float(iou_threshold),
+        prediction_cap=300,
+    )
 
 
 def _coerce_image(image: Any) -> AuditImage:
@@ -519,10 +595,32 @@ def audit_image_at_threshold(image: Any, iou_threshold: float = 0.75) -> ImageAu
          "original_index": members[0]}
         for p, members in zip(c_preds, reconstruction.cluster_members)
     )
+    c_pre_cap_match_preds = tuple(
+        {
+            "box": prediction.box,
+            "score": prediction.score,
+            "class_id": prediction.class_id,
+            "source_order": prediction.source_order,
+            "query_index": prediction.query_index,
+            "original_index": members[0],
+        }
+        for prediction, members in zip(
+            reconstruction.pre_cap_predictions, reconstruction.cluster_members
+        )
+    )
     am = match_large_targets(a_preds, fixture.gt_boxes, fixture.gt_classes, ignore_boxes=fixture.ignore_boxes, width=fixture.width, height=fixture.height, iou_threshold=iou_threshold)
     cm = match_large_targets(c_match_preds, fixture.gt_boxes, fixture.gt_classes, ignore_boxes=fixture.ignore_boxes, width=fixture.width, height=fixture.height, iou_threshold=iou_threshold)
+    pre_cap_match = _match_large_targets(
+        c_pre_cap_match_preds,
+        fixture.gt_boxes,
+        fixture.gt_classes,
+        ignore_boxes=fixture.ignore_boxes,
+        width=fixture.width,
+        height=fixture.height,
+        iou_threshold=float(iou_threshold),
+        prediction_cap=None,
+    )
     events: list[AttributionEvent] = []
-    full_keys = {d.identity_key: d for d in a_raw if isinstance(d, AuditRawDetection) and d.source_order == 0}
     c_by_orig = {d.original_index: d for d in c_raw if isinstance(d, AuditRawDetection)}
     for gt_idx in am.tp_gt_indices:
         if gt_idx in cm.gt_to_prediction:
@@ -543,18 +641,47 @@ def audit_image_at_threshold(image: Any, iou_threshold: float = 0.75) -> ImageAu
                     best = min(fulls, key=lambda m: (-m.score, m.source_order, m.query_index, m.original_index))
                     cf = list(c_preds)
                     old = cf[cluster_index]
-                    cf[cluster_index] = replace(old, box=best.global_xyxy)
-                    cf_records = tuple(
-                        {"box": p.box, "score": p.score, "class_id": p.class_id,
-                         "source_order": p.source_order, "query_index": p.query_index,
-                         "original_index": members_[0]}
-                        for p, members_ in zip(cf, reconstruction.cluster_members)
+                    standard_fails_geometry = (
+                        old.class_id != fixture.gt_classes[gt_idx]
+                        or _iou64(old.box, fixture.gt_boxes[gt_idx])
+                        < float(iou_threshold)
                     )
-                    recovers = gt_idx in match_large_targets(cf_records, fixture.gt_boxes, fixture.gt_classes, ignore_boxes=fixture.ignore_boxes, width=fixture.width, height=fixture.height, iou_threshold=iou_threshold).gt_to_prediction
-                    if recovers: category = AttributionCategory.MIXED_CLUSTER_LOCALIZATION
-                else:
-                    category = AttributionCategory.FINAL_300_TRUNCATION
-            elif cluster_index >= len(reconstruction.standard_predictions):
+                    if standard_fails_geometry:
+                        cf[cluster_index] = replace(
+                            old, box=best.global_xyxy
+                        )
+                        cf_records = tuple(
+                            {
+                                "box": p.box,
+                                "score": p.score,
+                                "class_id": p.class_id,
+                                "source_order": p.source_order,
+                                "query_index": p.query_index,
+                                "original_index": members_[0],
+                            }
+                            for p, members_ in zip(
+                                cf, reconstruction.cluster_members
+                            )
+                        )
+                        recovers = gt_idx in match_large_targets(
+                            cf_records,
+                            fixture.gt_boxes,
+                            fixture.gt_classes,
+                            ignore_boxes=fixture.ignore_boxes,
+                            width=fixture.width,
+                            height=fixture.height,
+                            iou_threshold=iou_threshold,
+                        ).gt_to_prediction
+                        if recovers:
+                            category = (
+                                AttributionCategory.MIXED_CLUSTER_LOCALIZATION
+                            )
+        if category is AttributionCategory.OTHER:
+            pre_cap_prediction = pre_cap_match.gt_to_prediction.get(gt_idx)
+            if (
+                pre_cap_prediction is not None
+                and pre_cap_prediction >= len(reconstruction.standard_predictions)
+            ):
                 category = AttributionCategory.FINAL_300_TRUNCATION
         if category is AttributionCategory.OTHER:
             # Same-class candidates over threshold that lost one-to-one assignment.

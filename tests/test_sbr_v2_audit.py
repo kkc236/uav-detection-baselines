@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError, replace
+from types import SimpleNamespace
 
 import pytest
 from src.sbr_fusion import Detection
@@ -66,6 +67,48 @@ def test_mixed_anchor_tie_uses_source_query_original_order():
     assert event.counterfactual_recovers is True
 
 
+def test_mixed_geometric_match_lost_to_assignment_is_competition_not_localization():
+    competing_gt = (5, 0, 105, 100)
+    target_gt = (0, 0, 100, 100)
+    a = AuditRawDetection.synthetic(
+        "mixed-competition.jpg",
+        "A",
+        score=.8,
+        box=target_gt,
+        original_index=1,
+    )
+    c_full = AuditRawDetection.synthetic(
+        "mixed-competition.jpg",
+        "C",
+        score=.8,
+        box=target_gt,
+        original_index=1,
+    )
+    c_local = AuditRawDetection.synthetic(
+        "mixed-competition.jpg",
+        "C",
+        source=1,
+        score=.9,
+        box=competing_gt,
+        original_index=2,
+    )
+    fixture = AuditImage(
+        "mixed-competition.jpg",
+        640,
+        640,
+        (competing_gt, target_gt),
+        (0, 0),
+        (a,),
+        (c_full, c_local),
+    )
+
+    event = audit_image_at_threshold(fixture, .75).events[0]
+
+    assert event.gt_index == 1
+    assert event.category is AttributionCategory.MATCHING_COMPETITION
+    assert event.counterfactual_recovers is False
+
+
 def test_attribution_reports_truncation_competition_and_class_candidate_precedence():
     target = (0, 0, 100, 100)
     a = AuditRawDetection.synthetic("i.jpg", "A", source=0, query=0, score=.8, box=target, original_index=1)
@@ -81,6 +124,84 @@ def test_attribution_reports_truncation_competition_and_class_candidate_preceden
 
     no_candidate = AuditImage("candidate", 640, 640, (target,), (0,), (Detection(target, .8, 0, 0, 0),), (Detection((200, 200, 300, 300), .8, 0, 0, 0),), ())
     assert audit_image_at_threshold(no_candidate, .75).events[0].category is AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+
+
+def test_out_of_cap_nonmatching_cluster_is_not_attributed_to_truncation():
+    target = (0, 0, 100, 100)
+    a = AuditRawDetection.synthetic(
+        "nonmatching-cap.jpg", "A", score=.1, box=target, original_index=1
+    )
+    c_full = AuditRawDetection.synthetic(
+        "nonmatching-cap.jpg", "C", score=.1, box=target, original_index=1
+    )
+    c_local = AuditRawDetection.synthetic(
+        "nonmatching-cap.jpg",
+        "C",
+        source=1,
+        score=.8,
+        box=(40, 0, 140, 100),
+        original_index=2,
+    )
+    distractors = tuple(
+        AuditRawDetection.synthetic(
+            "nonmatching-cap.jpg",
+            "C",
+            source=2,
+            query=i,
+            score=.9,
+            box=(300 + 2 * i, 0, 301 + 2 * i, 1),
+            original_index=1000 + i,
+        )
+        for i in range(300)
+    )
+    fixture = AuditImage(
+        "nonmatching-cap.jpg",
+        640,
+        640,
+        (target,),
+        (0,),
+        (a,),
+        (c_full, c_local, *distractors),
+    )
+
+    event = audit_image_at_threshold(fixture, .75).events[0]
+
+    assert event.category is AttributionCategory.CLASS_OR_CANDIDATE_LOSS
+
+
+def test_matching_pre_cap_cluster_removed_by_cap_is_attributed_to_truncation():
+    target = (0, 0, 100, 100)
+    a = AuditRawDetection.synthetic(
+        "matching-cap.jpg", "A", score=.8, box=target, original_index=1
+    )
+    c_target = AuditRawDetection.synthetic(
+        "matching-cap.jpg", "C", score=.8, box=target, original_index=1
+    )
+    distractors = tuple(
+        AuditRawDetection.synthetic(
+            "matching-cap.jpg",
+            "C",
+            source=1,
+            query=i,
+            score=.9,
+            box=(300 + 2 * i, 0, 301 + 2 * i, 1),
+            original_index=1000 + i,
+        )
+        for i in range(300)
+    )
+    fixture = AuditImage(
+        "matching-cap.jpg",
+        640,
+        640,
+        (target,),
+        (0,),
+        (a,),
+        (c_target, *distractors),
+    )
+
+    event = audit_image_at_threshold(fixture, .75).events[0]
+
+    assert event.category is AttributionCategory.FINAL_300_TRUNCATION
 
 
 def test_attribution_excludes_c_tp_and_neutral_events_and_keeps_exact_event_id():
@@ -125,6 +246,86 @@ def test_matcher_uses_highest_iou_then_lowest_gt_index_and_raw_original_order():
     p_low_index = AuditRawDetection.synthetic("i.jpg", "C", source=1, query=0, score=.8, box=(3, 0, 4, 1), original_index=1)
     ordered = match_large_targets([p_high_index, p_low_index], [], [], width=640, height=640, iou_threshold=.75).ordered_predictions
     assert [p.original_index for p in ordered] == [1, 100]
+
+
+@pytest.mark.parametrize(
+    "prediction",
+    [
+        Detection((float("nan"), 0, 1, 1), .8, 0, 0, 0),
+        Detection((0, 0, 0, 1), .8, 0, 0, 0),
+        Detection((0, 0, 1, 1), .8, True, 0, 0),
+        Detection((0, 0, 1, 1), .8, 0, 1.0, 0),
+        Detection((0, 0, 1, 1), -.1, 0, 0, 0),
+        Detection((0, 0, 1, 1), 1.1, 0, 0, 0),
+        {"box": (0, 0, 1, 1), "score": float("inf"), "class_id": 0},
+        {"box": (0, 0, 1, 1), "score": .8, "class_id": -1},
+        {"box": (0, 0, 1, 1), "score": .8, "class_id": 0, "source_order": -1},
+        {"box": (0, 0, 1, 1), "score": .8, "class_id": 0, "query_index": 1.0},
+        {"box": (0, 0, 1, 1), "score": .8, "class_id": 0, "original_index": True},
+        SimpleNamespace(
+            box=(0, 0, 1, 1),
+            score=.8,
+            class_id=0,
+            source_order=0,
+            query_index=0,
+            original_index=2.0,
+        ),
+    ],
+)
+def test_matcher_rejects_malformed_prediction_records(prediction):
+    with pytest.raises(ValueError):
+        match_large_targets([prediction], [], [], width=640, height=640, iou_threshold=.75)
+
+
+def test_matcher_validates_ignore_boxes_even_without_eligible_predictions():
+    for malformed in (
+        (0, 0, float("nan"), 1),
+        (0, 0, 0, 1),
+        (0, 0, 1),
+    ):
+        with pytest.raises(ValueError):
+            match_large_targets(
+                [],
+                [],
+                [],
+                ignore_boxes=[malformed],
+                width=640,
+                height=640,
+                iou_threshold=.75,
+            )
+
+
+@pytest.mark.parametrize(
+    "width,height",
+    [
+        (0, 640),
+        (640, 0),
+        (1.0, 640),
+        (640, True),
+    ],
+)
+def test_matcher_validates_image_dimensions_even_without_ground_truth(
+    width, height
+):
+    with pytest.raises(ValueError):
+        match_large_targets(
+            [],
+            [],
+            [],
+            width=width,
+            height=height,
+            iou_threshold=.75,
+        )
+
+
+def test_matcher_rejects_noninteger_original_index_on_detection():
+    prediction = Detection((0, 0, 1, 1), .8, 0, 0, 0)
+    object.__setattr__(prediction, "original_index", 2.0)
+
+    with pytest.raises(ValueError):
+        match_large_targets(
+            [prediction], [], [], width=640, height=640, iou_threshold=.75
+        )
 
 
 def raw(
