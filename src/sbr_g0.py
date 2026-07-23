@@ -318,6 +318,7 @@ def assemble_arm(
     height: int,
     protocol: FrozenSBRProtocol | None = None,
     view_manifest: Sequence[Mapping[str, Any]] | None = None,
+    _paired_c_raw: bool = False,
 ) -> dict[str, Any]:
     """Fuse cached raw records into one arm result with deterministic hashes."""
 
@@ -336,6 +337,8 @@ def assemble_arm(
             raise ValueError("assemble_arm requires RawViewRecord values")
         if arm.upper() != "D" and r.arm != arm.upper():
             raise ValueError("raw record arm mismatch")
+        if arm.upper() == "D" and not _paired_c_raw:
+            raise ValueError("Arm D must be assembled through assemble_paired_arms")
         if arm.upper() == "D" and r.arm != "C":
             raise ValueError("Arm D accepts only explicit Arm C raw records")
         if r.width != width or r.height != height:
@@ -411,7 +414,7 @@ def assemble_paired_arms(
     if any(r.arm != "C" for r in records):
         raise ValueError("paired C/D assembly requires Arm C raw records")
     c = assemble_arm(records, "C", width=width, height=height, protocol=protocol, view_manifest=view_manifest)
-    d = assemble_arm(records, "D", width=width, height=height, protocol=protocol, view_manifest=view_manifest)
+    d = assemble_arm(records, "D", width=width, height=height, protocol=protocol, view_manifest=view_manifest, _paired_c_raw=True)
     if c["raw_hash"] != d["raw_hash"] or c["cluster_hash"] != d["cluster_hash"]:
         raise ValueError("C/D raw or cluster hashes differ")
     return {"C": c, "D": d}

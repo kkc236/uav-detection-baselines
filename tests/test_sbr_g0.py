@@ -48,7 +48,7 @@ def test_collect_inverse_mapping_and_predict_once_per_view():
 
 
 def test_arm_c_d_share_raw_and_clusters_and_labels_never_touched():
-    from src.sbr_g0 import assemble_arm, collect_raw_views
+    from src.sbr_g0 import assemble_arm, assemble_paired_arms, collect_raw_views
 
     image = np.zeros((8, 8, 3), dtype=np.uint8)
     def predict_square(square, imgsz):
@@ -56,7 +56,7 @@ def test_arm_c_d_share_raw_and_clusters_and_labels_never_touched():
 
     raw = collect_raw_views(image, "C", predict_square)
     c = assemble_arm(raw, "C", width=8, height=8)
-    d = assemble_arm(raw, "D", width=8, height=8)
+    d = assemble_paired_arms(raw, width=8, height=8)["D"]
     assert c["raw_hash"] == d["raw_hash"]
     assert c["cluster_hash"] == d["cluster_hash"]
     assert c["records"] == d["records"]
