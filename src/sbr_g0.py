@@ -203,11 +203,12 @@ class RawViewRecord:
             global_box = tuple(
                 float(x) for x in np.asarray(tile_to_global_xyxy(clipped_view_box, view.tile, width, height)).tolist()
             )
+        stored_view_box = view_box if view.tile is None else clipped_view_box
         return cls(
             image_id=str(image_id), width=int(width), height=int(height), arm=view.arm,
             view_id=view.view_id, source_order=view.source_order, query_index=int(query_index),
             tile_bounds=None if view.tile is None else tuple(view.tile.bounds),
-            transform=transform, network_xyxy=net, view_xyxy=view_box,
+            transform=transform, network_xyxy=net, view_xyxy=stored_view_box,
             global_xyxy=global_box, score=float(score), class_id=int(class_id),
         )
 
