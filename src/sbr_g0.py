@@ -1,0 +1,358 @@
+"""Frozen zero-training SBR-RTDETR G0 view pipeline.
+
+The module is intentionally detector-agnostic: callers inject a predictor that
+accepts an already-square NumPy image and returns prediction records.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+import math
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+import numpy as np
+
+from .sbr_fusion import Detection, fuse_sp_brf_from_clusters, fuse_standard, greedy_ios_clusters
+from .sbr_geometry import (
+    LetterboxTransform,
+    Tile,
+    inverse_letterbox_xyxy,
+    non_overlapping_tiles,
+    overlapping_tiles,
+    tile_to_global_xyxy,
+)
+
+
+@dataclass(frozen=True)
+class FrozenSBRProtocol:
+    imgsz: int = 640
+    high_imgsz: int = 1088
+    conf: float = 0.001
+    max_det: int = 300
+    ios_threshold: float = 0.5
+    tile_ratio: float = 0.60
+    padding_value: int = 114
+
+    def __post_init__(self) -> None:
+        expected = {
+            "imgsz": 640,
+            "high_imgsz": 1088,
+            "conf": 0.001,
+            "max_det": 300,
+            "ios_threshold": 0.5,
+            "tile_ratio": 0.60,
+            "padding_value": 114,
+        }
+        for name, value in expected.items():
+            if float(getattr(self, name)) != float(value):
+                raise ValueError(f"SBR protocol freezes {name} at {value}")
+
+
+@dataclass(frozen=True)
+class ViewSpec:
+    arm: str
+    view_id: str
+    source_order: int
+    imgsz: int
+    tile: Tile | None
+    width: int
+    height: int
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "arm": self.arm,
+            "view_id": self.view_id,
+            "source_order": self.source_order,
+            "imgsz": self.imgsz,
+            "tile_bounds": None if self.tile is None else list(self.tile.bounds),
+            "width": self.width,
+            "height": self.height,
+        }
+
+
+def build_arm_views(
+    arm: str, width: int, height: int, protocol: FrozenSBRProtocol | None = None
+) -> tuple[ViewSpec, ...]:
+    """Construct deterministic full/tiled view specifications for Arm A-F."""
+
+    p = protocol or FrozenSBRProtocol()
+    if not isinstance(arm, str) or arm.upper() not in {"A", "B", "C", "D", "E", "F"}:
+        raise ValueError("arm must be one of A, B, C, D, E, F")
+    if isinstance(width, bool) or isinstance(height, bool) or int(width) != width or int(height) != height:
+        raise TypeError("width and height must be integers")
+    width, height = int(width), int(height)
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    name = arm.upper()
+    full = ViewSpec(name, "full", 0, p.high_imgsz if name == "E" else p.imgsz, None, width, height)
+    if name in {"A", "E"}:
+        return (full,)
+    tiles = non_overlapping_tiles(width, height) if name == "F" else overlapping_tiles(width, height)
+    labels = ("TL", "TR", "BL", "BR")
+    local = tuple(
+        ViewSpec(name, label, i + 1, p.imgsz, tile, width, height)
+        for i, (label, tile) in enumerate(zip(labels, tiles))
+    )
+    return local if name == "B" or name == "F" else (full,) + local
+
+
+@dataclass(frozen=True)
+class RawViewRecord:
+    image_id: str
+    width: int
+    height: int
+    arm: str
+    view_id: str
+    source_order: int
+    query_index: int
+    tile_bounds: tuple[int, int, int, int] | None
+    transform: LetterboxTransform
+    network_xyxy: tuple[float, float, float, float]
+    view_xyxy: tuple[float, float, float, float]
+    global_xyxy: tuple[float, float, float, float]
+    score: float
+    class_id: int
+
+    @property
+    def image_width(self) -> int:
+        return self.width
+
+    @property
+    def image_height(self) -> int:
+        return self.height
+
+    @property
+    def source(self) -> int:
+        return self.source_order
+
+    @property
+    def query(self) -> int:
+        return self.query_index
+
+    def __post_init__(self) -> None:
+        if not all(math.isfinite(float(v)) for v in (*self.network_xyxy, *self.view_xyxy, *self.global_xyxy, self.score)):
+            raise ValueError("raw-view values must be finite")
+        for box in (self.network_xyxy, self.view_xyxy, self.global_xyxy):
+            if len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]:
+                raise ValueError("raw-view boxes must be legal xyxy rectangles")
+        if self.score < 0 or self.score > 1 or self.class_id < 0 or self.query_index < 0:
+            raise ValueError("invalid score/class/query metadata")
+
+    @classmethod
+    def from_prediction(
+        cls,
+        view: ViewSpec,
+        network_xyxy: Sequence[float],
+        score: float,
+        class_id: int,
+        query_index: int,
+        width: int,
+        height: int,
+        *,
+        image_id: str = "image",
+    ) -> "RawViewRecord":
+        transform = LetterboxTransform.from_view(
+            width=view.tile.width if view.tile is not None else width,
+            height=view.tile.height if view.tile is not None else height,
+            imgsz=view.imgsz,
+        )
+        transform = LetterboxTransform(
+            source_shape=transform.source_shape,
+            network_shape=(view.imgsz, view.imgsz),
+            gain_x=transform.gain_x,
+            gain_y=transform.gain_y,
+            pad_x=transform.pad_x,
+            pad_y=transform.pad_y,
+            resized_width=transform.resized_width,
+            resized_height=transform.resized_height,
+            auto=False,
+            scale_fill=False,
+            scaleup=False,
+            center=True,
+            padding_value=114,
+        )
+        net = tuple(float(x) for x in network_xyxy)
+        view_box = tuple(float(x) for x in np.asarray(inverse_letterbox_xyxy(net, transform)).tolist())
+        if view.tile is None:
+            global_box = tuple(
+                float(x)
+                for x in np.asarray(view_box, dtype=float)
+                .reshape(1, 4)
+                .clip([0.0, 0.0, 0.0, 0.0], [float(width), float(height), float(width), float(height)])[0]
+            )
+        else:
+            global_box = tuple(
+                float(x) for x in np.asarray(tile_to_global_xyxy(view_box, view.tile, width, height)).tolist()
+            )
+        return cls(
+            image_id=str(image_id), width=int(width), height=int(height), arm=view.arm,
+            view_id=view.view_id, source_order=view.source_order, query_index=int(query_index),
+            tile_bounds=None if view.tile is None else tuple(view.tile.bounds),
+            transform=transform, network_xyxy=net, view_xyxy=view_box,
+            global_xyxy=global_box, score=float(score), class_id=int(class_id),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        t = asdict(self.transform)
+        return {
+            "image_id": self.image_id, "width": self.width, "height": self.height,
+            "arm": self.arm, "view_id": self.view_id, "source_order": self.source_order,
+            "query_index": self.query_index, "tile_bounds": self.tile_bounds,
+            "transform": t, "network_xyxy": self.network_xyxy, "view_xyxy": self.view_xyxy,
+            "global_xyxy": self.global_xyxy, "score": self.score, "class_id": self.class_id,
+        }
+
+
+def _letterbox(image: np.ndarray, imgsz: int) -> np.ndarray:
+    arr = np.asarray(image)
+    if arr.ndim < 2:
+        raise ValueError("image must have at least two dimensions")
+    h, w = arr.shape[:2]
+    gain = min(float(imgsz) / w, float(imgsz) / h, 1.0)
+    rw, rh = max(1, int(round(w * gain))), max(1, int(round(h * gain)))
+    ys = np.minimum((np.arange(rh) / gain).astype(int), h - 1)
+    xs = np.minimum((np.arange(rw) / gain).astype(int), w - 1)
+    resized = arr[ys[:, None], xs[None, :]]
+    shape = (imgsz, imgsz) + arr.shape[2:]
+    out = np.full(shape, 114, dtype=arr.dtype)
+    px, py = (imgsz - rw) // 2, (imgsz - rh) // 2
+    out[py : py + rh, px : px + rw] = resized
+    return out
+
+
+def _prediction_rows(result: Any) -> list[tuple[Sequence[float], float, int, int]]:
+    if hasattr(result, "boxes"):
+        b = result.boxes
+        xyxy = np.asarray(getattr(b, "xyxy"))
+        conf = np.asarray(getattr(b, "conf")).reshape(-1)
+        cls = np.asarray(getattr(b, "cls")).reshape(-1)
+        return [(xyxy[i], float(conf[i]), int(cls[i]), i) for i in range(len(xyxy))]
+    if isinstance(result, np.ndarray):
+        result = result.tolist()
+    if isinstance(result, Mapping):
+        result = [result]
+    rows = []
+    for i, item in enumerate(result or []):
+        if hasattr(item, "boxes"):
+            rows.extend(_prediction_rows(item))
+            continue
+        if isinstance(item, Mapping):
+            box = item.get("xyxy", item.get("box", item.get("bbox")))
+            score = item.get("score", item.get("conf", 0.0))
+            cls = item.get("class_id", item.get("cls", item.get("class", 0)))
+            query = item.get("query_index", item.get("query", i))
+        else:
+            vals = list(item)
+            if len(vals) >= 6:
+                box, score, cls, query = vals[:4], vals[4], vals[5], i
+            elif len(vals) >= 4:
+                box, score, cls, query = vals[:4]
+            else:
+                continue
+        rows.append((box, float(score), int(cls), int(query)))
+    return rows
+
+
+def collect_raw_views(
+    image: Any,
+    arm: str,
+    predict_square: Callable[[np.ndarray, int], Any],
+    *,
+    image_id: str = "image",
+    protocol: FrozenSBRProtocol | None = None,
+) -> tuple[RawViewRecord, ...]:
+    """Run each unique arm view once and return serializable raw records."""
+
+    arr = np.asarray(image)
+    if arr.ndim < 2:
+        raise ValueError("image must have at least two dimensions")
+    height, width = arr.shape[:2]
+    records: list[RawViewRecord] = []
+    for view in build_arm_views(arm, width, height, protocol):
+        crop = arr if view.tile is None else arr[view.tile.top : view.tile.bottom, view.tile.left : view.tile.right]
+        square = _letterbox(crop, view.imgsz)
+        rows = _prediction_rows(predict_square(square, view.imgsz))
+        kept = [r for r in rows if math.isfinite(r[1]) and r[1] >= FrozenSBRProtocol().conf]
+        kept.sort(key=lambda r: (-r[1], r[3]))
+        for box, score, cls, query in kept[: FrozenSBRProtocol().max_det]:
+            try:
+                records.append(
+                    RawViewRecord.from_prediction(
+                        view, box, score, cls, query, width, height, image_id=image_id
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+    return tuple(records)
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def assemble_arm(
+    raw_records: Iterable[RawViewRecord],
+    arm: str,
+    *,
+    width: int,
+    height: int,
+    protocol: FrozenSBRProtocol | None = None,
+) -> dict[str, Any]:
+    """Fuse cached raw records into one arm result with deterministic hashes."""
+
+    p = protocol or FrozenSBRProtocol()
+    records = tuple(raw_records)
+    records_dict = [r.to_dict() if isinstance(r, RawViewRecord) else dict(r) for r in records]
+    raw_bytes = _canonical(records_dict)
+    detections = tuple(
+        Detection(
+            box=r.global_xyxy, score=r.score, class_id=r.class_id,
+            source_order=r.source_order, query_index=r.query_index,
+            view_xyxy=r.view_xyxy, global_xyxy=r.global_xyxy,
+            network_xyxy=r.network_xyxy,
+            tile_local_box=(
+                tuple(
+                    np.asarray(r.view_xyxy, dtype=float)
+                    .reshape(1, 4)
+                    .clip(
+                        [0.0, 0.0, 0.0, 0.0],
+                        [float(r.tile_bounds[2] - r.tile_bounds[0]), float(r.tile_bounds[3] - r.tile_bounds[1]),
+                         float(r.tile_bounds[2] - r.tile_bounds[0]), float(r.tile_bounds[3] - r.tile_bounds[1])]
+                    )[0]
+                )
+                if r.tile_bounds is not None else None
+            ),
+            global_box=r.global_xyxy, tile_bounds=r.tile_bounds,
+            transform=r.transform, tile_index=(r.source_order - 1 if r.tile_bounds else None),
+        )
+        for r in records if isinstance(r, RawViewRecord)
+    )
+    clusters = greedy_ios_clusters(detections, ios_threshold=p.ios_threshold)
+    identity_index = {id(detection): index for index, detection in enumerate(detections)}
+    cluster_index = [
+        [identity_index[id(member)] for member in cluster] for cluster in clusters
+    ]
+    cluster_bytes = _canonical(cluster_index)
+    if arm.upper() == "D":
+        fused = fuse_sp_brf_from_clusters(clusters, full_shape=(width, height), max_det=p.max_det)
+    elif arm.upper() in {"B", "C", "F"}:
+        fused = fuse_standard(detections, max_det=p.max_det, ios_threshold=p.ios_threshold)
+    else:
+        fused = tuple(sorted(detections, key=lambda d: (-d.score, d.source_order, d.query_index)))[: p.max_det]
+    return {
+        "arm": arm.upper(), "records": records_dict, "predictions": tuple(fused),
+        "raw_bytes": raw_bytes, "raw_hash": hashlib.sha256(raw_bytes).hexdigest(),
+        "cluster_hash": hashlib.sha256(cluster_bytes).hexdigest(),
+        "cluster_members": cluster_index,
+    }
+
+
+__all__ = [
+    "FrozenSBRProtocol", "ViewSpec", "RawViewRecord", "build_arm_views",
+    "collect_raw_views", "assemble_arm",
+]
