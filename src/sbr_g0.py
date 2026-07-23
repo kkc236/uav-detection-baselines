@@ -224,11 +224,22 @@ def _letterbox(image: np.ndarray, imgsz: int) -> np.ndarray:
 
 
 def _prediction_rows(result: Any) -> list[tuple[Sequence[float], float, int, int]]:
+    def to_numpy(value: Any) -> np.ndarray:
+        # Ultralytics keeps Results tensors on the inference device.  Convert
+        # explicitly through CPU so the artifact pipeline is device-agnostic.
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            value = value.numpy()
+        return np.asarray(value)
+
     if hasattr(result, "boxes"):
         b = result.boxes
-        xyxy = np.asarray(getattr(b, "xyxy"))
-        conf = np.asarray(getattr(b, "conf")).reshape(-1)
-        cls = np.asarray(getattr(b, "cls")).reshape(-1)
+        xyxy = to_numpy(getattr(b, "xyxy"))
+        conf = to_numpy(getattr(b, "conf")).reshape(-1)
+        cls = to_numpy(getattr(b, "cls")).reshape(-1)
         return [(xyxy[i], float(conf[i]), int(cls[i]), i) for i in range(len(xyxy))]
     if isinstance(result, np.ndarray):
         result = result.tolist()
