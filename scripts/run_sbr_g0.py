@@ -60,7 +60,72 @@ def validate_prior_gate(path: Path | str, expected: Mapping[str, str]) -> dict[s
     for key in ("source_hash", "checkpoint_hash", "dataset_signature", "protocol_hash"):
         if str(gate.get(key, "")) != str(expected.get(key, "")):
             raise ValueError(f"prior gate mismatch: {key}")
+    gate_path = Path(path)
+    evidence = gate_path.parent
+    adjudication = evidence / "independent_adjudication.json"
+    if not adjudication.exists():
+        raise ValueError("independent adjudication artifact is required")
+    try:
+        adj = json.loads(adjudication.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError("invalid independent adjudication artifact") from exc
+    if adj.get("status") in (None, "NOT_RUN"):
+        raise ValueError("independent adjudication must be complete")
+    checksums = evidence / "checksums.sha256"
+    if not checksums.exists():
+        raise ValueError("checksums.sha256 is required")
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            digest, rel = line.split("  ", 1)
+        except ValueError as exc:
+            raise ValueError("invalid checksums.sha256 line") from exc
+        target = evidence / rel
+        if not target.is_file() or sha256_file(target).lower() != digest.lower():
+            raise ValueError(f"artifact checksum mismatch: {rel}")
     return gate
+
+
+def arm_a_effective_gain(width: int, height: int) -> float:
+    if width <= 0 or height <= 0:
+        raise ValueError("image dimensions must be positive")
+    return min(640.0 / float(width), 640.0 / float(height), 1.0)
+
+
+def evaluate_g0bc_gate(
+    c_metrics: Mapping[str, Any],
+    d_metrics: Mapping[str, Any],
+    diagnostics: Mapping[str, Any],
+) -> tuple[dict[str, float], str]:
+    """Apply frozen D-C gates; metrics are fractions, deltas are fractions."""
+    deltas = {
+        "mAP50-95": float(d_metrics.get("mAP50-95", 0.0)) - float(c_metrics.get("mAP50-95", 0.0)),
+        "AP-tiny-SBR": float(d_metrics.get("AP-tiny-SBR", 0.0)) - float(c_metrics.get("AP-tiny-SBR", 0.0)),
+        "AP-large-SBR": float(d_metrics.get("AP-large-SBR", 0.0)) - float(c_metrics.get("AP-large-SBR", 0.0)),
+        "boundary_target_recall": float(diagnostics.get("boundary_target_recall", {}).get("D", 0.0)) - float(diagnostics.get("boundary_target_recall", {}).get("C", 0.0)),
+    }
+    def reduction(name: str) -> float | None:
+        pair = diagnostics.get(name, {})
+        c, d = float(pair.get("C", 0.0)), float(pair.get("D", 0.0))
+        if c == 0:
+            if d > 0:
+                return -float("inf")
+            return None
+        return 1.0 - d / c
+    fp_red, dup_red = reduction("internal_boundary_fp"), reduction("duplicate_detections")
+    singleton = float(diagnostics.get("singleton_preservation", 0.0))
+    passed = (
+        all(np.isfinite(v) for v in deltas.values())
+        and deltas["mAP50-95"] >= -0.001 - 1e-12
+        and deltas["AP-tiny-SBR"] >= -0.001 - 1e-12
+        and deltas["AP-large-SBR"] >= -0.002 - 1e-12
+        and deltas["boundary_target_recall"] >= -0.002 - 1e-12
+        and singleton == 1.0
+        and ((fp_red is not None and fp_red >= 0.15) or (dup_red is not None and dup_red >= 0.15))
+    )
+    deltas.update({"internal_boundary_fp_reduction": fp_red if fp_red is not None else 0.0, "duplicate_reduction": dup_red if dup_red is not None else 0.0, "singleton_preservation": singleton})
+    return deltas, "SBR_G0BC_PASS" if passed else "SBR_G0BC_FAIL"
 
 
 def evaluate_g0a_gate(metrics: Mapping[str, Mapping[str, Any]]) -> tuple[dict[str, float], str]:
@@ -123,13 +188,17 @@ def _rows_for_metrics(arm_result: Mapping[str, Any], image: Mapping[str, Any]) -
         "gt_boxes": image["gt_boxes"],
         "gt_classes": image["gt_classes"],
         "ignore_boxes": image["ignore_boxes"],
-        "effective_gain": 1.0,
+        "effective_gain": arm_a_effective_gain(int(image["width"]), int(image["height"])),
     }
 
 
 def run(args: argparse.Namespace) -> int:
     protocol = FrozenSBRProtocol()
     output = ensure_empty_output(args.output)
+    if args.mode in {"g0-b", "g0-c"} and (
+        not args.gate or not args.evidence or Path(args.evidence).resolve() != Path(args.gate).resolve().parent
+    ):
+        raise ValueError("--evidence must match the directory containing --gate")
     checkpoint = Path(args.checkpoint).resolve()
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
@@ -159,7 +228,10 @@ def run(args: argparse.Namespace) -> int:
     if args.mode in {"g0-b", "g0-c"}:
         if not args.gate:
             raise ValueError("g0-b/c require --gate")
+        if not args.evidence or Path(args.evidence).resolve() != Path(args.gate).resolve().parent:
+            raise ValueError("--evidence must match the directory containing --gate")
         validate_prior_gate(args.gate, expected)
+        raise ValueError("g0-b/c consume adjudicated G0-A evidence; independent adjudicator required before execution")
     predict = _load_predictor(checkpoint, args.device)
     # Cache inference by exact square bytes so shared views (B/C/D and full
     # views) execute once while each arm receives independent raw metadata.
@@ -177,7 +249,7 @@ def run(args: argparse.Namespace) -> int:
             array = np.asarray(im.convert("RGB"))
         image_id = image["relative_path"]
         raw_by_arm = {}
-        for arm in "ABCDEF":
+        for arm in "ABCEF":
             raw, manifest = collect_raw_views(array, arm, cached_predict, image_id=image_id, return_manifest=True)
             raw_by_arm[arm] = (raw, manifest)
             raw_rows.extend([dict(r.to_dict(), view_manifest=manifest) for r in raw])
@@ -193,7 +265,8 @@ def run(args: argparse.Namespace) -> int:
     atomic_write_jsonl_gz(output / "arm_predictions.jsonl.gz", [x for rows in arm_rows.values() for x in rows])
     atomic_write_json(output / "g0_metrics.json", metrics)
     atomic_write_json(output / "g0_deltas.json", deltas)
-    status = "SBR_S0_COMPLETE" if args.mode == "s0" else gate_status
+    adjudication_status = "NOT_RUN"
+    status = "SBR_S0_COMPLETE" if args.mode == "s0" else ("SBR_G0A_PASS" if gate_status == "SBR_G0A_PASS" and adjudication_status != "NOT_RUN" else "SBR_G0A_FAIL")
     atomic_write_json(output / "g0_gate.json", {**expected, "status": status})
     atomic_write_json(output / "runtime.json", {"seconds": time.time() - started, "device": args.device, "workers": args.workers})
     atomic_write_json(output / "independent_adjudication.json", {"status": "NOT_RUN"})

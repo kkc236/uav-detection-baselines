@@ -50,3 +50,12 @@ def test_dataset_loader_signature_and_labels(tmp_path: Path):
     assert ds["images"][0]["gt_boxes"][0] == pytest.approx([40, 15, 60, 35])
     assert ds["images"][0]["ignore_boxes"][0] == pytest.approx([45, 20, 55, 30])
     assert ds["image_count"] == 2 and len(ds["dataset_signature"]) == 64
+
+
+def test_git_provenance_records_untracked_and_tree_hash():
+    from src.sbr_artifacts import git_provenance
+
+    info = git_provenance(Path.cwd())
+    assert "untracked" in info
+    assert "source_tree_hash" in info
+    assert len(info["source_tree_hash"]) == 64

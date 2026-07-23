@@ -277,8 +277,24 @@ def git_provenance(repo: Path | str = ".") -> dict[str, Any]:
             return subprocess.check_output(["git", *args], cwd=repo, text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:
             return ""
-    status = run("status", "--porcelain", "--untracked-files=no")
-    return {"commit": run("rev-parse", "HEAD"), "branch": run("branch", "--show-current"), "clean_tracked": not bool(status)}
+    tracked_status = run("status", "--porcelain", "--untracked-files=no")
+    all_status = run("status", "--porcelain", "--untracked-files=all")
+    tree_hash = hashlib.sha256()
+    try:
+        tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=repo, stderr=subprocess.DEVNULL)
+        for raw in sorted((x for x in tracked.split(b"\0") if x), key=lambda x: x):
+            path = repo / raw.decode("utf-8")
+            if path.is_file():
+                tree_hash.update(raw + b"\0" + sha256_file(path).encode("ascii") + b"\0")
+    except Exception:
+        pass
+    return {
+        "commit": run("rev-parse", "HEAD"),
+        "branch": run("branch", "--show-current"),
+        "clean_tracked": not bool(tracked_status),
+        "untracked": any(line.startswith("??") for line in all_status.splitlines()),
+        "source_tree_hash": tree_hash.hexdigest(),
+    }
 
 
 def environment_info() -> dict[str, Any]:
