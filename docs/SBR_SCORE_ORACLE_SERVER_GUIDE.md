@@ -52,7 +52,7 @@ UPSTREAM_INPUT="$("$PYTHON" -c 'import json, pathlib, sys, urllib.parse; p=pathl
   --input-manifest "$PROTOCOL" \
   --spec docs/superpowers/specs/2026-07-24-sbr-score-oracle-design.md \
   --output "$OUTPUT" \
-  --workers 8
+  --workers 4
 
 test -z "$(find "$OUTPUT/primary" -perm /222 -print)"
 PRIMARY_ANCHOR="$(sha256sum "$OUTPUT/primary/checksums.sha256" | cut -d' ' -f1)"

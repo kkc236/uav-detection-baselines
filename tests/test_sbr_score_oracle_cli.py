@@ -460,6 +460,115 @@ def test_scientific_primary_artifacts_are_worker_deterministic(
     ).read_bytes()[4:8] == b"\x00\x00\x00\x00"
 
 
+def test_parallel_task_execution_is_spawned_and_bounded(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import Future
+
+    import scripts.run_sbr_score_oracle as runner
+
+    captured = {}
+
+    class TrackingFuture(Future):
+        def __init__(self, pool):
+            super().__init__()
+            self.pool = pool
+
+        def result(self, timeout=None):
+            try:
+                return super().result(timeout=timeout)
+            finally:
+                self.pool.active.discard(self)
+
+    class RecordingPool:
+        def __init__(self, *, max_workers, mp_context):
+            captured["start_method"] = (
+                mp_context.get_start_method()
+            )
+            captured["pool"] = self
+            self.max_workers = max_workers
+            self.active = set()
+            self.max_active = 0
+            self.shutdown_calls = []
+
+        def submit(self, _function, task):
+            future = TrackingFuture(self)
+            self.active.add(future)
+            self.max_active = max(
+                self.max_active, len(self.active)
+            )
+            future.set_result(
+                {"image_id": task["group"].image_id}
+            )
+            return future
+
+        def shutdown(self, *, wait, cancel_futures):
+            self.shutdown_calls.append(
+                (wait, cancel_futures)
+            )
+
+    monkeypatch.setattr(
+        runner, "ProcessPoolExecutor", RecordingPool
+    )
+    generated = []
+    image_ids = tuple(f"{index}.jpg" for index in range(5))
+
+    def tasks():
+        for order, image_id in enumerate(image_ids):
+            if "pool" in captured:
+                assert (
+                    len(captured["pool"].active) < 2
+                ), "task iterable was prefetched beyond workers"
+            generated.append(order)
+            yield {
+                "image_order": order,
+                "group": SimpleNamespace(image_id=image_id),
+                "input_image_hash": f"{order:064x}",
+            }
+
+    refs = runner._execute_tasks(
+        tasks(),
+        image_ids=image_ids,
+        run_identity="r" * 64,
+        staging=tmp_path / "staging",
+        workers=2,
+    )
+
+    assert captured["start_method"] == "spawn"
+    assert captured["pool"].max_active == 2
+    assert captured["pool"].shutdown_calls == [(True, True)]
+    assert generated == list(range(5))
+    assert tuple(ref["image_order"] for ref in refs) == tuple(
+        range(5)
+    )
+
+
+def test_spooled_jsonl_gzip_matches_canonical_writer(tmp_path):
+    import scripts.run_sbr_score_oracle as runner
+    from src.sbr_artifacts import (
+        atomic_write_jsonl_gz,
+        canonical_json_bytes,
+    )
+
+    rows = [
+        {"order": 0, "value": [1, 2]},
+        {"order": 1, "value": "stable"},
+    ]
+    spool = tmp_path / "rows.jsonl"
+    spool.write_bytes(
+        b"".join(
+            canonical_json_bytes(row) + b"\n" for row in rows
+        )
+    )
+    expected = tmp_path / "expected.jsonl.gz"
+    actual = tmp_path / "actual.jsonl.gz"
+
+    atomic_write_jsonl_gz(expected, rows)
+    runner._write_jsonl_gz_from_spool(actual, spool)
+
+    assert actual.read_bytes() == expected.read_bytes()
+
+
 def test_existing_final_output_is_never_overwritten(
     tmp_path, monkeypatch
 ):

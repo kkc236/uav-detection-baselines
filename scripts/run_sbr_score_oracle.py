@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    wait,
+)
 from dataclasses import asdict, is_dataclass
 import gzip
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
 import tempfile
 import time
 import sys
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -559,9 +564,57 @@ def _write_shard(path: Path, shard: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _write_jsonl_gz_from_spool(
+    path: Path, spool: Path
+) -> None:
+    path = Path(path)
+    spool = Path(spool)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=str(path.parent)
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with spool.open("rb") as source, temporary.open(
+            "wb"
+        ) as raw:
+            with gzip.GzipFile(
+                fileobj=raw,
+                mode="wb",
+                filename="",
+                mtime=0,
+            ) as compressed:
+                shutil.copyfileobj(
+                    source, compressed, length=1024 * 1024
+                )
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _discard_stale_aggregation(staging: Path) -> None:
+    aggregation = staging / "aggregation"
+    if not aggregation.exists():
+        return
+    if aggregation.is_symlink() or not aggregation.is_dir():
+        raise ValueError("staging aggregation is invalid")
+    allowed = {"unit_events.jsonl", "score_patches.jsonl"}
+    entries = tuple(aggregation.iterdir())
+    if {path.name for path in entries} - allowed:
+        raise ValueError("staging aggregation contains unknown entries")
+    for path in entries:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("staging aggregation entry is invalid")
+        path.unlink()
+    aggregation.rmdir()
+
+
 def _execute_tasks(
-    tasks: tuple[Mapping[str, Any], ...],
+    tasks: Iterable[Mapping[str, Any]],
     *,
+    image_ids: tuple[str, ...],
     run_identity: str,
     staging: Path,
     workers: int,
@@ -569,13 +622,20 @@ def _execute_tasks(
     identity_payload = {
         "schema_version": "sbr-score-oracle-run-identity/v1",
         "run_identity": run_identity,
-        "image_count": len(tasks),
+        "image_count": len(image_ids),
     }
     identity_path = staging / "run_identity.json"
     shards_dir = staging / "shards"
     if staging.exists():
-        allowed = {"run_identity.json", "shards"}
-        if {path.name for path in staging.iterdir()} != allowed:
+        allowed = {
+            "run_identity.json",
+            "shards",
+            "aggregation",
+        }
+        names = {path.name for path in staging.iterdir()}
+        if not {"run_identity.json", "shards"} <= names:
+            raise ValueError("staging is incomplete")
+        if not names <= allowed:
             raise ValueError("staging contains unknown entries")
         existing_identity = json.loads(
             identity_path.read_text(encoding="utf-8")
@@ -584,20 +644,44 @@ def _execute_tasks(
             raise ValueError("staging run identity mismatch")
         if not shards_dir.is_dir():
             raise ValueError("staging shards directory is missing")
+        _discard_stale_aggregation(staging)
     else:
         staging.mkdir(parents=True)
         shards_dir.mkdir()
         atomic_write_json(identity_path, identity_payload)
     known_names = {
-        f"{index:06d}.json.gz" for index in range(len(tasks))
+        f"{index:06d}.json.gz"
+        for index in range(len(image_ids))
     }
     existing_names = {path.name for path in shards_dir.iterdir()}
     if not existing_names <= known_names:
         raise ValueError("staging contains unknown shard")
-    by_order: dict[int, dict[str, Any]] = {}
-    missing: list[Mapping[str, Any]] = []
-    for task in tasks:
-        order = int(task["image_order"])
+
+    references: list[dict[str, Any]] = []
+
+    def register(
+        task: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], Path, bool]:
+        if not isinstance(task, Mapping):
+            raise ValueError("oracle task must be a mapping")
+        order = len(references)
+        if order >= len(image_ids):
+            raise ValueError("raw stream produced excess images")
+        if task.get("image_order") != order:
+            raise ValueError("oracle task order is not continuous")
+        group = task.get("group")
+        image_id = getattr(group, "image_id", None)
+        if image_id != image_ids[order]:
+            raise ValueError("oracle task image order mismatch")
+        input_image_hash = task.get("input_image_hash")
+        if not isinstance(input_image_hash, str):
+            raise ValueError("oracle task input hash is invalid")
+        reference = {
+            "image_order": order,
+            "image_id": image_id,
+            "input_image_hash": input_image_hash,
+        }
+        references.append(reference)
         path = shards_dir / f"{order:06d}.json.gz"
         if path.exists():
             shard = _read_shard(path)
@@ -605,61 +689,126 @@ def _execute_tasks(
                 shard,
                 run_identity=run_identity,
                 image_order=order,
-                image_id=str(task["group"].image_id),
-                input_image_hash=str(task["input_image_hash"]),
+                image_id=image_id,
+                input_image_hash=input_image_hash,
             )
-            by_order[order] = shard
-        else:
-            missing.append(task)
-    if workers > 1 and missing:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            payloads = executor.map(_evaluate_image_task, missing)
-            computed = zip(missing, payloads)
-            for task, payload in computed:
-                order = int(task["image_order"])
+            return reference, path, True
+        return reference, path, False
+
+    if workers > 1:
+        executor = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+        pending: dict[Any, tuple[dict[str, Any], Path]] = {}
+        task_iterator = iter(tasks)
+        exhausted = False
+        try:
+            while not exhausted or pending:
+                while not exhausted and len(pending) < workers:
+                    try:
+                        task = next(task_iterator)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    reference, path, complete = register(task)
+                    if not complete:
+                        future = executor.submit(
+                            _evaluate_image_task, task
+                        )
+                        pending[future] = (reference, path)
+                    del task
+                if not pending:
+                    continue
+                completed, _ = wait(
+                    tuple(pending),
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in sorted(
+                    completed,
+                    key=lambda item: pending[item][0][
+                        "image_order"
+                    ],
+                ):
+                    reference, path = pending.pop(future)
+                    payload = future.result()
+                    shard = build_shard(
+                        run_identity=run_identity,
+                        image_order=reference["image_order"],
+                        image_id=reference["image_id"],
+                        input_image_hash=reference[
+                            "input_image_hash"
+                        ],
+                        payload=payload,
+                    )
+                    _write_shard(path, shard)
+                    del payload, shard
+        except Exception:
+            for future in pending:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(
+                wait=True, cancel_futures=True
+            )
+    else:
+        for task in tasks:
+            reference, path, complete = register(task)
+            if not complete:
+                payload = _evaluate_image_task(task)
                 shard = build_shard(
                     run_identity=run_identity,
-                    image_order=order,
-                    image_id=str(task["group"].image_id),
-                    input_image_hash=str(task["input_image_hash"]),
+                    image_order=reference["image_order"],
+                    image_id=reference["image_id"],
+                    input_image_hash=reference[
+                        "input_image_hash"
+                    ],
                     payload=payload,
                 )
-                _write_shard(
-                    shards_dir / f"{order:06d}.json.gz", shard
-                )
-                by_order[order] = shard
-    else:
-        for task in missing:
-            order = int(task["image_order"])
-            payload = _evaluate_image_task(task)
-            shard = build_shard(
-                run_identity=run_identity,
-                image_order=order,
-                image_id=str(task["group"].image_id),
-                input_image_hash=str(task["input_image_hash"]),
-                payload=payload,
-            )
-            _write_shard(
-                shards_dir / f"{order:06d}.json.gz", shard
-            )
-            by_order[order] = shard
-    ordered_shards = validate_complete_shards(
-        tuple(by_order.values()),
-        image_ids=tuple(str(task["group"].image_id) for task in tasks),
-        input_hashes=tuple(
-            str(task["input_image_hash"]) for task in tasks
-        ),
-    )
+                _write_shard(path, shard)
+                del payload, shard
+            del task
+
+    if len(references) != len(image_ids):
+        raise ValueError(
+            "raw stream did not produce exact manifest image order"
+        )
+    actual_names = {path.name for path in shards_dir.iterdir()}
+    if actual_names != known_names:
+        raise ValueError("shard set is not complete")
     return tuple(
-        validate_shard(
+        validate_complete_shards(
+            references,
+            image_ids=image_ids,
+            input_hashes=tuple(
+                reference["input_image_hash"]
+                for reference in references
+            ),
+        )
+    )
+
+
+def _iter_validated_shard_payloads(
+    *,
+    staging: Path,
+    references: Iterable[Mapping[str, Any]],
+    run_identity: str,
+) -> Iterable[dict[str, Any]]:
+    shards_dir = staging / "shards"
+    for reference in references:
+        order = int(reference["image_order"])
+        shard = _read_shard(
+            shards_dir / f"{order:06d}.json.gz"
+        )
+        yield validate_shard(
             shard,
             run_identity=run_identity,
-            image_order=index,
-            image_id=str(tasks[index]["group"].image_id),
-            input_image_hash=str(tasks[index]["input_image_hash"]),
+            image_order=order,
+            image_id=str(reference["image_id"]),
+            input_image_hash=str(
+                reference["input_image_hash"]
+            ),
         )
-        for index, shard in enumerate(ordered_shards)
-    )
 
 
 def _build_primary(
@@ -672,8 +821,8 @@ def _build_primary(
     run_identity: str,
     staging: Path,
 ) -> tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
+    Path,
+    Path,
     dict[str, Any],
     dict[str, Any],
     dict[str, Any],
@@ -695,8 +844,6 @@ def _build_primary(
     a_rows: list[dict[str, Any]] = []
     c_rows: list[dict[str, Any]] = []
     oracle_rows: list[dict[str, Any]] = []
-    unit_events: list[dict[str, Any]] = []
-    joint_patches: list[dict[str, Any]] = []
     per_image_invariants: list[dict[str, Any]] = []
     eligible_units = selected_units = 0
     eligible_members = patched_members = 0
@@ -710,11 +857,11 @@ def _build_primary(
         _iter_jsonl_gz(validated.paths["raw_views"]),
         validated.image_list,
     )
-    tasks = []
-    for order, group in enumerate(grouped):
-        image = image_by_id[group.image_id]
-        tasks.append(
-            {
+
+    def task_stream() -> Iterable[dict[str, Any]]:
+        for order, group in enumerate(grouped):
+            image = image_by_id[group.image_id]
+            yield {
                 "image_order": order,
                 "group": group,
                 "image": image,
@@ -724,42 +871,66 @@ def _build_primary(
                     group=group, image=image
                 ),
             }
-        )
-    payloads = _execute_tasks(
-        tuple(tasks),
+
+    references = _execute_tasks(
+        task_stream(),
+        image_ids=tuple(validated.image_list),
         run_identity=run_identity,
         staging=staging,
         workers=workers,
     )
+    aggregation = staging / "aggregation"
+    aggregation.mkdir()
+    unit_events_spool = aggregation / "unit_events.jsonl"
+    joint_patches_spool = aggregation / "score_patches.jsonl"
     worker_peak_rss_bytes: list[int] = []
-    for payload in payloads:
-        group_id = str(payload["image_id"])
-        a_rows.append(payload["a_metric_row"])
-        c_rows.append(payload["c_metric_row"])
-        oracle_rows.append(payload["oracle_metric_row"])
-        unit_events.extend(payload["events"])
-        joint_patches.extend(payload["patches"])
-        per_image_invariants.append(payload["invariant"])
-        item_coverage = payload["coverage"]
-        eligible_units += item_coverage["eligible_units"]
-        selected_units += item_coverage["selected_units"]
-        eligible_members += item_coverage["eligible_members"]
-        patched_members += item_coverage["patched_members"]
-        if item_coverage["affected"]:
-            affected_images.add(group_id)
-        if item_coverage["large_positive_affected"]:
-            large_positive_affected_images.add(group_id)
-        by_class.update(item_coverage["by_class"])
-        by_source.update(item_coverage["by_source"])
-        by_sequence.update(item_coverage["by_sequence_token"])
-        peak_rss_bytes = payload.get("peak_rss_bytes")
-        if (
-            isinstance(peak_rss_bytes, bool)
-            or not isinstance(peak_rss_bytes, int)
-            or peak_rss_bytes < 0
+    with unit_events_spool.open(
+        "xb"
+    ) as event_handle, joint_patches_spool.open(
+        "xb"
+    ) as patch_handle:
+        for payload in _iter_validated_shard_payloads(
+            staging=staging,
+            references=references,
+            run_identity=run_identity,
         ):
-            raise ValueError("worker peak RSS is invalid")
-        worker_peak_rss_bytes.append(peak_rss_bytes)
+            group_id = str(payload["image_id"])
+            a_rows.append(payload["a_metric_row"])
+            c_rows.append(payload["c_metric_row"])
+            oracle_rows.append(payload["oracle_metric_row"])
+            for event in payload["events"]:
+                event_handle.write(
+                    canonical_json_bytes(event) + b"\n"
+                )
+            for patch in payload["patches"]:
+                patch_handle.write(
+                    canonical_json_bytes(patch) + b"\n"
+                )
+            per_image_invariants.append(payload["invariant"])
+            item_coverage = payload["coverage"]
+            eligible_units += item_coverage["eligible_units"]
+            selected_units += item_coverage["selected_units"]
+            eligible_members += item_coverage[
+                "eligible_members"
+            ]
+            patched_members += item_coverage["patched_members"]
+            if item_coverage["affected"]:
+                affected_images.add(group_id)
+            if item_coverage["large_positive_affected"]:
+                large_positive_affected_images.add(group_id)
+            by_class.update(item_coverage["by_class"])
+            by_source.update(item_coverage["by_source"])
+            by_sequence.update(
+                item_coverage["by_sequence_token"]
+            )
+            peak_rss_bytes = payload.get("peak_rss_bytes")
+            if (
+                isinstance(peak_rss_bytes, bool)
+                or not isinstance(peak_rss_bytes, int)
+                or peak_rss_bytes < 0
+            ):
+                raise ValueError("worker peak RSS is invalid")
+            worker_peak_rss_bytes.append(peak_rss_bytes)
 
     if len(a_rows) != len(validated.image_list):
         raise ValueError(
@@ -876,8 +1047,8 @@ def _build_primary(
         "environment": environment_info(),
     }
     return (
-        unit_events,
-        joint_patches,
+        unit_events_spool,
+        joint_patches_spool,
         coverage,
         metrics,
         invariants,
@@ -889,8 +1060,8 @@ def _build_primary(
 def _write_primary(
     output: Path,
     artifacts: tuple[
-        list[dict[str, Any]],
-        list[dict[str, Any]],
+        Path,
+        Path,
         dict[str, Any],
         dict[str, Any],
         dict[str, Any],
@@ -924,10 +1095,10 @@ def _write_primary(
             primary / "oracle_manifest.json",
             metadata["manifest"],
         )
-        atomic_write_jsonl_gz(
+        _write_jsonl_gz_from_spool(
             primary / "unit_events.jsonl.gz", events
         )
-        atomic_write_jsonl_gz(
+        _write_jsonl_gz_from_spool(
             primary / "score_patches.jsonl.gz", patches
         )
         atomic_write_json(primary / "coverage.json", coverage)
