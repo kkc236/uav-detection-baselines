@@ -25,6 +25,12 @@ def _atomic_json(path: Path, value: dict) -> None:
 def main() -> None:
     args = build_parser().parse_args()
     protocol = validate_protocol_inputs(args)
+    import ultralytics
+
+    if ultralytics.__version__ != protocol["ultralytics_version"]:
+        raise RuntimeError(
+            f"ASCV_LOC_ULTRALYTICS_DRIFT: {ultralytics.__version__}"
+        )
     from src.rtdetr_ascv_loc import ASCVLocTrainer
 
     accumulator = ASCVMechanismAccumulator()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 from src.ascv_loc_stage import ASCVStage, stage_policy
@@ -57,6 +58,18 @@ def validate_protocol_inputs(args: argparse.Namespace) -> dict:
         raise ValueError("unexpected ASCV-Loc protocol schema")
     if manifest.get("ultralytics_version") != "8.4.90":
         raise ValueError("protocol is not frozen to Ultralytics 8.4.90")
+    repo_root = Path(__file__).resolve().parents[1]
+    current_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if manifest.get("source_commit") != current_commit:
+        raise ValueError(
+            f"source commit does not match the frozen protocol: {current_commit}"
+        )
 
     policy = stage_policy(args.stage)
     data_record = manifest["train_only_yaml"] if policy.uses_hashed_subset else manifest["full_train_only_yaml"]

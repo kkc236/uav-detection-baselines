@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,13 @@ def _args_and_manifest(tmp_path: Path, stage: ASCVStage = ASCVStage.MECHANISM_50
     full_data.write_text("train: full.txt\nval: full.txt\n")
     manifest = {
         "schema_version": "ascv-loc-protocol/v1",
-        "source_commit": "abc",
+        "source_commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
         "ultralytics_version": "8.4.90",
         "checkpoint": {"path": checkpoint.as_posix(), "sha256": sha256_file(checkpoint)},
         "train_only_yaml": {"path": subset_data.as_posix(), "sha256": sha256_file(subset_data)},
@@ -92,6 +99,16 @@ def test_stage_rejects_wrong_data_and_test_dev(tmp_path: Path) -> None:
 
     args.data = Path(tmp_path / "test-dev" / "data.yaml")
     with pytest.raises(ValueError, match="test-dev is forbidden"):
+        validate_protocol_inputs(args)
+
+
+def test_stage_rejects_source_commit_drift(tmp_path: Path) -> None:
+    args = _args_and_manifest(tmp_path)
+    manifest = json.loads(args.protocol_manifest.read_text())
+    manifest["source_commit"] = "0" * 40
+    args.protocol_manifest.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="source commit does not match"):
         validate_protocol_inputs(args)
 
 
