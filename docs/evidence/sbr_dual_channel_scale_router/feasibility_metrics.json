@@ -1,0 +1,124 @@
+{
+  "schema_version": "sbr-dual-channel-feasibility-v1",
+  "created_utc": "2026-07-24T12:35:40Z",
+  "dataset": {
+    "name": "VisDrone",
+    "split": "val",
+    "image_count": 548
+  },
+  "gate_thresholds_delta_vs_arm_a": {
+    "AP-tiny-SBR": 0.01,
+    "mAP50-95": 0.003,
+    "tiny_recall": 0.02,
+    "AP75": -0.002,
+    "AP-large-SBR": -0.005
+  },
+  "metrics": {
+    "arm_a": {
+      "AP-tiny-SBR": 0.07105714429171933,
+      "mAP50-95": 0.18062139655466955,
+      "tiny_recall": 0.5537479710786484,
+      "AP75": 0.16666558492813208,
+      "AP-large-SBR": 0.14584679380950474
+    },
+    "arm_c": {
+      "AP-tiny-SBR": 0.11109191539048066,
+      "mAP50-95": 0.22303290634643594,
+      "tiny_recall": 0.6539397963700753,
+      "AP75": 0.20991765033061166,
+      "AP-large-SBR": 0.11405305127576817
+    },
+    "coordinate_only_guard": {
+      "AP-tiny-SBR": 0.11109361624738126,
+      "mAP50-95": 0.22305363647490828,
+      "tiny_recall": 0.6539397963700753,
+      "AP75": 0.2099382015291092,
+      "AP-large-SBR": 0.11416816982242625
+    },
+    "score_oracle_joint": {
+      "AP-tiny-SBR": 0.11109223909354198,
+      "mAP50-95": 0.22303643015422087,
+      "tiny_recall": 0.6539397963700753,
+      "AP75": 0.20992333776727518,
+      "AP-large-SBR": 0.11405636374723774
+    }
+  },
+  "deltas": {
+    "arm_c_minus_arm_a": {
+      "AP-tiny-SBR": 0.04003477109876133,
+      "mAP50-95": 0.04241150979176639,
+      "tiny_recall": 0.1001918252914269,
+      "AP75": 0.04325206540247958,
+      "AP-large-SBR": -0.03179374253373657
+    },
+    "coordinate_guard_minus_arm_a": {
+      "AP-tiny-SBR": 0.04003647195566193,
+      "mAP50-95": 0.04243223992023873,
+      "tiny_recall": 0.1001918252914269,
+      "AP75": 0.043272616600977115,
+      "AP-large-SBR": -0.03167862398707849
+    },
+    "coordinate_guard_minus_arm_c": {
+      "AP-tiny-SBR": 0.0000017008569005994012,
+      "mAP50-95": 0.00002073012847234046,
+      "tiny_recall": 0.0,
+      "AP75": 0.00002055119849753151,
+      "AP-large-SBR": 0.0001151185466580773
+    },
+    "score_oracle_joint_minus_arm_c": {
+      "AP-tiny-SBR": 0.0000003237030613196801,
+      "mAP50-95": 0.000003523807784929999,
+      "tiny_recall": 0.0,
+      "AP75": 0.000005687436663520007,
+      "AP-large-SBR": 0.000003312471469571143
+    }
+  },
+  "coordinate_guard_ap75_attribution": {
+    "a_true_positive_to_c_false_negative_events": 9,
+    "local_seed_coordinate_displacement": 4,
+    "class_or_candidate_loss": 5,
+    "final_300_truncation": 0,
+    "matching_competition": 0,
+    "other": 0,
+    "mechanism_share": 0.4444444444444444
+  },
+  "completed_route_decisions": {
+    "coordinate_only_guard": {
+      "status": "SBR_V2_AUDIT_STOP",
+      "mechanism_gate": "FAIL",
+      "recoverable_upper_bound_gate": "FAIL",
+      "invariants_passed": true,
+      "checksums_sha256": "d0f36f5978575c1d01de320db1245b627cb41c7fdb61ae00616cd55246f326fb6"
+    },
+    "score_oracle": {
+      "status": "SBR_SCORE_ORACLE_STOP",
+      "selected_units": 2,
+      "eligible_units": 50780,
+      "affected_images": 2,
+      "primary_checksums_sha256": "ab5c6c9d005d866b0e485faaead10d73b4f5d61766798e1d041dc989fa23f21c"
+    }
+  },
+  "dual_channel_replay": {
+    "status": "FROZEN_NOT_RUN",
+    "predicted_effective_size_boundary": 96.0,
+    "boundary_rule": "large iff effective_size > 96",
+    "large_source": "sealed Arm A final Top-300",
+    "tiny_medium_source": "sealed Arm C pre-cap candidates",
+    "deduplication": "exact full-view provenance only",
+    "final_max_det": 300,
+    "validation_replays_allowed": 1,
+    "estimated_five_gate_pass_probability": {
+      "lower": 0.3,
+      "center": 0.4,
+      "upper": 0.5
+    }
+  },
+  "excluded_from_public_snapshot": [
+    "dataset images and labels",
+    "model checkpoints",
+    "raw prediction cache",
+    "absolute server paths",
+    "runtime environment manifests",
+    "credentials"
+  ]
+}
