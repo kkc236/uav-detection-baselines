@@ -303,6 +303,80 @@ def test_adjudicator_replays_joint_and_agrees(
     }
 
 
+def test_adjudicator_accepts_valid_bare_original_evidence_root(
+    primary_oracle_fixture,
+):
+    from scripts.adjudicate_sbr_score_oracle import (
+        adjudicate_evidence,
+    )
+
+    root = primary_oracle_fixture
+    primary = root / "primary"
+    manifest_path = primary / "oracle_manifest.json"
+    os.chmod(primary, 0o755)
+    os.chmod(manifest_path, 0o644)
+    manifest = json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    upstream_path = Path(manifest["upstream_input"]["uri"])
+    upstream = json.loads(
+        upstream_path.read_text(encoding="utf-8")
+    )
+    evidence_entry = upstream["original_evidence_root"]
+    assert set(evidence_entry) == {"uri"}
+    upstream["original_evidence_root"] = evidence_entry["uri"]
+    upstream_path.write_text(
+        json.dumps(
+            upstream,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    upstream_hash = sha256_file(upstream_path)
+
+    wrapper_path = Path(manifest["wrapper"]["uri"])
+    wrapper = json.loads(
+        wrapper_path.read_text(encoding="utf-8")
+    )
+    wrapper["upstream_input"]["sha256"] = upstream_hash
+    wrapper_path.write_text(
+        json.dumps(
+            wrapper,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest["upstream_input"]["sha256"] = upstream_hash
+    manifest["wrapper"]["sha256"] = sha256_file(wrapper_path)
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reseal_primary_checksums(primary)
+
+    report = adjudicate_evidence(
+        root, sha256_file(primary / "checksums.sha256")
+    )
+
+    assert report["decision"] == "PASS"
+    assert report["checksums_verified"] is True
+
+
 def test_resealed_metric_tampering_still_fails(
     primary_oracle_fixture,
 ):

@@ -1465,13 +1465,17 @@ def _verify_manifest_chain(
     if set(resolved) != required:
         raise ValueError("upstream file set mismatch")
     evidence_entry = upstream.get("original_evidence_root")
-    if (
-        not isinstance(evidence_entry, Mapping)
-        or set(evidence_entry) != {"uri"}
+    if isinstance(evidence_entry, str):
+        evidence_uri = evidence_entry
+    elif (
+        isinstance(evidence_entry, Mapping)
+        and set(evidence_entry) == {"uri"}
     ):
+        evidence_uri = evidence_entry.get("uri")
+    else:
         raise ValueError("original evidence root is invalid")
     evidence_root = _portable_path(
-        evidence_entry.get("uri"),
+        evidence_uri,
         base=upstream_path.parent,
         name="original evidence root",
     )
