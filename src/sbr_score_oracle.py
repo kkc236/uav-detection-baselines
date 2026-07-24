@@ -6,8 +6,19 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
+import numpy as np
+
+from .sbr_metrics import (
+    _evaluate_threshold,
+    _in_bin,
+    _ioa_prediction_ignore,
+    _prepare_predictions,
+    _sqrt_effective_area,
+    _validate,
+    box_iou,
+)
 from .sbr_v2_audit import (
     AuditRawDetection,
     CClusterReconstruction,
@@ -66,6 +77,52 @@ class OverlayReplay:
     active_raw: tuple[AuditRawDetection, ...]
     patches: tuple[ScorePatch, ...]
     reconstruction: CClusterReconstruction
+
+
+@dataclass(frozen=True)
+class OracleImage:
+    image_id: str
+    width: int
+    height: int
+    gt_boxes: tuple[tuple[float, float, float, float], ...]
+    gt_classes: tuple[int, ...]
+    ignore_boxes: tuple[tuple[float, float, float, float], ...]
+    a_raw: tuple[AuditRawDetection, ...]
+    c_raw: tuple[AuditRawDetection, ...]
+
+
+@dataclass(frozen=True)
+class GroupEvent:
+    unit_id: str
+    selected: bool
+    reason: str
+    tp_delta: Mapping[str, Mapping[str, int]]
+    fp_delta: Mapping[str, Mapping[str, int]]
+    group: AggressorGroup
+    patches: tuple[ScorePatch, ...]
+
+
+@dataclass(frozen=True)
+class OracleImageResult:
+    image_id: str
+    groups: tuple[AggressorGroup, ...]
+    events: tuple[GroupEvent, ...]
+    stock: OverlayReplay
+    joint: OverlayReplay
+    selection_rounds: int
+    stock_profile: Mapping[
+        str, Mapping[str, Mapping[str, int]]
+    ]
+    joint_profile: Mapping[
+        str, Mapping[str, Mapping[str, int]]
+    ]
+
+
+@dataclass(frozen=True)
+class OracleGate:
+    status: str
+    deltas: Mapping[str, float]
+    gates: Mapping[str, bool]
 
 
 def _rank(
@@ -224,17 +281,218 @@ def replay_overlay(
     )
 
 
+def tp_fp_profile(
+    image: OracleImage,
+    replay: OverlayReplay,
+) -> dict[str, dict[str, dict[str, int]]]:
+    predictions = replay.reconstruction.standard_predictions
+    boxes = [
+        tuple(float(value) for value in prediction.global_xyxy)
+        for prediction in predictions
+    ]
+    scores = [
+        float(prediction.score) for prediction in predictions
+    ]
+    classes = [
+        int(prediction.class_id) for prediction in predictions
+    ]
+    sources = [
+        int(prediction.source_order) for prediction in predictions
+    ]
+    queries = [
+        int(prediction.query_index) for prediction in predictions
+    ]
+    pb, ps, pc, gb, gc, ign, src, qry = _validate(
+        boxes,
+        scores,
+        classes,
+        image.gt_boxes,
+        image.gt_classes,
+        image.ignore_boxes,
+        sources,
+        queries,
+        CONF,
+    )
+    pb, ps, pc, src, qry, _ = _prepare_predictions(
+        pb,
+        ps,
+        pc,
+        src,
+        qry,
+        CONF,
+        MAX_DET,
+    )
+    neutral = _ioa_prediction_ignore(pb, ign)
+    iou = box_iou(pb, gb)
+    gain = min(
+        640.0 / float(image.width),
+        640.0 / float(image.height),
+        1.0,
+    )
+    radius = _sqrt_effective_area(gb, gain)
+    profile: dict[str, dict[str, dict[str, int]]] = {}
+    for threshold in THRESHOLDS:
+        masks = {"all": np.ones(len(gc), dtype=bool)}
+        masks.update(
+            {
+                name: _in_bin(radius, name)
+                for name in SIZE_BINS
+            }
+        )
+        key = f"{threshold:.2f}"
+        profile[key] = {}
+        for name, selected in masks.items():
+            counts, _ = _evaluate_threshold(
+                pb,
+                ps,
+                pc,
+                neutral,
+                gb,
+                gc,
+                selected,
+                iou,
+                threshold,
+            )
+            profile[key][name] = {
+                count: int(value)
+                for count, value in counts.items()
+            }
+    return profile
+
+
+def _count_delta(
+    before: Mapping[str, Mapping[str, Mapping[str, int]]],
+    after: Mapping[str, Mapping[str, Mapping[str, int]]],
+    field: str,
+) -> dict[str, dict[str, int]]:
+    return {
+        threshold: {
+            name: int(
+                after[threshold][name][field]
+                - before[threshold][name][field]
+            )
+            for name in ("all", *SIZE_BINS)
+        }
+        for threshold in (
+            f"{value:.2f}" for value in THRESHOLDS
+        )
+    }
+
+
+def _selected(
+    delta: Mapping[str, Mapping[str, int]],
+) -> tuple[bool, str]:
+    protected = ("all", "tiny", "large")
+    safe = all(
+        delta[f"{threshold:.2f}"][name] >= 0
+        for threshold in THRESHOLDS
+        for name in protected
+    )
+    large_gain = (
+        sum(
+            delta[f"{threshold:.2f}"]["large"]
+            for threshold in THRESHOLDS
+        )
+        > 0
+    )
+    if safe and large_gain:
+        return True, "SAFE_LARGE_GAIN"
+    if not safe:
+        return False, "TP_SAFETY_FAIL"
+    return False, "NO_LARGE_GAIN"
+
+
+def evaluate_oracle_image(
+    image: OracleImage,
+) -> OracleImageResult:
+    groups = find_aggressor_groups(image.c_raw)
+    stock = replay_overlay(image.c_raw, ())
+    stock_profile = tp_fp_profile(image, stock)
+    events: list[GroupEvent] = []
+    selected: list[AggressorGroup] = []
+    for group in groups:
+        single = replay_overlay(image.c_raw, (group,))
+        profile = tp_fp_profile(image, single)
+        tp_delta = _count_delta(
+            stock_profile, profile, "tp"
+        )
+        fp_delta = _count_delta(
+            stock_profile, profile, "fp"
+        )
+        take, reason = _selected(tp_delta)
+        if take:
+            selected.append(group)
+        events.append(
+            GroupEvent(
+                unit_id=group.unit_id,
+                selected=take,
+                reason=reason,
+                tp_delta=tp_delta,
+                fp_delta=fp_delta,
+                group=group,
+                patches=single.patches,
+            )
+        )
+    joint = replay_overlay(image.c_raw, tuple(selected))
+    return OracleImageResult(
+        image_id=image.image_id,
+        groups=groups,
+        events=tuple(events),
+        stock=stock,
+        joint=joint,
+        selection_rounds=1,
+        stock_profile=stock_profile,
+        joint_profile=tp_fp_profile(image, joint),
+    )
+
+
+def gate_oracle_metrics(
+    a_metrics: Mapping[str, Any],
+    oracle_metrics: Mapping[str, Any],
+    *,
+    selected_count: int,
+) -> OracleGate:
+    deltas = {
+        name: float(oracle_metrics[name])
+        - float(a_metrics[name])
+        for name in GATES
+    }
+    if not all(math.isfinite(value) for value in deltas.values()):
+        raise ValueError("oracle gate metrics must be finite")
+    gates = {
+        name: deltas[name] >= threshold
+        for name, threshold in GATES.items()
+    }
+    status = (
+        "SBR_SCORE_ORACLE_GO"
+        if selected_count > 0 and all(gates.values())
+        else "SBR_SCORE_ORACLE_STOP"
+    )
+    return OracleGate(
+        status=status,
+        deltas=deltas,
+        gates=gates,
+    )
+
+
 __all__ = [
     "AggressorGroup",
     "CONF",
     "GATES",
+    "GroupEvent",
     "IOS",
     "MAX_DET",
+    "OracleGate",
+    "OracleImage",
+    "OracleImageResult",
     "OverlayReplay",
     "ScorePatch",
     "SIZE_BINS",
     "THRESHOLDS",
     "apply_group_overlay",
+    "evaluate_oracle_image",
     "find_aggressor_groups",
+    "gate_oracle_metrics",
     "replay_overlay",
+    "tp_fp_profile",
 ]

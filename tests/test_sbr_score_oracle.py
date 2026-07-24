@@ -2,8 +2,12 @@ import math
 from dataclasses import replace
 
 from src.sbr_score_oracle import (
+    GATES,
+    OracleImage,
     apply_group_overlay,
+    evaluate_oracle_image,
     find_aggressor_groups,
+    gate_oracle_metrics,
     replay_overlay,
 )
 from src.sbr_v2_audit import AuditRawDetection, reconstruct_c_clusters
@@ -161,3 +165,138 @@ def test_noop_replay_matches_stock_reconstruction():
 
     assert replay.reconstruction == reconstruct_c_clusters(records)
     assert replay.patches == ()
+
+
+def oracle_image(c_raw, gt_boxes):
+    a_raw = tuple(
+        raw(
+            0,
+            0.99 - index * 0.01,
+            box,
+            original=1000 + index,
+            arm="A",
+        )
+        for index, box in enumerate(gt_boxes)
+    )
+    return OracleImage(
+        image_id="images/i.jpg",
+        width=640,
+        height=640,
+        gt_boxes=tuple(gt_boxes),
+        gt_classes=tuple(0 for _ in gt_boxes),
+        ignore_boxes=(),
+        a_raw=a_raw,
+        c_raw=tuple(c_raw),
+    )
+
+
+def safe_large_recovery_image():
+    full = raw(0, 0.80, (0, 0, 200, 200), original=10)
+    local = raw(1, 0.90, (50, 0, 250, 200), original=11)
+    return oracle_image((full, local), ((0, 0, 200, 200),))
+
+
+def tiny_tradeoff_image():
+    full = raw(0, 0.80, (0, 0, 200, 200), original=10)
+    local = raw(1, 0.90, (10, 10, 20, 20), original=11)
+    return oracle_image(
+        (full, local),
+        ((0, 0, 200, 200), (10, 10, 20, 20)),
+    )
+
+
+def interacting_groups_image():
+    full_a = raw(0, 0.80, (0, 0, 100, 100), original=10)
+    local_a = raw(1, 0.95, (0, 0, 50, 100), original=11)
+    full_b = raw(0, 0.79, (40, 0, 140, 100), original=20)
+    local_b = raw(2, 0.94, (90, 0, 140, 100), original=21)
+    return oracle_image(
+        (full_a, local_a, full_b, local_b),
+        ((0, 0, 100, 100), (40, 0, 140, 100)),
+    )
+
+
+def test_group_selected_only_for_large_gain_without_protected_loss():
+    result = evaluate_oracle_image(safe_large_recovery_image())
+
+    assert len(result.groups) == 1
+    assert result.events[0].selected is True
+    assert (
+        sum(
+            row["large"]
+            for row in result.events[0].tp_delta.values()
+        )
+        > 0
+    )
+    assert all(
+        row["all"] >= 0
+        and row["tiny"] >= 0
+        and row["large"] >= 0
+        for row in result.events[0].tp_delta.values()
+    )
+
+
+def test_any_threshold_tiny_loss_rejects_group():
+    event = evaluate_oracle_image(tiny_tradeoff_image()).events[0]
+
+    assert event.selected is False
+    assert event.reason == "TP_SAFETY_FAIL"
+
+
+def test_joint_pass_applies_all_independently_selected_groups_once():
+    result = evaluate_oracle_image(interacting_groups_image())
+
+    assert [event.selected for event in result.events] == [True, True]
+    assert {patch.unit_id for patch in result.joint.patches} == {
+        event.unit_id for event in result.events
+    }
+    assert result.selection_rounds == 1
+    independent_gain = sum(
+        row["large"]
+        for event in result.events
+        for row in event.tp_delta.values()
+    )
+    joint_gain = sum(
+        result.joint_profile[key]["large"]["tp"]
+        - result.stock_profile[key]["large"]["tp"]
+        for key in result.joint_profile
+    )
+    assert 0 < joint_gain < independent_gain
+
+
+def test_gate_is_joint_minus_a_and_inclusive_without_tolerance():
+    a = {
+        "AP-tiny-SBR": 0.0,
+        "mAP50-95": 0.0,
+        "tiny_recall": 0.0,
+        "AP75": 0.002,
+        "AP-large-SBR": 0.005,
+    }
+    oracle = {
+        "AP-tiny-SBR": 0.010,
+        "mAP50-95": 0.003,
+        "tiny_recall": 0.020,
+        "AP75": 0.0,
+        "AP-large-SBR": 0.0,
+    }
+
+    decision = gate_oracle_metrics(a, oracle, selected_count=1)
+
+    assert decision.status == "SBR_SCORE_ORACLE_GO"
+    assert all(decision.gates.values())
+    for name, threshold in GATES.items():
+        below_a = dict(a)
+        below_oracle = dict(oracle)
+        if threshold >= 0:
+            below_oracle[name] = math.nextafter(
+                below_oracle[name], -math.inf
+            )
+        else:
+            below_a[name] = math.nextafter(
+                below_a[name], math.inf
+            )
+        failed = gate_oracle_metrics(
+            below_a, below_oracle, selected_count=1
+        )
+        assert failed.status == "SBR_SCORE_ORACLE_STOP"
+        assert failed.gates[name] is False
