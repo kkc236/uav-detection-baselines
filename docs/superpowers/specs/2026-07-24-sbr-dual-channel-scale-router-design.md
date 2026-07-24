@@ -1,6 +1,6 @@
 # SBR Dual-Channel Scale Router Design
 
-**Status:** frozen for one zero-inference cache replay; not yet evaluated
+**Status:** superseded before execution by `2026-07-24-sp-ppaf-design.md`; never evaluated
 **Date:** 2026-07-24
 **Scope:** validation feasibility screening only
 
