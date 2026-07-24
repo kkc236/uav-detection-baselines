@@ -122,6 +122,10 @@ A pre-cap Arm C cluster is initially eligible when:
 3. the cluster score is finite and originally at least `conf`;
 4. its complete raw provenance is valid.
 
+The seed `global_xyxy` is used only for the frozen scale test. The emitted C
+candidate preserves the existing pre-cap cluster `box` exactly; SP-PPAF changes
+only its score band and never replaces that fused box with seed coordinates.
+
 P2 removes any C cluster containing the exact raw full-view identity of a
 selected A-prefix detection:
 

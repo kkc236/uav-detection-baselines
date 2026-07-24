@@ -15,13 +15,20 @@ from typing import Any
 import numpy as np
 
 from src.sbr_fusion import Detection, greedy_ios_clusters
-from src.sbr_metrics import evaluate_dataset
 
 
 Box = tuple[float, float, float, float]
 TileBounds = tuple[int, int, int, int]
 IdentityKey = tuple[str, int, int, int]
 _AUTO_TILE_BOUNDS = object()
+
+
+def evaluate_dataset(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Lazily preserve the historical evaluator seam for GT-aware callers."""
+
+    from src.sbr_metrics import evaluate_dataset as _evaluate_dataset
+
+    return _evaluate_dataset(*args, **kwargs)
 
 
 def _strict_nonnegative_int(name: str, value: object) -> int:

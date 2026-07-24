@@ -253,12 +253,10 @@ def _identity(image_id: str, detection: Detection) -> tuple[str, int, int, int]:
 
 
 def _mapped_candidate(prediction: Detection) -> Detection:
-    box = prediction.global_xyxy
-    if box is None:
+    if prediction.global_xyxy is None:
         raise ValueError("Arm-C candidate is missing sealed global_xyxy")
     return replace(
         prediction,
-        box=tuple(float(value) for value in box),
         score=map_tail_score(prediction.score),
     )
 
