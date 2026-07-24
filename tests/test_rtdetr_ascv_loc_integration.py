@@ -61,7 +61,7 @@ def test_training_adds_only_one_finite_auxiliary_item_and_shared_pairs(monkeypat
     local_predictions = _synthetic_predictions()
     monkeypatch.setattr(model, "predict", lambda image, batch=None: local_predictions)
     batch = {
-        "img": torch.zeros((1, 3, 160, 160)),
+        "img": torch.zeros((1, 3, 640, 640)),
         "cls": torch.tensor([[0.0], [0.0]]),
         "bboxes": torch.tensor([[0.40, 0.50, 0.05, 0.05], [0.52, 0.50, 0.10, 0.10]]),
         "batch_idx": torch.tensor([0.0, 0.0]),
@@ -83,7 +83,7 @@ def test_eval_loss_never_constructs_local_view(monkeypatch) -> None:
     model = ASCVLocDetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).eval()
     predictions = _synthetic_predictions()
     batch = {
-        "img": torch.zeros((1, 3, 160, 160)),
+        "img": torch.zeros((1, 3, 640, 640)),
         "cls": torch.tensor([[0.0]]),
         "bboxes": torch.tensor([[0.40, 0.50, 0.05, 0.05]]),
         "batch_idx": torch.tensor([0.0]),
@@ -137,7 +137,7 @@ def test_stock_criterion_is_called_once_and_never_with_local_targets(monkeypatch
     local_predictions = _synthetic_predictions()
     monkeypatch.setattr(model, "predict", lambda image, batch=None: local_predictions)
     batch = {
-        "img": torch.zeros((1, 3, 160, 160)),
+        "img": torch.zeros((1, 3, 640, 640)),
         "cls": torch.tensor([[0.0], [0.0]]),
         "bboxes": torch.tensor([[0.40, 0.50, 0.05, 0.05], [0.52, 0.50, 0.10, 0.10]]),
         "batch_idx": torch.tensor([0.0, 0.0]),
@@ -156,8 +156,8 @@ def test_train_pipeline_never_requests_val_or_test_loader() -> None:
         dataset = list(range(20))
 
     trainer = object.__new__(ASCVLocTrainer)
-    trainer.batch_size = 4
-    trainer.frozen_batch_size = 4
+    trainer.batch_size = 8
+    trainer.frozen_batch_size = 8
     trainer.world_size = 1
     trainer.data = {
         "train": "hashed-train.txt",
@@ -167,12 +167,14 @@ def test_train_pipeline_never_requests_val_or_test_loader() -> None:
     trainer.args = SimpleNamespace(
         nbs=64,
         weight_decay=0.0005,
-        optimizer="AdamW",
-        lr0=0.001,
-        momentum=0.9,
+        optimizer="MuSGD",
+        lr0=0.01,
+        momentum=0.937,
+        seed=0,
+        deterministic=True,
     )
     trainer.model = torch.nn.Linear(2, 2)
-    trainer.epochs = 6
+    trainer.epochs = 100
     calls = []
     trainer.get_dataloader = lambda path, **kwargs: calls.append((path, kwargs["mode"])) or Loader()
     trainer.build_optimizer = lambda **kwargs: torch.optim.SGD(trainer.model.parameters(), lr=0.01)
@@ -187,7 +189,7 @@ def test_train_pipeline_never_requests_val_or_test_loader() -> None:
 def test_oom_batch_auto_reduction_fails_closed_before_loader_rebuild() -> None:
     trainer = object.__new__(ASCVLocTrainer)
     trainer.batch_size = 2
-    trainer.frozen_batch_size = 4
+    trainer.frozen_batch_size = 8
 
     with pytest.raises(RuntimeError, match="ASCV_LOC_BATCH_DRIFT"):
         ASCVLocTrainer._build_train_pipeline(trainer)

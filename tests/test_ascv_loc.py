@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
+import pytest
 import torch
 from torch import nn
 
 from src.ascv_loc import (
     ASCV_LAMBDA,
+    ASCV_CROP_PROTOCOL,
     ASCV_TILE_RATIO,
     ASCV_TINY_BOUNDARY_PX,
     ASCV_WARMUP_EPOCHS,
     ascv_warmup,
     build_local_targets,
+    canonical_image_id,
     compute_ascv_loc_loss,
     join_matches_by_target_id,
     local_to_full_xywh,
@@ -19,10 +25,83 @@ from src.ascv_loc import (
 
 
 def test_frozen_protocol_constants() -> None:
+    assert ASCV_CROP_PROTOCOL == "ascv-loc/crop-v2"
     assert ASCV_TILE_RATIO == 0.60
     assert ASCV_TINY_BOUNDARY_PX == 16.0
     assert ASCV_LAMBDA == 0.1
     assert ASCV_WARMUP_EPOCHS == 3
+
+
+def _u64(payload: bytes) -> int:
+    return int.from_bytes(payload, "big")
+
+
+def test_crop_v2_uses_exact_canonical_hash_and_original_annotation_ordinal() -> None:
+    key = "images/train/sample.jpg"
+    boxes = torch.tensor(
+        [
+            [0.15, 0.15, 0.05, 0.05],
+            [0.80, 0.80, 0.05, 0.05],
+        ],
+        dtype=torch.float32,
+    )
+    base = hashlib.sha256(b"ascv-loc/crop-v2\0image\0" + key.encode("utf-8")).digest()
+    first = _u64(base[:8]) % 2
+    target = boxes[first]
+    xyxy = torch.tensor(
+        [
+            (target[0] - target[2] / 2) * 640,
+            (target[1] - target[3] / 2) * 640,
+            (target[0] + target[2] / 2) * 640,
+            (target[1] + target[3] / 2) * 640,
+        ]
+    )
+    lx = max(0, int(torch.ceil(xyxy[2] - 384).item()))
+    ux = min(256, int(torch.floor(xyxy[0]).item()))
+    ly = max(0, int(torch.ceil(xyxy[3] - 384).item()))
+    uy = min(256, int(torch.floor(xyxy[1]).item()))
+    origin = hashlib.sha256(
+        b"ascv-loc/crop-v2\0origin\0" + key.encode("utf-8") + b"\0" + str(first).encode("ascii")
+    ).digest()
+    x0 = lx + _u64(origin[:8]) % (ux - lx + 1)
+    y0 = ly + _u64(origin[8:16]) % (uy - ly + 1)
+
+    actual = select_target_anchored_crops(
+        boxes=boxes,
+        batch_indices=torch.tensor([0, 0]),
+        batch_size=1,
+        image_hw=(640, 640),
+        image_keys=[key],
+    )
+
+    assert actual.tolist() == [[x0, y0, x0 + 384, y0 + 384]]
+
+
+def test_crop_v2_requires_exact_640_square_input() -> None:
+    with pytest.raises(ValueError, match="640"):
+        select_target_anchored_crops(
+            boxes=torch.empty((0, 4)),
+            batch_indices=torch.empty(0, dtype=torch.long),
+            batch_size=1,
+            image_hw=(800, 800),
+            image_keys=["images/train/sample.jpg"],
+        )
+
+
+def test_canonical_image_id_is_dataset_relative_and_rejects_outside_root(tmp_path: Path) -> None:
+    root_a = tmp_path / "server-a" / "VisDrone"
+    root_b = tmp_path / "server-b" / "VisDrone"
+    image_a = root_a / "images/train/000001.jpg"
+    image_b = root_b / "images/train/000001.jpg"
+    image_a.parent.mkdir(parents=True)
+    image_b.parent.mkdir(parents=True)
+    image_a.write_bytes(b"a")
+    image_b.write_bytes(b"b")
+
+    assert canonical_image_id(image_a, dataset_root=root_a) == "images/train/000001.jpg"
+    assert canonical_image_id(image_b, dataset_root=root_b) == "images/train/000001.jpg"
+    with pytest.raises(ValueError, match="outside dataset root"):
+        canonical_image_id(tmp_path / "elsewhere.jpg", dataset_root=root_a)
 
 
 def test_warmup_is_frozen_three_epoch_linear_ramp() -> None:
@@ -310,3 +389,4 @@ def test_teacher_advantage_diagnostics_follow_frozen_directions() -> None:
     assert result.tiny_teacher_win_count == 1
     assert result.non_tiny_teacher_advantage_sum.item() > 0
     assert result.non_tiny_teacher_win_count == 1
+    canonical_image_id,

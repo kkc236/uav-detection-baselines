@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from hashlib import sha256
 from math import ceil, floor
+from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 import torch
@@ -14,7 +15,10 @@ ASCV_TILE_RATIO = 0.60
 ASCV_TINY_BOUNDARY_PX = 16.0
 ASCV_LAMBDA = 0.1
 ASCV_WARMUP_EPOCHS = 3
-ASCV_PROTOCOL_VERSION = "ascv-loc/v1"
+ASCV_CROP_PROTOCOL = "ascv-loc/crop-v2"
+ASCV_PROTOCOL_VERSION = ASCV_CROP_PROTOCOL
+ASCV_IMAGE_SIZE = 640
+ASCV_CROP_SIZE = 384
 
 
 @dataclass(frozen=True)
@@ -53,8 +57,36 @@ def ascv_warmup(epoch: int) -> float:
     return min((int(epoch) + 1) / ASCV_WARMUP_EPOCHS, 1.0)
 
 
-def _stable_integer(value: str) -> int:
-    return int.from_bytes(sha256(value.encode("utf-8")).digest()[:8], "big")
+def canonical_image_id(image_path: str | Path, *, dataset_root: str | Path) -> str:
+    root = Path(dataset_root).resolve()
+    candidate = Path(image_path).resolve()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"image is outside dataset root: {candidate}") from error
+    return relative.as_posix()
+
+
+def _u64(payload: bytes) -> int:
+    if len(payload) != 8:
+        raise ValueError("ASCV crop hash words must contain exactly 8 bytes")
+    return int.from_bytes(payload, "big")
+
+
+def _image_digest(image_key: str) -> bytes:
+    path = PurePosixPath(image_key)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"ASCV image key must be dataset-relative: {image_key}")
+    return sha256(b"ascv-loc/crop-v2\0image\0" + image_key.encode("utf-8")).digest()
+
+
+def _origin_digest(image_key: str, annotation_ordinal: int) -> bytes:
+    return sha256(
+        b"ascv-loc/crop-v2\0origin\0"
+        + image_key.encode("utf-8")
+        + b"\0"
+        + str(annotation_ordinal).encode("ascii")
+    ).digest()
 
 
 def _xywh_to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
@@ -76,7 +108,8 @@ def _crop_origin_for_box(
     crop_height: int,
     image_width: int,
     image_height: int,
-    stable_value: int,
+    x_hash: int,
+    y_hash: int,
 ) -> tuple[int, int] | None:
     x1, y1, x2, y2 = box_xyxy
     lower_x = max(0, ceil(x2 - crop_width))
@@ -85,8 +118,8 @@ def _crop_origin_for_box(
     upper_y = min(image_height - crop_height, floor(y1))
     if lower_x > upper_x or lower_y > upper_y:
         return None
-    x0 = lower_x + stable_value % (upper_x - lower_x + 1)
-    y0 = lower_y + (stable_value // 65_537) % (upper_y - lower_y + 1)
+    x0 = lower_x + x_hash % (upper_x - lower_x + 1)
+    y0 = lower_y + y_hash % (upper_y - lower_y + 1)
     return x0, y0
 
 
@@ -106,10 +139,9 @@ def select_target_anchored_crops(
     """
 
     height, width = (int(image_hw[0]), int(image_hw[1]))
-    crop_height = round(height * ASCV_TILE_RATIO)
-    crop_width = round(width * ASCV_TILE_RATIO)
-    if not 0 < crop_height <= height or not 0 < crop_width <= width:
-        raise ValueError("invalid image shape for frozen ASCV crop")
+    if (height, width) != (ASCV_IMAGE_SIZE, ASCV_IMAGE_SIZE):
+        raise ValueError("ASCV crop-v2 requires an exact 640x640 input")
+    crop_height = crop_width = ASCV_CROP_SIZE
     if batch_size < 0:
         raise ValueError("batch_size must be non-negative")
     if image_keys is None:
@@ -125,22 +157,28 @@ def select_target_anchored_crops(
     crops: list[list[int]] = []
 
     for batch_index in range(batch_size):
-        stable_value = _stable_integer(f"{ASCV_PROTOCOL_VERSION}|{image_keys[batch_index]}")
+        image_key = str(image_keys[batch_index])
+        base = _image_digest(image_key)
         target_indices = torch.where(flat_batch_indices == batch_index)[0].tolist()
+        ordinals: list[int] = []
         if target_indices:
-            offset = stable_value % len(target_indices)
-            target_indices = target_indices[offset:] + target_indices[:offset]
+            first_ordinal = _u64(base[:8]) % len(target_indices)
+            ordinals = [
+                (first_ordinal + offset) % len(target_indices)
+                for offset in range(len(target_indices))
+            ]
         origin = None
-        for target_ordinal, target_index in enumerate(target_indices):
+        for annotation_ordinal in ordinals:
+            target_index = target_indices[annotation_ordinal]
+            origin_hash = _origin_digest(image_key, annotation_ordinal)
             origin = _crop_origin_for_box(
                 absolute_xyxy[target_index].tolist(),
                 crop_width=crop_width,
                 crop_height=crop_height,
                 image_width=width,
                 image_height=height,
-                # The per-image annotation ordinal is invariant to batch
-                # composition, worker count, rank, and flattened GT offsets.
-                stable_value=stable_value + target_ordinal,
+                x_hash=_u64(origin_hash[:8]),
+                y_hash=_u64(origin_hash[8:16]),
             )
             if origin is not None:
                 break
@@ -148,8 +186,8 @@ def select_target_anchored_crops(
             max_x = width - crop_width
             max_y = height - crop_height
             origin = (
-                stable_value % (max_x + 1),
-                (stable_value // 65_537) % (max_y + 1),
+                _u64(base[8:16]) % (max_x + 1),
+                _u64(base[16:24]) % (max_y + 1),
             )
         x0, y0 = origin
         crops.append([x0, y0, x0 + crop_width, y0 + crop_height])

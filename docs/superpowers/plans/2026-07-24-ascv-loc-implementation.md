@@ -36,9 +36,12 @@ run.
 
 Create:
 
-- `scripts/prepare_ascv_loc_protocol.py` for the immutable hashed 10% training
-  image list and manifest;
-- `scripts/train_rtdetr_ascv_loc.py` for the four frozen stages;
+- `scripts/prepare_ascv_loc_protocol.py` to reuse and re-sign the sealed D2
+  647-image list without selecting a new subset;
+- `scripts/train_rtdetr_ascv_loc.py` for the frozen preflight, mechanism,
+  screening, and formal stages;
+- `scripts/adjudicate_ascv_loc.py` for the predeclared paired screen and formal
+  gates;
 - `scripts/run_ascv_loc_server.sh` for status, logs, atomic stage evidence, and
   resume-safe execution.
 
@@ -57,15 +60,16 @@ Run:
 2. the complete repository test suite;
 3. server-side focused and complete tests on Ultralytics 8.4.90;
 4. a synthetic forward/backward smoke test;
-5. a short real-data smoke that does not read val.
+5. a real one-batch control and ASCV preflight at exact batch 8 that does not
+   read val;
 6. a 500-batch train-only teacher-advantage mechanism adjudication.
 
 ## 5. Frozen execution
 
 Execute the state machine in order:
 
-`MECHANISM_500 -> paired SCREEN_6 -> paired FULL_20 -> fixed-last
-SEED0_100 -> fixed-last SEED1_100 -> fixed-last SEED2_100`.
+`PREFLIGHT_1 -> MECHANISM_500 -> paired SCREEN_10 seeds 0/1/2 -> fixed-last
+SEED0_100 -> fixed-last SEED1_100 and SEED2_100`.
 
 At every boundary:
 
