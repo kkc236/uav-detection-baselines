@@ -17,6 +17,7 @@ Baselines:
 - BTD-SE RTX 4090 protected run: see `docs/RTX4090_SERVER_GUIDE.md`
 - Standalone IOQC-SA protected run on RTX 3090/4090/5090: see `docs/IOQC_SA_SERVER_GUIDE.md`
 - Matched RT-DETR-L baseline and standalone VSF-RMR protected run: see `docs/VSF_RMR_SERVER_GUIDE.md`
+- Frozen SBR score-oracle authoritative run: see `docs/SBR_SCORE_ORACLE_SERVER_GUIDE.md`
 
 BTD-SE uses `configs/rtdetr-l-btdse.yaml`, preserves VisDrone ignored boxes in `labels_ignore`, and adds background-reliability and saliency focal losses. The local runtime used for reproducibility is `C:\uav_env\Scripts\python.exe` with Ultralytics 8.4.90 and PyTorch 2.5.1+cu121.
 
