@@ -33,17 +33,20 @@ def _candidate(
     source=0,
     query=0,
     index=0,
+    score=0.5,
+    image_id="image.jpg",
+    global_box=True,
 ):
     return saded.ExpertCandidate(
         detection=Detection(
             box=box,
-            global_xyxy=box,
-            score=0.5,
+            global_xyxy=box if global_box else None,
+            score=score,
             class_id=class_id,
             source_order=source,
             query_index=query,
         ),
-        image_id="image.jpg",
+        image_id=image_id,
         original_index=index,
     )
 
@@ -86,3 +89,158 @@ def test_cross_expert_matching_breaks_equal_iou_by_frozen_provenance():
     )
 
     assert saded.match_cross_expert(baseline, local) == ((0, 1),)
+
+
+def _route(baseline, local, *, width=640, height=640):
+    return saded.route_saded_image(
+        image_id="image.jpg",
+        width=width,
+        height=height,
+        baseline=baseline,
+        local_fused=local,
+    )
+
+
+def test_unmatched_baseline_is_retained():
+    baseline = (_candidate((0, 0, 10, 10), score=0.4),)
+
+    result = _route(baseline, ())
+
+    assert result.predictions == (baseline[0].detection,)
+
+
+def test_matched_non_tiny_baseline_is_immutable():
+    baseline = (_candidate((0, 0, 20, 20), score=0.4),)
+    local = (
+        _candidate(
+            (1, 1, 20, 20),
+            source=1,
+            query=2,
+            score=0.9,
+        ),
+    )
+
+    result = _route(baseline, local)
+
+    assert result.predictions == (baseline[0].detection,)
+    assert result.protected_baseline == (baseline[0].detection,)
+
+
+def test_matched_tiny_uses_local_box_and_analytic_blended_score():
+    baseline = (_candidate((0, 0, 10, 10), score=0.4),)
+    local = (
+        _candidate(
+            (0, 0, 12, 12),
+            source=1,
+            query=2,
+            score=0.9,
+        ),
+    )
+
+    result = _route(baseline, local)
+
+    prediction = result.predictions[0]
+    alpha = saded.local_weight(10.0)
+    assert prediction.box == local[0].detection.box
+    assert prediction.global_xyxy == local[0].detection.global_xyxy
+    assert prediction.score == pytest.approx(
+        (1.0 - alpha) * 0.4 + alpha * 0.9
+    )
+
+
+def test_matched_local_non_tiny_cannot_replace_tiny_baseline():
+    baseline = (_candidate((0, 0, 15, 15), score=0.4),)
+    local = (
+        _candidate(
+            (0, 0, 18, 18),
+            source=1,
+            query=2,
+            score=0.9,
+        ),
+    )
+
+    result = _route(baseline, local)
+
+    assert result.predictions == (baseline[0].detection,)
+    assert result.invariants["no_local_non_tiny_leak"] is True
+
+
+def test_unmatched_local_requires_tiny_size_and_complete_provenance():
+    non_tiny = _candidate(
+        (0, 0, 20, 20),
+        source=1,
+        query=1,
+        score=0.9,
+    )
+    incomplete = _candidate(
+        (30, 0, 40, 10),
+        source=2,
+        query=2,
+        score=0.8,
+        global_box=False,
+    )
+
+    result = _route((), (non_tiny, incomplete))
+
+    assert result.predictions == ()
+
+
+def test_fragment_inside_protected_non_tiny_is_rejected():
+    baseline = (_candidate((0, 0, 20, 20), score=0.7),)
+    local = (
+        _candidate(
+            (2, 2, 12, 12),
+            source=1,
+            query=2,
+            score=0.9,
+        ),
+    )
+
+    result = _route(baseline, local)
+
+    assert result.predictions == (baseline[0].detection,)
+    assert result.coverage["fragment_rejected"] == 1
+
+
+def test_protected_prefix_occupies_top300_before_tiny_candidates():
+    protected = tuple(
+        _candidate(
+            (0, 0, 20, 20),
+            query=i,
+            index=i,
+            score=0.1 + i / 1000,
+        )
+        for i in range(300)
+    )
+    local = (
+        _candidate(
+                (30, 30, 40, 40),
+            source=1,
+            query=0,
+            index=0,
+            score=0.99,
+        ),
+    )
+
+    result = _route(protected, local)
+
+    assert result.predictions == tuple(item.detection for item in protected)
+    assert result.coverage["capacity_rejected"] == 1
+    assert result.coverage["remaining_tiny_slots"] == 0
+
+
+def test_effective_size_is_consistent_in_the_frozen_640_frame():
+    first = _route(
+        (),
+        (_candidate((0, 0, 10, 10), source=1, score=0.9),),
+        width=640,
+        height=640,
+    )
+    second = _route(
+        (),
+        (_candidate((0, 0, 20, 20), source=1, score=0.9),),
+        width=1280,
+        height=1280,
+    )
+
+    assert len(first.predictions) == len(second.predictions) == 1

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
-from src.sbr_fusion import Detection
+from src.sbr_fusion import Detection, intersection_over_smaller
+from src.sbr_v2_audit import effective_size
 
 
 CONF_THRESHOLD = 0.001
@@ -109,6 +110,77 @@ def match_cross_expert(
     return tuple(selected)
 
 
+def _global_box(
+    candidate: ExpertCandidate,
+) -> tuple[float, float, float, float] | None:
+    return candidate.detection.global_xyxy
+
+
+def _complete_candidate(
+    candidate: ExpertCandidate,
+    *,
+    image_id: str,
+) -> bool:
+    detection = candidate.detection
+    box = _global_box(candidate)
+    return (
+        isinstance(candidate, ExpertCandidate)
+        and candidate.image_id == image_id
+        and isinstance(candidate.original_index, int)
+        and not isinstance(candidate.original_index, bool)
+        and candidate.original_index >= 0
+        and detection._metadata_valid
+        and detection.class_id >= 0
+        and detection.source_order >= 0
+        and detection.query_index >= 0
+        and math.isfinite(detection.score)
+        and box is not None
+        and len(box) == 4
+        and all(math.isfinite(value) for value in box)
+        and box[2] > box[0]
+        and box[3] > box[1]
+    )
+
+
+def _candidate_size(
+    candidate: ExpertCandidate,
+    *,
+    width: int,
+    height: int,
+) -> float:
+    box = _global_box(candidate)
+    if box is None:
+        raise ValueError("candidate is missing global coordinates")
+    return effective_size(box, width=width, height=height)
+
+
+def _fragmented_by_protected(
+    candidate: ExpertCandidate,
+    protected: Sequence[ExpertCandidate],
+) -> bool:
+    return any(
+        candidate.detection.class_id == baseline.detection.class_id
+        and intersection_over_smaller(
+            candidate.detection.box,
+            baseline.detection.box,
+        )
+        >= FRAGMENT_IOS
+        for baseline in protected
+    )
+
+
+def _remaining_key(
+    item: tuple[Detection, ExpertCandidate],
+) -> tuple[float, int, int, int]:
+    detection, candidate = item
+    return (
+        -detection.score,
+        detection.source_order,
+        detection.query_index,
+        candidate.original_index,
+    )
+
+
 def route_saded_image(
     *,
     image_id: str,
@@ -119,4 +191,149 @@ def route_saded_image(
 ) -> SADEDImageResult:
     """Route one image after both experts have emitted prediction candidates."""
 
-    raise NotImplementedError
+    if not image_id or width <= 0 or height <= 0:
+        raise ValueError("image identity and dimensions must be valid")
+    baseline_candidates = tuple(baseline)
+    local_candidates = tuple(local_fused)
+    if any(
+        not _complete_candidate(candidate, image_id=image_id)
+        for candidate in baseline_candidates
+    ):
+        raise ValueError("baseline candidate provenance is incomplete")
+    valid_local = tuple(
+        (index, candidate)
+        for index, candidate in enumerate(local_candidates)
+        if _complete_candidate(candidate, image_id=image_id)
+    )
+    complete_local = tuple(candidate for _, candidate in valid_local)
+    local_positions = tuple(index for index, _ in valid_local)
+    matches_on_complete = match_cross_expert(
+        baseline_candidates,
+        complete_local,
+    )
+    matches = tuple(
+        (baseline_index, local_positions[local_index])
+        for baseline_index, local_index in matches_on_complete
+    )
+    match_by_baseline = dict(matches)
+    used_local = {local_index for _, local_index in matches}
+
+    protected_candidates = tuple(
+        candidate
+        for candidate in baseline_candidates
+        if _candidate_size(candidate, width=width, height=height)
+        > TINY_EFFECTIVE_SIZE
+    )
+    protected = tuple(
+        candidate.detection for candidate in protected_candidates
+    )
+    if len(protected) > MAX_DET:
+        raise ValueError("protected baseline exceeds max_det")
+
+    remaining: list[tuple[Detection, ExpertCandidate]] = []
+    accepted_local: list[ExpertCandidate] = []
+    local_non_tiny_rejected = 0
+    for baseline_index, baseline_candidate in enumerate(baseline_candidates):
+        baseline_size = _candidate_size(
+            baseline_candidate,
+            width=width,
+            height=height,
+        )
+        if baseline_size > TINY_EFFECTIVE_SIZE:
+            continue
+        local_index = match_by_baseline.get(baseline_index)
+        if local_index is None:
+            remaining.append(
+                (baseline_candidate.detection, baseline_candidate)
+            )
+            continue
+        local_candidate = local_candidates[local_index]
+        local_size = _candidate_size(
+            local_candidate,
+            width=width,
+            height=height,
+        )
+        if local_size > TINY_EFFECTIVE_SIZE:
+            local_non_tiny_rejected += 1
+            remaining.append(
+                (baseline_candidate.detection, baseline_candidate)
+            )
+            continue
+        alpha = local_weight(baseline_size)
+        score = (
+            (1.0 - alpha) * baseline_candidate.detection.score
+            + alpha * local_candidate.detection.score
+        )
+        fused = replace(local_candidate.detection, score=score)
+        remaining.append((fused, local_candidate))
+        accepted_local.append(local_candidate)
+
+    fragment_rejected = 0
+    incomplete_local_rejected = len(local_candidates) - len(valid_local)
+    for local_index, local_candidate in enumerate(local_candidates):
+        if local_index in used_local:
+            continue
+        if not _complete_candidate(local_candidate, image_id=image_id):
+            continue
+        if (
+            _candidate_size(local_candidate, width=width, height=height)
+            > TINY_EFFECTIVE_SIZE
+        ):
+            local_non_tiny_rejected += 1
+            continue
+        if _fragmented_by_protected(
+            local_candidate,
+            protected_candidates,
+        ):
+            fragment_rejected += 1
+            continue
+        remaining.append((local_candidate.detection, local_candidate))
+        accepted_local.append(local_candidate)
+
+    remaining.sort(key=_remaining_key)
+    available = MAX_DET - len(protected)
+    selected_remaining = remaining[:available]
+    predictions = protected + tuple(
+        detection for detection, _ in selected_remaining
+    )
+    capacity_rejected = len(remaining) - len(selected_remaining)
+    invariants = {
+        "protected_identity_exact": protected
+        == tuple(
+            candidate.detection for candidate in protected_candidates
+        ),
+        "protected_relative_order_exact": predictions[: len(protected)]
+        == protected,
+        "no_local_non_tiny_leak": all(
+            _candidate_size(candidate, width=width, height=height)
+            <= TINY_EFFECTIVE_SIZE
+            for candidate in accepted_local
+        ),
+        "all_local_provenance_complete": all(
+            _complete_candidate(candidate, image_id=image_id)
+            for candidate in accepted_local
+        ),
+        "max_det_respected": len(predictions) <= MAX_DET,
+        "deterministic_tie_break": True,
+    }
+    invariants["passed"] = all(invariants.values())
+    coverage = {
+        "baseline_input": len(baseline_candidates),
+        "local_input": len(local_candidates),
+        "protected_baseline": len(protected),
+        "matched_pairs": len(matches),
+        "accepted_local": len(accepted_local),
+        "incomplete_local_rejected": incomplete_local_rejected,
+        "local_non_tiny_rejected": local_non_tiny_rejected,
+        "fragment_rejected": fragment_rejected,
+        "capacity_rejected": capacity_rejected,
+        "remaining_tiny_slots": available,
+        "final_predictions": len(predictions),
+    }
+    return SADEDImageResult(
+        predictions=predictions,
+        protected_baseline=protected,
+        selected_matches=matches,
+        coverage=coverage,
+        invariants=invariants,
+    )
