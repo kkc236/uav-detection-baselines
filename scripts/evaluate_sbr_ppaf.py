@@ -31,6 +31,7 @@ from src.sbr_artifacts import (  # noqa: E402
 )
 from src.sbr_ppaf import (  # noqa: E402
     A_FLOOR,
+    ARM_NAMES,
     C_CEILING,
     CONF_THRESHOLD,
     FRAGMENT_IOS,
@@ -82,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--input-manifest", required=True, type=Path)
     parser.add_argument("--route", required=True, type=Path)
+    parser.add_argument("--route-anchor-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -294,6 +296,174 @@ def _validate_route_rows(
             row["invariants"].get("passed") is not True
         ):
             raise ValueError("per-image route invariants failed")
+        eligible_value = row.get("eligible_clusters")
+        if isinstance(eligible_value, (str, bytes, Mapping)):
+            raise ValueError("eligible_clusters must be an explicit sequence")
+        eligible: list[dict[str, Any]] = []
+        for cluster_index, cluster in enumerate(eligible_value):
+            if not isinstance(cluster, Mapping) or set(cluster) != {
+                "cluster_rank",
+                "original_score",
+                "mapped_score",
+                "member_indices",
+                "member_identities",
+                "tile_only",
+            }:
+                raise ValueError("eligible cluster schema is not exact")
+            rank = _strict_int(cluster.get("cluster_rank"), "cluster_rank")
+            original_score = cluster.get("original_score")
+            mapped_score = cluster.get("mapped_score")
+            if (
+                isinstance(original_score, bool)
+                or not isinstance(original_score, Real)
+                or not math.isfinite(float(original_score))
+                or not CONF_THRESHOLD <= float(original_score) <= 1.0
+                or isinstance(mapped_score, bool)
+                or not isinstance(mapped_score, Real)
+                or not math.isfinite(float(mapped_score))
+                or not CONF_THRESHOLD < float(mapped_score) < C_CEILING
+            ):
+                raise ValueError("eligible cluster score domain is invalid")
+            member_indices = cluster.get("member_indices")
+            member_identities = cluster.get("member_identities")
+            if (
+                isinstance(member_indices, (str, bytes, Mapping))
+                or isinstance(member_identities, (str, bytes, Mapping))
+            ):
+                raise ValueError("eligible cluster provenance must be sequences")
+            indices = [
+                _strict_int(item, "member index") for item in member_indices
+            ]
+            identities: list[tuple[str, int, int, int]] = []
+            for identity in member_identities:
+                if (
+                    isinstance(identity, (str, bytes, Mapping))
+                    or len(identity) != 4
+                    or identity[0] != image_id
+                ):
+                    raise ValueError("eligible member identity is invalid")
+                identities.append(
+                    (
+                        identity[0],
+                        _strict_int(identity[1], "identity class"),
+                        _strict_int(identity[2], "identity source"),
+                        _strict_int(identity[3], "identity query"),
+                    )
+                )
+            if (
+                not indices
+                or len(set(indices)) != len(indices)
+                or not identities
+                or len(set(identities)) != len(identities)
+                or not isinstance(cluster.get("tile_only"), bool)
+            ):
+                raise ValueError("eligible cluster provenance is incomplete")
+            eligible.append(
+                {
+                    "rank": rank,
+                    "original_score": float(original_score),
+                    "mapped_score": float(mapped_score),
+                    "identities": frozenset(identities),
+                }
+            )
+        eligible_ranks = [item["rank"] for item in eligible]
+        if (
+            eligible_ranks != sorted(eligible_ranks)
+            or len(set(eligible_ranks)) != len(eligible_ranks)
+            or any(
+                left["original_score"] < right["original_score"]
+                or left["mapped_score"] < right["mapped_score"]
+                for left, right in zip(eligible, eligible[1:])
+            )
+        ):
+            raise ValueError("eligible cluster order is invalid")
+        selected_value = row.get("selected_cluster_ranks")
+        if not isinstance(selected_value, Mapping) or set(selected_value) != set(
+            ARM_NAMES
+        ):
+            raise ValueError("selected cluster-rank schema is not exact")
+        selected: dict[str, list[int]] = {}
+        for arm in ARM_NAMES:
+            ranks_value = selected_value[arm]
+            if isinstance(ranks_value, (str, bytes, Mapping)):
+                raise ValueError("selected cluster ranks must be sequences")
+            ranks = [
+                _strict_int(item, f"{arm} selected rank")
+                for item in ranks_value
+            ]
+            if (
+                len(set(ranks)) != len(ranks)
+                or ranks != sorted(ranks)
+                or any(rank not in set(eligible_ranks) for rank in ranks)
+            ):
+                raise ValueError("selected cluster ranks are invalid")
+            selected[arm] = ranks
+        if selected["A"]:
+            raise ValueError("Arm A cannot contain selected C ranks")
+        eligible_by_rank = {item["rank"]: item for item in eligible}
+        for arm in ("All-A", "P1", "P2", "P3"):
+            prefix = int(row_coverage[arm]["prefix"])
+            appended_predictions = normalized_arms[arm][prefix:]
+            if len(selected[arm]) != len(appended_predictions):
+                raise ValueError("selected ranks disagree with appended count")
+            if any(
+                prediction["score"]
+                != eligible_by_rank[rank]["mapped_score"]
+                for prediction, rank in zip(
+                    appended_predictions,
+                    selected[arm],
+                )
+            ):
+                raise ValueError("selected rank/mapped prediction disagreement")
+        p_remaining = MAX_DET - int(row_coverage["P1"]["prefix"])
+        if selected["P1"] != eligible_ranks[:p_remaining]:
+            raise ValueError("P1 selected ranks drifted")
+        p_prefix_identities = {
+            (
+                image_id,
+                prediction["class_id"],
+                prediction["source_order"],
+                prediction["query_index"],
+            )
+            for prediction in normalized_arms["P2"][
+                : int(row_coverage["P2"]["prefix"])
+            ]
+        }
+        expected_p2 = [
+            item["rank"]
+            for item in eligible
+            if item["identities"].isdisjoint(p_prefix_identities)
+        ]
+        p2_remaining = MAX_DET - int(row_coverage["P2"]["prefix"])
+        if selected["P2"] != expected_p2[:p2_remaining]:
+            raise ValueError("P2 exact-provenance ranks drifted")
+        all_a_identities = {
+            (
+                image_id,
+                prediction["class_id"],
+                prediction["source_order"],
+                prediction["query_index"],
+            )
+            for prediction in normalized_arms["A"]
+        }
+        all_a_provenance_tail = [
+            item["rank"]
+            for item in eligible
+            if item["identities"].isdisjoint(all_a_identities)
+        ]
+        if (
+            selected["All-A"]
+            != [
+                rank
+                for rank in all_a_provenance_tail
+                if rank in set(selected["All-A"])
+            ]
+            or selected["P3"]
+            != [
+                rank for rank in expected_p2 if rank in set(selected["P3"])
+            ]
+        ):
+            raise ValueError("P3/All-A selected-rank order drifted")
         normalized.append(
             {
                 "image_id": image_id,
@@ -308,6 +478,7 @@ def _validate_route_rows(
 def _verify_route_closure(
     input_manifest: Path | str,
     route: Path | str,
+    route_anchor_sha256: str,
 ) -> tuple[
     ValidatedRouteInput,
     list[dict[str, Any]],
@@ -325,6 +496,16 @@ def _verify_route_closure(
     anchor_path = route_dir.parent / "route_anchor.json"
     if not anchor_path.is_file():
         raise ValueError("route external anchor is missing")
+    if (
+        not isinstance(route_anchor_sha256, str)
+        or len(route_anchor_sha256) != 64
+        or any(
+            character not in "0123456789abcdefABCDEF"
+            for character in route_anchor_sha256
+        )
+        or sha256_file(anchor_path) != route_anchor_sha256.lower()
+    ):
+        raise ValueError("route external anchor SHA256 mismatch")
     route_paths = [route_dir / name for name in sorted(expected_names)]
     snapshot_before = _snapshot(
         [*route_paths, anchor_path],
@@ -507,6 +688,7 @@ def _same_source_state(left: Mapping[str, Any], right: Mapping[str, Any]) -> boo
 def evaluate_replay(
     input_manifest: Path | str,
     route: Path | str,
+    route_anchor_sha256: str,
     output: Path | str,
     *,
     require_clean: bool = True,
@@ -520,7 +702,17 @@ def evaluate_replay(
         route_manifest,
         route_invariants,
         route_snapshot,
-    ) = _verify_route_closure(input_manifest, route)
+    ) = _verify_route_closure(
+        input_manifest,
+        route,
+        route_anchor_sha256,
+    )
+    route_source = route_manifest.get("route_source")
+    if (
+        not isinstance(route_source, Mapping)
+        or not _same_source_state(before_source, route_source)
+    ):
+        raise ValueError("evaluation source does not match sealed route source")
     route_dir = Path(route).resolve()
     output_path = Path(output).resolve()
     if output_path.exists():
@@ -546,6 +738,11 @@ def evaluate_replay(
         or tuple(dataset["image_list"]) != validated.image_list
     ):
         raise ValueError("loaded dataset disagrees with sealed input")
+    g0_metrics = _read_json(validated.paths["g0_metrics"])
+    if not isinstance(g0_metrics, Mapping) or not all(
+        isinstance(g0_metrics.get(arm), Mapping) for arm in ("A", "C")
+    ):
+        raise ValueError("sealed G0 metrics must contain A and C")
     image_by_id = {
         image["relative_path"]: image for image in dataset["images"]
     }
@@ -576,11 +773,11 @@ def evaluate_replay(
     }
     a_reproduced = _strict_recursive_equal(
         metrics["A"],
-        validated.g0_metrics["A"],
+        g0_metrics["A"],
     )
     c_reproduced = _strict_recursive_equal(
         metrics["C"],
-        validated.g0_metrics["C"],
+        g0_metrics["C"],
     )
     route_snapshot_after = _snapshot(
         [
@@ -659,6 +856,7 @@ def evaluate_replay(
             "route_anchor_sha256": sha256_file(
                 route_dir.parent / "route_anchor.json"
             ),
+            "expected_route_anchor_sha256": route_anchor_sha256.lower(),
             "route_snapshot_sha256": _snapshot_digest(route_snapshot),
             "route_snapshot_after_sha256": _snapshot_digest(
                 route_snapshot_after
@@ -686,6 +884,26 @@ def evaluate_replay(
             ],
             root=staging,
         )
+        final_route_snapshot = _snapshot(
+            [
+                *(
+                    route_dir / name
+                    for name in sorted(
+                        set(ROUTE_ARTIFACTS) | {"checksums.sha256"}
+                    )
+                ),
+                route_dir.parent / "route_anchor.json",
+            ],
+            root=route_dir.parent,
+        )
+        final_source = _source_state(require_clean=require_clean)
+        if (
+            final_route_snapshot != route_snapshot
+            or not _same_source_state(before_source, final_source)
+        ):
+            raise ValueError(
+                "route or source changed while writing evaluation closure"
+            )
         staging.rename(output_path)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
@@ -699,6 +917,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = evaluate_replay(
             args.input_manifest,
             args.route,
+            args.route_anchor_sha256,
             args.output,
         )
         gate = _read_json(output / "primary_gate.json")

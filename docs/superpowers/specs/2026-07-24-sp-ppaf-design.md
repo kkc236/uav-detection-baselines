@@ -251,6 +251,11 @@ route_invariants.json
 checksums.sha256
 ```
 
+After the atomic route write, the caller fixes the SHA256 of the sibling
+`route_anchor.json` outside the route closure. Evaluation requires that digest
+as an explicit argument. Coherently resealing both the route and its sibling
+anchor therefore cannot replace the caller-fixed value.
+
 Evaluation closure, created by a later process after verifying the routing
 checksums:
 

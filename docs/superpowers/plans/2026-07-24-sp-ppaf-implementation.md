@@ -902,6 +902,7 @@ Do not inspect partial outputs. On exit 0, verify
 python scripts/evaluate_sbr_ppaf.py \
   --input-manifest /mnt/uav/protocols/sbr-v2-audit-b6a10f16-20260723T204530Z/input_manifest.json \
   --route /mnt/uav/evidence/sbr-sp-ppaf-<commit8>-<UTC>/route \
+  --route-anchor-sha256 <caller-fixed-sha256> \
   --output /mnt/uav/evidence/sbr-sp-ppaf-<commit8>-<UTC>/evaluation
 ```
 

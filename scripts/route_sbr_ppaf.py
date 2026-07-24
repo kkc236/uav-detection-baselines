@@ -92,7 +92,6 @@ class ValidatedRouteInput:
     dataset_signature: str
     image_list: tuple[str, ...]
     g0_manifest: Mapping[str, Any]
-    g0_metrics: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -269,7 +268,6 @@ def validate_route_input(manifest_path: Path | str) -> ValidatedRouteInput:
     image_list = tuple(image_list_raw)
 
     g0_manifest = _read_json(paths["g0_manifest"])
-    g0_metrics = _read_json(paths["g0_metrics"])
     if (
         not isinstance(g0_manifest, Mapping)
         or g0_manifest.get("mode") != "g0-a"
@@ -277,10 +275,6 @@ def validate_route_input(manifest_path: Path | str) -> ValidatedRouteInput:
         or g0_manifest.get("image_count") != len(image_list)
     ):
         raise ValueError("G0 manifest/image list disagreement")
-    if not isinstance(g0_metrics, Mapping) or not all(
-        isinstance(g0_metrics.get(arm), Mapping) for arm in ("A", "C")
-    ):
-        raise ValueError("G0 metrics must contain A and C")
     frozen_protocol = dict(FrozenSBRProtocol().__dict__)
     if (
         not isinstance(g0_manifest.get("protocol"), Mapping)
@@ -319,7 +313,6 @@ def validate_route_input(manifest_path: Path | str) -> ValidatedRouteInput:
         dataset_signature=dataset_signature,
         image_list=image_list,
         g0_manifest=dict(g0_manifest),
-        g0_metrics=dict(g0_metrics),
     )
 
 
@@ -882,11 +875,14 @@ def route_replay(
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        route_replay(args.input_manifest, args.output)
+        output = route_replay(args.input_manifest, args.output)
     except Exception as exc:
         print(f"SP_PPAF_ROUTE_INVALID: {exc}", file=sys.stderr)
         return 2
-    print("SP_PPAF_ROUTE_SEALED")
+    print(
+        "SP_PPAF_ROUTE_SEALED "
+        f"route_anchor_sha256={sha256_file(output / 'route_anchor.json')}"
+    )
     return 0
 
 
