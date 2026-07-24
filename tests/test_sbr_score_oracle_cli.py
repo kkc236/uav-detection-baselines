@@ -1,11 +1,45 @@
 import hashlib
 import gzip
 import json
+import os
 from pathlib import Path
 import runpy
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "prepare_sbr_score_oracle_protocol.py",
+        "run_sbr_score_oracle.py",
+        "adjudicate_sbr_score_oracle.py",
+    ],
+)
+def test_documented_script_entrypoints_support_direct_execution(
+    name,
+):
+    repo = Path(__file__).parents[1]
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / name),
+            "--help",
+        ],
+        cwd=repo,
+        env=environment,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def sha256_file(path):
