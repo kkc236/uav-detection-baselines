@@ -838,8 +838,11 @@ def _compute_ap(
     )
     mpre = np.flip(np.maximum.accumulate(np.flip(mpre)))
     x = np.linspace(0, 1, 101)
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:
+        trapezoid = np.trapz
     return float(
-        np.trapezoid(np.interp(x, mrec, mpre), x)
+        trapezoid(np.interp(x, mrec, mpre), x)
     )
 
 

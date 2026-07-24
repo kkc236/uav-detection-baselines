@@ -1213,3 +1213,22 @@ def test_required_primary_symlink_is_rejected(
 
     assert report["decision"] == "FAIL"
     assert "artifact set" in report["error"].lower()
+
+
+def test_adjudicator_compute_ap_supports_numpy_before_trapezoid(monkeypatch):
+    import scripts.adjudicate_sbr_score_oracle as adjudicator
+
+    called = False
+
+    def compatible_trapz(y, x):
+        nonlocal called
+        called = True
+        return adjudicator.np.sum(
+            (y[1:] + y[:-1]) * adjudicator.np.diff(x) / 2.0
+        )
+
+    monkeypatch.setattr(adjudicator.np, "trapz", compatible_trapz)
+    monkeypatch.delattr(adjudicator.np, "trapezoid", raising=False)
+
+    assert adjudicator._compute_ap([1.0], [1.0]) == pytest.approx(0.995)
+    assert called is True
