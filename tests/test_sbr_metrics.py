@@ -3,6 +3,7 @@ import pytest
 
 from src.sbr_metrics import (
     IOU_THRESHOLDS,
+    compute_ap,
     evaluate_dataset,
     evaluate_sbr,
     tiny_recall,
@@ -18,6 +19,21 @@ def _run(pred_boxes, pred_scores, pred_classes, gt_boxes, gt_classes, **kwargs):
         gt_classes=np.asarray(gt_classes, dtype=int),
         **kwargs,
     )
+
+
+def test_compute_ap_supports_numpy_before_trapezoid(monkeypatch):
+    called = False
+
+    def compatible_trapz(y, x):
+        nonlocal called
+        called = True
+        return np.sum((y[1:] + y[:-1]) * np.diff(x) / 2.0)
+
+    monkeypatch.setattr(np, "trapz", compatible_trapz)
+    monkeypatch.delattr(np, "trapezoid", raising=False)
+
+    assert compute_ap([1.0], [1.0]) == pytest.approx(0.995)
+    assert called is True
 
 
 def test_perfect_prediction_has_ap50_ap75_and_map_one():

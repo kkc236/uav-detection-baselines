@@ -146,7 +146,10 @@ def compute_ap(recall: Sequence[float], precision: Sequence[float]) -> float:
     mpre = np.concatenate(([1.0], np.clip(p, 0, 1), [0.0]))
     mpre = np.flip(np.maximum.accumulate(np.flip(mpre)))
     x = np.linspace(0, 1, 101)
-    return float(np.trapezoid(np.interp(x, mrec, mpre), x))
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:
+        trapezoid = np.trapz
+    return float(trapezoid(np.interp(x, mrec, mpre), x))
 
 
 def _ap_from_records(records: list[tuple[float, int, int, int]], gt_count: Mapping[int, int]) -> float:
