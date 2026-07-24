@@ -20,6 +20,8 @@ Baselines:
 - Frozen SBR score-oracle authoritative run: see `docs/SBR_SCORE_ORACLE_SERVER_GUIDE.md`
 - Superseded SBR dual-channel scale-router replay design: see `docs/superpowers/specs/2026-07-24-sbr-dual-channel-scale-router-design.md`
 - Frozen SP-PPAF design and one-shot cache replay: see `docs/superpowers/specs/2026-07-24-sp-ppaf-design.md`
+- Frozen SADED dual-expert design: see `docs/superpowers/specs/2026-07-25-saded-design.md`
+- SADED zero-inference R0 implementation: see `docs/superpowers/plans/2026-07-25-saded-r0-implementation.md`
 - Public-safe SBR feasibility metrics: see `docs/evidence/sbr_dual_channel_scale_router/feasibility_metrics.json`
 
 BTD-SE uses `configs/rtdetr-l-btdse.yaml`, preserves VisDrone ignored boxes in `labels_ignore`, and adds background-reliability and saliency focal losses. The local runtime used for reproducibility is `C:\uav_env\Scripts\python.exe` with Ultralytics 8.4.90 and PyTorch 2.5.1+cu121.
@@ -54,3 +56,9 @@ Adaptive RTX 5090 resume:
 
 The scripts use `VisDrone.yaml`. Ultralytics downloads and converts VisDrone automatically on first use.
 Training is configured with YAML architecture files and `pretrained=False`, so pretrained `.pt` weights are not loaded.
+
+SADED R0 keeps prediction routing and GT-aware evaluation in separate
+processes:
+
+- Seal a prediction-only route: `python scripts/route_saded.py --input-manifest /absolute/path/input_manifest.json --output /absolute/path/saded-route`
+- Evaluate the sealed route once: `python scripts/evaluate_saded.py --input-manifest /absolute/path/input_manifest.json --route /absolute/path/saded-route/route --route-anchor-sha256 SHA256 --output /absolute/path/saded-r0-evaluation`
