@@ -157,6 +157,7 @@ def test_train_pipeline_never_requests_val_or_test_loader() -> None:
 
     trainer = object.__new__(ASCVLocTrainer)
     trainer.batch_size = 4
+    trainer.frozen_batch_size = 4
     trainer.world_size = 1
     trainer.data = {
         "train": "hashed-train.txt",
@@ -181,6 +182,15 @@ def test_train_pipeline_never_requests_val_or_test_loader() -> None:
 
     assert calls == [("hashed-train.txt", "train")]
     assert trainer.test_loader is None
+
+
+def test_oom_batch_auto_reduction_fails_closed_before_loader_rebuild() -> None:
+    trainer = object.__new__(ASCVLocTrainer)
+    trainer.batch_size = 2
+    trainer.frozen_batch_size = 4
+
+    with pytest.raises(RuntimeError, match="ASCV_LOC_BATCH_DRIFT"):
+        ASCVLocTrainer._build_train_pipeline(trainer)
 
 
 def test_internal_validation_and_final_eval_are_non_reading_noops() -> None:

@@ -197,6 +197,10 @@ class ASCVLocTrainer(RTDETRTrainer):
         self.ascv_policy = stage_policy(self.ascv_stage)
         self.ascv_successful_batches = 0
         self.internal_validation_bypass_count = 0
+        overrides = kwargs.get("overrides")
+        if not isinstance(overrides, dict) or int(overrides.get("batch", 0)) <= 0:
+            raise ValueError("ASCV-Loc requires an explicit positive frozen batch size")
+        self.frozen_batch_size = int(overrides["batch"])
         super().__init__(*args, **kwargs)
 
     def get_model(self, cfg: dict | str | None = None, weights: str | None = None, verbose: bool = True):
@@ -213,6 +217,10 @@ class ASCVLocTrainer(RTDETRTrainer):
     def _build_train_pipeline(self):
         """Build only the train loader; never resolve a val/test dataset."""
 
+        if self.batch_size != self.frozen_batch_size:
+            raise RuntimeError(
+                f"ASCV_LOC_BATCH_DRIFT: frozen={self.frozen_batch_size}, runtime={self.batch_size}"
+            )
         batch_size = self.batch_size // max(self.world_size, 1)
         self.train_loader = self.get_dataloader(
             self.data["train"],
