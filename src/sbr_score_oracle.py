@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
+import math
 from typing import Any, Iterable
 
-from .sbr_v2_audit import AuditRawDetection, reconstruct_c_clusters
+from .sbr_v2_audit import (
+    AuditRawDetection,
+    CClusterReconstruction,
+    reconstruct_c_clusters,
+)
 
 
 CONF = 0.001
@@ -43,6 +48,24 @@ class AggressorGroup:
     full_anchor_index: int
     aggressor_indices: tuple[int, ...]
     anchor_score: float
+
+
+@dataclass(frozen=True)
+class ScorePatch:
+    image_id: str
+    unit_id: str
+    original_index: int
+    full_anchor_index: int
+    old_score: float
+    new_score: float
+
+
+@dataclass(frozen=True)
+class OverlayReplay:
+    retained_raw: tuple[AuditRawDetection, ...]
+    active_raw: tuple[AuditRawDetection, ...]
+    patches: tuple[ScorePatch, ...]
+    reconstruction: CClusterReconstruction
 
 
 def _rank(
@@ -121,13 +144,97 @@ def find_aggressor_groups(
     return tuple(groups)
 
 
+def apply_group_overlay(
+    retained_raw: Iterable[AuditRawDetection],
+    groups: Iterable[AggressorGroup],
+) -> tuple[
+    tuple[AuditRawDetection, ...],
+    tuple[ScorePatch, ...],
+]:
+    raw = tuple(retained_raw)
+    by_index = {record.original_index: record for record in raw}
+    if len(by_index) != len(raw):
+        raise ValueError("retained raw identities must be unique")
+    replacements: dict[int, tuple[float, AggressorGroup]] = {}
+    for group in groups:
+        new_score = math.nextafter(
+            float(group.anchor_score), -math.inf
+        )
+        if (
+            not math.isfinite(new_score)
+            or new_score >= group.anchor_score
+        ):
+            raise ValueError("invalid frozen predecessor score")
+        anchor = by_index.get(group.full_anchor_index)
+        if anchor is None or anchor.source_order != 0:
+            raise ValueError(
+                "group full anchor is missing or not full-view"
+            )
+        if float(anchor.score) != float(group.anchor_score):
+            raise ValueError(
+                "group anchor score disagrees with retained raw"
+            )
+        for original_index in group.aggressor_indices:
+            record = by_index.get(original_index)
+            if (
+                record is None
+                or record.source_order == 0
+                or float(record.score) <= float(group.anchor_score)
+                or original_index in replacements
+            ):
+                raise ValueError("invalid or duplicated aggressor")
+            replacements[original_index] = (new_score, group)
+    overlaid: list[AuditRawDetection] = []
+    patches: list[ScorePatch] = []
+    for record in raw:
+        change = replacements.get(record.original_index)
+        if change is None:
+            overlaid.append(record)
+            continue
+        new_score, group = change
+        overlaid.append(replace(record, score=new_score))
+        patches.append(
+            ScorePatch(
+                image_id=record.image_id,
+                unit_id=group.unit_id,
+                original_index=record.original_index,
+                full_anchor_index=group.full_anchor_index,
+                old_score=float(record.score),
+                new_score=float(new_score),
+            )
+        )
+    return tuple(overlaid), tuple(patches)
+
+
+def replay_overlay(
+    retained_raw: Iterable[AuditRawDetection],
+    groups: Iterable[AggressorGroup],
+) -> OverlayReplay:
+    raw = tuple(retained_raw)
+    overlaid, patches = apply_group_overlay(raw, groups)
+    active = tuple(
+        record for record in overlaid if record.score >= CONF
+    )
+    reconstruction = reconstruct_c_clusters(active)
+    return OverlayReplay(
+        retained_raw=raw,
+        active_raw=active,
+        patches=patches,
+        reconstruction=reconstruction,
+    )
+
+
 __all__ = [
     "AggressorGroup",
     "CONF",
     "GATES",
     "IOS",
     "MAX_DET",
+    "OverlayReplay",
+    "ScorePatch",
     "SIZE_BINS",
     "THRESHOLDS",
+    "apply_group_overlay",
     "find_aggressor_groups",
+    "replay_overlay",
 ]

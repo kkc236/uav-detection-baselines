@@ -1,6 +1,11 @@
 import math
+from dataclasses import replace
 
-from src.sbr_score_oracle import find_aggressor_groups
+from src.sbr_score_oracle import (
+    apply_group_overlay,
+    find_aggressor_groups,
+    replay_overlay,
+)
 from src.sbr_v2_audit import AuditRawDetection, reconstruct_c_clusters
 
 
@@ -111,3 +116,48 @@ def test_math_float_predecessor_assumption_is_strict():
     predecessor = math.nextafter(0.8, -math.inf)
 
     assert predecessor < 0.8
+
+
+def test_overlay_uses_exact_float64_predecessor_and_full_bypass():
+    full = raw(0, 0.80, (0, 0, 100, 100), original=10)
+    tile = raw(1, 0.90, (10, 0, 110, 100), original=20)
+    group = find_aggressor_groups((full, tile))[0]
+
+    overlaid, patches = apply_group_overlay((full, tile), (group,))
+    mapped = {record.original_index: record for record in overlaid}
+
+    assert mapped[10] == full
+    assert mapped[20].score == math.nextafter(0.80, -math.inf)
+    assert patches[0].old_score == 0.90
+    assert patches[0].new_score == math.nextafter(
+        0.80, -math.inf
+    )
+    assert replace(mapped[20], score=tile.score) == tile
+
+
+def test_post_overlay_conf_filter_precedes_reclustering():
+    full = raw(0, 0.001, (0, 0, 100, 100), original=10)
+    tile = raw(1, 0.002, (10, 0, 110, 100), original=20)
+    group = find_aggressor_groups((full, tile))[0]
+
+    replay = replay_overlay((full, tile), (group,))
+
+    assert tuple(
+        record.original_index for record in replay.active_raw
+    ) == (10,)
+    assert (
+        replay.reconstruction.standard_predictions[0].source_order
+        == 0
+    )
+
+
+def test_noop_replay_matches_stock_reconstruction():
+    records = (
+        raw(0, 0.8, (0, 0, 100, 100), original=1),
+        raw(1, 0.7, (0, 0, 90, 90), original=2),
+    )
+
+    replay = replay_overlay(records, ())
+
+    assert replay.reconstruction == reconstruct_c_clusters(records)
+    assert replay.patches == ()
