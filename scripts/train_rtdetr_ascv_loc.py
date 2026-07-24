@@ -16,7 +16,7 @@ from src.ascv_loc_diagnostics import (
     validate_local_checkpoint_runtime,
 )
 from src.ascv_loc_protocol import sha256_file, source_bundle_sha256
-from src.ascv_loc_stage import ASCVStage
+from src.ascv_loc_stage import ASCVStage, allowed_observed_tensor_batch_sizes
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -154,8 +154,12 @@ def main() -> None:
         runtime_failures.append("AMP scale was not fixed at 128")
     if summary["batch"] != MATCHED_BATCH_SIZE or summary["workers"] != 8:
         runtime_failures.append("observed batch/workers do not match 8/8")
-    if summary["observed_tensor_batch_sizes"] != [MATCHED_BATCH_SIZE]:
-        runtime_failures.append("observed transformed tensor batch does not match 8")
+    allowed_tensor_batches = allowed_observed_tensor_batch_sizes(args.stage)
+    if set(summary["observed_tensor_batch_sizes"]) != set(allowed_tensor_batches):
+        runtime_failures.append(
+            "observed transformed tensor batches do not match the frozen "
+            f"{sorted(allowed_tensor_batches)} contract"
+        )
     if trainer.ascv_optimizer_observation.get("class") != "MuSGD":
         runtime_failures.append("observed optimizer is not MuSGD")
     if args.arm == "ascv":

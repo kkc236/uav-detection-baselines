@@ -58,6 +58,9 @@ Control and treatment use the existing sealed VisDrone baseline protocol:
   `52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0`;
 - the exact seed-specific common initial-state artifact;
 - `imgsz=640`, `batch=8`, `workers=8`, single RTX 4090;
+- the loader batch is fixed at eight; because both frozen dataset sizes leave
+  remainder seven, non-preflight stages observe full tensors of size eight
+  plus the deterministic final partial tensor of size seven;
 - `MuSGD`, `lr0=0.01`, `lrf=0.01`, `momentum=0.937`,
   `weight_decay=0.0005`, `nbs=64`;
 - CUDA AMP with fixed scale `128` and disabled scale growth;

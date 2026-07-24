@@ -56,3 +56,12 @@ def allowed_seeds(stage: ASCVStage | str) -> frozenset[int]:
     if normalized is ASCVStage.SEED2_100:
         return frozenset({2})
     raise AssertionError(f"unmapped ASCV stage: {normalized}")
+
+
+def allowed_observed_tensor_batch_sizes(stage: ASCVStage | str) -> frozenset[int]:
+    """Actual batch tensors are 8 except the frozen dataset remainder of 7."""
+
+    normalized = stage if isinstance(stage, ASCVStage) else ASCVStage(stage)
+    if normalized is ASCVStage.PREFLIGHT_1:
+        return frozenset({8})
+    return frozenset({7, 8})
