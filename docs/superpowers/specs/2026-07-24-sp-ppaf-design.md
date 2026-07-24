@@ -69,8 +69,10 @@ a_floor = 0.01706760562956333
 c_ceiling = 0.008533802814781666
 ```
 
-`a_floor` is the checksum-verified global minimum score among all sealed Arm A
-final predictions. No constant may be recomputed from visible method metrics.
+`a_floor` is the frozen expected global minimum score among all sealed Arm A
+final predictions. Before routing, the implementation must recompute the real
+cache minimum and require exact float64 equality with `a_floor`; a mismatch is
+invalid. No constant may be recomputed from visible method metrics.
 
 ## 5. Scale Semantics
 
@@ -106,6 +108,10 @@ For the fallback arm:
 ```text
 All-A prefix = every sealed Arm A final prediction
 ```
+
+All-A uses the same P3 tail filters: exact-provenance removal is evaluated
+against every All-A prefix member, while fragment suppression is evaluated
+against the predicted-large subset of that prefix.
 
 ## 7. Arm C Tail
 
@@ -150,6 +156,11 @@ The map must be float64, finite, strictly monotone over distinct input scores,
 and remain inside `(conf, c_ceiling)`. Equal original scores retain the frozen
 source/query/original-index tie order. Arm A scores are never changed.
 
+Before routing is accepted, all distinct real-cache eligible C scores must be
+mapped and checked as a set. Distinct inputs must remain strictly ordered with
+no float64 collision; equal inputs must remain stable under the frozen
+source/query/original-index tie order. Any collision or order change is invalid.
+
 ## 9. Capacity and Output
 
 For each arm and image:
@@ -177,7 +188,9 @@ metric-specific output is allowed.
 | P3 | P2 plus frozen IoS fragment suppression | primary SP-PPAF |
 
 All five outputs are produced during the same cache pass and sealed before any
-method metric is read.
+dataset label, ignore annotation, evaluator match, or method metric is loaded.
+Routing and evaluation run as separate processes. The routing process cannot
+import the dataset loader or evaluator.
 
 ## 11. Invariants
 
@@ -189,7 +202,9 @@ The run is invalid unless:
 - P1/P2/P3 preserve every selected A-large prediction;
 - All-A preserves every sealed Arm A final prediction;
 - every C mapped score is strictly above `conf` and below `c_ceiling`;
-- C ordering is unchanged by score mapping;
+- the real-cache Arm A minimum equals the frozen `a_floor` exactly;
+- distinct real-cache C scores have no mapped-score collision and preserve
+  strict order; equal-score ties preserve their frozen order;
 - no output exceeds 300 predictions;
 - P2 removes only exact-provenance clusters;
 - P3 uses only class-aware IoS 0.5 beyond P2;
@@ -220,21 +235,34 @@ validation replay is a feasibility result, not final paper evidence.
 
 ## 13. Evidence Contract
 
-The one replay writes:
+The one replay writes two checksum-separated closures.
+
+Routing closure, created without loading ground truth:
 
 ```text
-manifest.json
+route_manifest.json
 predictions.jsonl.gz
+coverage.json
+route_invariants.json
+checksums.sha256
+```
+
+Evaluation closure, created by a later process after verifying the routing
+checksums:
+
+```text
+evaluation_manifest.json
 metrics.json
 deltas.json
-invariants.json
-coverage.json
+evaluation_invariants.json
 primary_gate.json
 checksums.sha256
 ```
 
-An independent script verifies checksums, constants, invariants, deltas, and
-the decision and writes `independent_adjudication.json`.
+This is an internal feasibility replay, so it does not require a standalone
+paper-grade adjudicator. B and C perform read-only review of both checksum
+closures, the frozen constants, the route/evaluation process boundary, the
+invariants, and the final decision.
 
 Coverage includes per-arm/per-image prefix size, remaining capacity, candidate
 counts, scale rejects, provenance rejects, fragment rejects, appended count,
@@ -245,7 +273,8 @@ routing stage.
 
 Stop immediately on malformed provenance, nonfinite data, score-band violation,
 baseline reproduction failure, output overrun, source-tree mutation, checksum
-failure, or primary/adjudicator disagreement.
+failure, route/evaluation boundary violation, or B/C discovery of an invalid
+decision.
 
 If P3 and All-A both fail the five gates, do not modify 96, IoS, the score band,
 maxDet, quotas, or classes. The next route is the predeclared training-time
