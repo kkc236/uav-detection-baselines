@@ -202,6 +202,9 @@ The run is invalid unless:
 
 - Arm A and Arm C baselines reproduce their sealed metrics;
 - every prefix member is byte-identical to sealed Arm A;
+- recomputed C fused coordinates may differ from the sealed cache by at most
+  `1e-12` absolute solely for cross-runtime accumulation; C score, class,
+  source, query, seed `global_xyxy`, order, and count remain exact;
 - every C tail member maps to exactly one reconstructed pre-cap cluster;
 - P1/P2/P3 preserve every selected A-large prediction;
 - All-A preserves every sealed Arm A final prediction;

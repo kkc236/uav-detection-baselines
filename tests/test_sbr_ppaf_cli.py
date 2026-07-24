@@ -146,6 +146,41 @@ def test_route_replay_rejects_existing_output_without_modification(
     assert marker.read_text(encoding="utf-8") == "keep"
 
 
+def test_frozen_c_box_accepts_only_sub_picometer_accumulation_drift():
+    from scripts.route_sbr_ppaf import FrozenArmImage, _assert_frozen
+    from src.sbr_fusion import Detection
+
+    prediction = Detection(
+        box=(0.0, 0.0, 10.0, 10.0),
+        global_xyxy=(0.0, 0.0, 10.0, 10.0),
+        score=0.8,
+        class_id=0,
+        source_order=1,
+        query_index=2,
+    )
+
+    def frozen(delta):
+        return FrozenArmImage(
+            records=(),
+            predictions=(
+                {
+                    "box": [0.0, 0.0, 10.0 + delta, 10.0],
+                    "global_xyxy": [0.0, 0.0, 10.0, 10.0],
+                    "score": 0.8,
+                    "class_id": 0,
+                    "source_order": 1,
+                    "query_index": 2,
+                },
+            ),
+        )
+
+    _assert_frozen("C", "i.jpg", (), (prediction,), frozen(5e-13))
+    with pytest.raises(ValueError, match="predictions"):
+        _assert_frozen("C", "i.jpg", (), (prediction,), frozen(2e-12))
+    with pytest.raises(ValueError, match="predictions"):
+        _assert_frozen("A", "i.jpg", (), (prediction,), frozen(5e-13))
+
+
 def test_route_authenticates_but_does_not_parse_sealed_method_metrics(
     tmp_path: Path,
 ):

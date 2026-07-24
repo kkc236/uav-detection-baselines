@@ -568,7 +568,27 @@ def _assert_frozen(
     expected = [
         _frozen_prediction_payload(item) for item in frozen.predictions
     ]
-    if canonical_json_bytes(actual) != canonical_json_bytes(expected):
+    if len(actual) != len(expected) or any(
+        left["score"] != right["score"]
+        or left["class_id"] != right["class_id"]
+        or left["source_order"] != right["source_order"]
+        or left["query_index"] != right["query_index"]
+        or left["global_xyxy"] != right["global_xyxy"]
+        or (
+            left["box"] != right["box"]
+            if arm == "A"
+            else not all(
+                math.isclose(
+                    float(a),
+                    float(b),
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+                for a, b in zip(left["box"], right["box"])
+            )
+        )
+        for left, right in zip(actual, expected)
+    ):
         raise ValueError(f"frozen {arm} predictions disagree for {image_id}")
 
 
