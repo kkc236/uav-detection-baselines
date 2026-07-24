@@ -142,7 +142,9 @@ The exact router order is:
 7. retain every unmatched baseline prediction;
 8. for a matched pair whose baseline box has `s_pred > 16`, retain the baseline
    prediction unchanged and discard the local member;
-9. for a matched pair whose baseline box has `s_pred <= 16`, compute
+9. for a matched pair whose baseline box has `s_pred <= 16`, first require the
+   local box to also have `s_pred <= 16`; if it does not, retain the baseline
+   prediction and discard the local member; otherwise compute
    `alpha(s_pred)`, preserve the local box and class, and set
    `score=(1-alpha)*baseline_score+alpha*local_score`;
 10. retain an unmatched local prediction only when its own `s_pred <= 16`, its
@@ -165,7 +167,10 @@ lowering a score. Any remaining exact score tie is broken by source identifier,
 query index, and original detection index, all ascending. No filesystem
 enumeration order or hash-map iteration order may affect the output.
 
-No validation-fitted score calibration or tuned score band is permitted.
+The soft weight changes only the score of a matched tiny pair. Coordinate
+ownership is hard: the accepted local box is used for a matched tiny pair, and
+every protected baseline box is used unchanged. No validation-fitted score
+calibration or tuned score band is permitted.
 
 The evaluator receives one ordinary prediction JSON. Metrics are never selected
 from different experts after evaluation.
@@ -231,7 +236,7 @@ Reusable immutable inputs:
 Must be rerun:
 
 - T-ASCV paired preflight under a new commit and manifest;
-- a fresh seed-0 T-ASCV mechanism run;
+- a fresh seed-1 T-ASCV mechanism run;
 - every T-ASCV treatment training endpoint;
 - any stock control endpoint that cannot be closed against the new manifest.
 
@@ -330,10 +335,19 @@ After screen GO:
    all secondary attribution guards in Section 6.
 
 After the method, endpoints, router, thresholds, and paper tables are frozen,
-perform one same-domain confirmation on the previously unread test-dev split.
-Apply the same unified prediction construction and the same five treatment-
-versus-Arm-A gates. Do not retune or return to val after opening test-dev. A
-second dataset is not an oracle prerequisite.
+generate and seal exactly nine test-dev prediction JSON files before any
+test-dev annotation or result is opened: Arm A, route control, and route
+treatment for each of seeds 0, 1, and 2. One adjudication batch then evaluates
+that fixed set. The unique primary estimate is the arithmetic mean across the
+three per-seed route-treatment-minus-Arm-A metric deltas, and it must pass the
+same five gates. The three per-seed route-treatment-minus-route-control deltas
+and their arithmetic mean are mandatory attribution outputs and must pass the
+Section 6 attribution rules.
+
+Do not ensemble checkpoints or predictions across seeds. Do not retune, return
+to val, replace a JSON, or submit a second test-dev batch after opening the
+result. Failure of the primary five-gate mean or the attribution mean is a
+scientific stop. A second dataset is not an oracle prerequisite.
 
 Only the final three-seed result plus the one frozen test-dev confirmation is
 paper-ready.
