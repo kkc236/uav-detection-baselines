@@ -399,3 +399,54 @@ def test_decision_invalid_short_circuits_nonfinite_metrics():
 
     assert result["status"] == "SP_PPAF_INVALID"
     assert result["selected_arm"] == "none"
+
+
+def test_decision_never_accepts_p1_or_p2_inputs():
+    from src.sbr_ppaf import decide_ppaf
+
+    parameters = set(inspect.signature(decide_ppaf).parameters)
+    assert "p1_metrics" not in parameters
+    assert "p2_metrics" not in parameters
+
+
+@pytest.mark.parametrize(
+    "metric,threshold",
+    [
+        ("AP-tiny-SBR", 0.010),
+        ("mAP50-95", 0.003),
+        ("tiny_recall", 0.020),
+        ("AP75", -0.002),
+        ("AP-large-SBR", -0.005),
+    ],
+)
+def test_each_gate_is_inclusive_and_fails_one_ulp_below(metric, threshold):
+    from src.sbr_ppaf import decide_ppaf
+
+    baseline = {
+        "AP-tiny-SBR": 0.0,
+        "mAP50-95": 0.0,
+        "tiny_recall": 0.0,
+        "AP75": 0.0,
+        "AP-large-SBR": 0.0,
+    }
+    exact = {
+        "AP-tiny-SBR": 0.010,
+        "mAP50-95": 0.003,
+        "tiny_recall": 0.020,
+        "AP75": -0.002,
+        "AP-large-SBR": -0.005,
+    }
+    assert (
+        decide_ppaf(baseline, exact, baseline, invariants_passed=True)[
+            "status"
+        ]
+        == "SP_PPAF_PASS"
+    )
+    below = dict(exact)
+    below[metric] = math.nextafter(threshold, -math.inf)
+    assert (
+        decide_ppaf(baseline, below, baseline, invariants_passed=True)[
+            "status"
+        ]
+        == "SP_PPAF_STOP"
+    )

@@ -18,7 +18,8 @@ Baselines:
 - Standalone IOQC-SA protected run on RTX 3090/4090/5090: see `docs/IOQC_SA_SERVER_GUIDE.md`
 - Matched RT-DETR-L baseline and standalone VSF-RMR protected run: see `docs/VSF_RMR_SERVER_GUIDE.md`
 - Frozen SBR score-oracle authoritative run: see `docs/SBR_SCORE_ORACLE_SERVER_GUIDE.md`
-- Frozen SBR dual-channel scale-router replay design: see `docs/superpowers/specs/2026-07-24-sbr-dual-channel-scale-router-design.md`
+- Superseded SBR dual-channel scale-router replay design: see `docs/superpowers/specs/2026-07-24-sbr-dual-channel-scale-router-design.md`
+- Frozen SP-PPAF design and one-shot cache replay: see `docs/superpowers/specs/2026-07-24-sp-ppaf-design.md`
 - Public-safe SBR feasibility metrics: see `docs/evidence/sbr_dual_channel_scale_router/feasibility_metrics.json`
 
 BTD-SE uses `configs/rtdetr-l-btdse.yaml`, preserves VisDrone ignored boxes in `labels_ignore`, and adds background-reliability and saliency focal losses. The local runtime used for reproducibility is `C:\uav_env\Scripts\python.exe` with Ultralytics 8.4.90 and PyTorch 2.5.1+cu121.
