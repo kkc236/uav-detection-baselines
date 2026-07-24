@@ -76,6 +76,15 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _saded_metric_row(
+    image: Mapping[str, Any],
+    predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate the actual routed boxes, not their seed provenance boxes."""
+
+    return _metric_row(image, predictions, frozen_global=False)
+
+
 def adjudicate_r0(
     *,
     deltas: Mapping[str, float],
@@ -268,10 +277,9 @@ def evaluate_replay(
             raise ValueError("route/dataset dimensions disagree")
         for arm in evaluator_rows:
             evaluator_rows[arm].append(
-                _metric_row(
+                _saded_metric_row(
                     image,
                     route_row["arms"][arm],
-                    frozen_global=True,
                 )
             )
     metrics = {

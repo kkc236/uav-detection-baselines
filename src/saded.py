@@ -122,7 +122,8 @@ def _complete_candidate(
     image_id: str,
 ) -> bool:
     detection = candidate.detection
-    box = _global_box(candidate)
+    provenance_box = _global_box(candidate)
+    actual_box = detection.box
     return (
         isinstance(candidate, ExpertCandidate)
         and candidate.image_id == image_id
@@ -134,11 +135,15 @@ def _complete_candidate(
         and detection.source_order >= 0
         and detection.query_index >= 0
         and math.isfinite(detection.score)
-        and box is not None
-        and len(box) == 4
-        and all(math.isfinite(value) for value in box)
-        and box[2] > box[0]
-        and box[3] > box[1]
+        and len(actual_box) == 4
+        and all(math.isfinite(value) for value in actual_box)
+        and actual_box[2] > actual_box[0]
+        and actual_box[3] > actual_box[1]
+        and provenance_box is not None
+        and len(provenance_box) == 4
+        and all(math.isfinite(value) for value in provenance_box)
+        and provenance_box[2] > provenance_box[0]
+        and provenance_box[3] > provenance_box[1]
     )
 
 
@@ -148,10 +153,14 @@ def _candidate_size(
     width: int,
     height: int,
 ) -> float:
-    box = _global_box(candidate)
-    if box is None:
-        raise ValueError("candidate is missing global coordinates")
-    return effective_size(box, width=width, height=height)
+    # Detection.box is the actual post-fusion box emitted by the router.
+    # global_xyxy is retained only as authenticated source provenance and may
+    # still identify the seed member of a multi-view fusion cluster.
+    return effective_size(
+        candidate.detection.box,
+        width=width,
+        height=height,
+    )
 
 
 def _fragmented_by_protected(

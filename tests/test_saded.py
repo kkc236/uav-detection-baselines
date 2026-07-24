@@ -185,6 +185,56 @@ def test_unmatched_local_requires_tiny_size_and_complete_provenance():
     assert result.predictions == ()
 
 
+def test_unmatched_local_size_uses_the_actual_fused_output_box():
+    local = saded.ExpertCandidate(
+        detection=Detection(
+            box=(0, 0, 20, 20),
+            global_xyxy=(0, 0, 10, 10),
+            score=0.9,
+            class_id=0,
+            source_order=1,
+            query_index=1,
+        ),
+        image_id="image.jpg",
+        original_index=0,
+    )
+
+    result = _route((), (local,))
+
+    assert result.predictions == ()
+    assert result.coverage["local_non_tiny_rejected"] == 1
+    assert result.invariants["no_local_non_tiny_leak"] is True
+
+
+@pytest.mark.parametrize(
+    "actual_box",
+    (
+        (0, 0, 0, 10),
+        (0, 0, math.nan, 10),
+    ),
+)
+def test_candidate_rejects_invalid_actual_box_despite_valid_provenance(
+    actual_box,
+):
+    local = saded.ExpertCandidate(
+        detection=Detection(
+            box=actual_box,
+            global_xyxy=(0, 0, 10, 10),
+            score=0.9,
+            class_id=0,
+            source_order=1,
+            query_index=1,
+        ),
+        image_id="image.jpg",
+        original_index=0,
+    )
+
+    result = _route((), (local,))
+
+    assert result.predictions == ()
+    assert result.coverage["incomplete_local_rejected"] == 1
+
+
 def test_fragment_inside_protected_non_tiny_is_rejected():
     baseline = (_candidate((0, 0, 20, 20), score=0.7),)
     local = (

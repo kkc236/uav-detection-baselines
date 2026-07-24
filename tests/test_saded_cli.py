@@ -110,6 +110,31 @@ def test_r0_gate_uses_only_frozen_safety_thresholds():
     assert failing["failures"] == ["AP75_delta<-0.002"]
 
 
+def test_saded_metric_row_evaluates_the_actual_routed_box():
+    from scripts.evaluate_saded import _saded_metric_row
+
+    image = {
+        "relative_path": "image.jpg",
+        "width": 640,
+        "height": 640,
+        "gt_boxes": [],
+        "gt_classes": [],
+        "ignore_boxes": [],
+    }
+    prediction = {
+        "box": [0.0, 0.0, 20.0, 20.0],
+        "global_xyxy": [0.0, 0.0, 10.0, 10.0],
+        "score": 0.9,
+        "class_id": 0,
+        "source_order": 1,
+        "query_index": 1,
+    }
+
+    row = _saded_metric_row(image, [prediction])
+
+    assert row["pred_boxes"] == [[0.0, 0.0, 20.0, 20.0]]
+
+
 def test_evaluate_replay_seals_one_isolated_r0_decision(tmp_path: Path):
     from scripts.evaluate_saded import evaluate_replay
     from scripts.route_saded import route_replay

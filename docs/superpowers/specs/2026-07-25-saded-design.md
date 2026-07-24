@@ -109,6 +109,13 @@ The implementation must call the existing frozen
 effective size used by the existing SBR metrics and the training mechanism;
 raw original-image pixel area is forbidden.
 
+For every routed prediction, `Detection.box` is the actual post-fusion box
+that the final JSON emits. Scale classification, route invariants, matching,
+fragment checks, and metric evaluation all consume that actual box.
+`global_xyxy` remains authenticated source provenance only; for a fused
+multi-view cluster it may describe the seed member and must not substitute
+for the emitted box.
+
 The router uses an analytic, pre-registered soft expert weight:
 
 `tau = 16`
