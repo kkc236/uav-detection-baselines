@@ -1,6 +1,8 @@
 import math
 from dataclasses import replace
 
+import pytest
+
 from src.sbr_score_oracle import (
     GATES,
     OracleImage,
@@ -9,6 +11,7 @@ from src.sbr_score_oracle import (
     find_aggressor_groups,
     gate_oracle_metrics,
     replay_overlay,
+    verify_oracle_image_invariants,
 )
 from src.sbr_v2_audit import AuditRawDetection, reconstruct_c_clusters
 
@@ -167,6 +170,38 @@ def test_noop_replay_matches_stock_reconstruction():
     assert replay.patches == ()
 
 
+def test_overlay_rejects_group_not_derived_from_stock_clusters():
+    full = raw(0, 0.80, (0, 0, 100, 100), original=10)
+    tile = raw(1, 0.90, (10, 0, 110, 100), original=20)
+    group = find_aggressor_groups((full, tile))[0]
+    forged = replace(group, unit_id="forged")
+
+    with pytest.raises(ValueError, match="eligible"):
+        apply_group_overlay((full, tile), (forged,))
+
+
+def test_post_overlay_filter_is_inclusive_at_exact_conf():
+    full = raw(0, 0.001, (0, 0, 100, 100), original=10)
+
+    replay = replay_overlay((full,), ())
+
+    assert replay.active_raw == (full,)
+
+
+def test_replay_preserves_the_complete_post_overlay_population():
+    full = raw(0, 0.001, (0, 0, 100, 100), original=10)
+    tile = raw(1, 0.002, (10, 0, 110, 100), original=20)
+    group = find_aggressor_groups((full, tile))[0]
+
+    replay = replay_overlay((full, tile), (group,))
+
+    assert tuple(
+        record.original_index for record in replay.overlaid_raw
+    ) == (10, 20)
+    assert replay.overlaid_raw[1].score < 0.001
+    assert replay.active_raw == (full,)
+
+
 def oracle_image(c_raw, gt_boxes):
     a_raw = tuple(
         raw(
@@ -234,6 +269,130 @@ def test_group_selected_only_for_large_gain_without_protected_loss():
         and row["large"] >= 0
         for row in result.events[0].tp_delta.values()
     )
+
+
+def test_group_event_records_absolute_single_before_after_profiles():
+    result = evaluate_oracle_image(safe_large_recovery_image())
+    event = result.events[0]
+
+    assert event.before_profile == result.stock_profile
+    assert set(event.after_profile) == {
+        f"{threshold:.2f}"
+        for threshold in (
+            0.50,
+            0.55,
+            0.60,
+            0.65,
+            0.70,
+            0.75,
+            0.80,
+            0.85,
+            0.90,
+            0.95,
+        )
+    }
+    for threshold in event.after_profile.values():
+        assert set(threshold) == {
+            "all",
+            "tiny",
+            "small",
+            "medium",
+            "large",
+        }
+        for counts in threshold.values():
+            assert {"tp", "fp", "gt"} <= set(counts)
+
+
+def test_complete_invariant_verifier_accepts_exact_oracle_replay():
+    image = safe_large_recovery_image()
+    result = evaluate_oracle_image(image)
+
+    report = verify_oracle_image_invariants(image, result)
+
+    assert report["passed"] is True
+    assert all(
+        value is True
+        for key, value in report.items()
+        if key != "passed" and isinstance(value, bool)
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "failed_key"),
+    (
+        ("selected_score", "modified_scores_exact_predecessor"),
+        ("unselected_box", "non_score_fields_bit_identical"),
+        ("active_population", "active_exclusions_exact"),
+        ("patch_score", "patches_exact"),
+    ),
+)
+def test_invariant_verifier_rejects_fault_injection(
+    mutation, failed_key
+):
+    image = safe_large_recovery_image()
+    result = evaluate_oracle_image(image)
+    joint = result.joint
+    original = joint.retained_raw
+    overlaid = list(joint.overlaid_raw)
+    active = list(joint.active_raw)
+    patches = list(joint.patches)
+
+    if mutation == "selected_score":
+        selected = patches[0].original_index
+        position = next(
+            index
+            for index, record in enumerate(overlaid)
+            if record.original_index == selected
+        )
+        overlaid[position] = replace(
+            overlaid[position],
+            score=math.nextafter(
+                overlaid[position].score, -math.inf
+            ),
+        )
+        active = [
+            record
+            for record in overlaid
+            if record.score >= 0.001
+        ]
+    elif mutation == "unselected_box":
+        position = next(
+            index
+            for index, record in enumerate(overlaid)
+            if record.source_order == 0
+        )
+        overlaid[position] = replace(
+            overlaid[position],
+            global_xyxy=(0.0, 0.0, 199.0, 200.0),
+        )
+        active = [
+            record
+            for record in overlaid
+            if record.score >= 0.001
+        ]
+    elif mutation == "active_population":
+        active = []
+    else:
+        patches[0] = replace(
+            patches[0],
+            new_score=math.nextafter(
+                patches[0].new_score, -math.inf
+            ),
+        )
+
+    forged_joint = replace(
+        joint,
+        retained_raw=original,
+        overlaid_raw=tuple(overlaid),
+        active_raw=tuple(active),
+        patches=tuple(patches),
+    )
+    forged_result = replace(result, joint=forged_joint)
+
+    report = verify_oracle_image_invariants(image, forged_result)
+
+    assert report["passed"] is False
+    assert report[failed_key] is False
 
 
 def test_any_threshold_tiny_loss_rejects_group():
