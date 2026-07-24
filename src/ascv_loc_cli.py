@@ -264,7 +264,7 @@ def build_settings(args: argparse.Namespace) -> dict:
         "nms": False,
         "max_det": 300,
         "save": True,
-        "save_period": 1,
+        "save_period": -1,
         "optimizer": "MuSGD",
         "lr0": 0.01,
         "lrf": 0.01,

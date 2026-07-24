@@ -210,6 +210,8 @@ def test_mechanism_settings_are_train_only_and_fixed(tmp_path: Path, monkeypatch
     assert settings["fraction"] == 1.0
     assert settings["pretrained"] is False
     assert settings["resume"] is False
+    assert settings["save"] is True
+    assert settings["save_period"] == -1
     assert settings["deterministic"] is True
     assert settings["batch"] == 8
     assert settings["workers"] == 8

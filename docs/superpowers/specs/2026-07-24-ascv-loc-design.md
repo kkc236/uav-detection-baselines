@@ -216,6 +216,8 @@ The implementation must prove:
 4. `SEED0_100`
    - fresh scratch 100-epoch seed-0 run;
    - epoch 100 `last.pt` is fixed before evaluation; `best.pt` is never used;
+   - periodic epoch checkpoints are disabled; the endpoint `last.pt` is
+     overwritten in place instead of retaining one checkpoint per epoch;
    - require the fixed checkpoint to pass all five gates.
    - also require treatment `C-control C` mAP greater than zero and mAP DID
      greater than zero.
