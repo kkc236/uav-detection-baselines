@@ -11,6 +11,7 @@ from src.ascv_loc import ASCVLocLossResult
 import src.ascv_loc_cli as cli_module
 from src.ascv_loc_cli import build_parser, build_settings, sha256_file, validate_protocol_inputs
 from src.ascv_loc_diagnostics import ASCVMechanismAccumulator
+from src.ascv_loc_diagnostics import validate_local_checkpoint_runtime
 from src.ascv_loc_protocol import source_bundle_sha256
 from src.ascv_loc_protocol import (
     FROZEN_CROP_CONTRACT,
@@ -36,8 +37,12 @@ def _args_and_manifest(
     subset.write_text("image.jpg\n")
     subset_data = tmp_path / "train_only.yaml"
     subset_data.write_text(f"train: {subset.as_posix()}\nval: {subset.as_posix()}\n")
+    full_train = tmp_path / "images" / "train"
+    full_train.mkdir(parents=True)
     full_data = tmp_path / "train_full_only.yaml"
-    full_data.write_text("train: full.txt\nval: full.txt\n")
+    full_data.write_text(
+        f"path: {tmp_path.as_posix()}\ntrain: {full_train.as_posix()}\nval: {full_train.as_posix()}\n"
+    )
     manifest = {
         "schema_version": "ascv-loc-matched/v2",
         "source_commit": subprocess.run(
@@ -67,7 +72,7 @@ def _args_and_manifest(
         "source": {
             "repo_files": {"src/ascv_loc_cli.py": "SOURCE"},
             "repo_bundle_sha256": source_bundle_sha256({"src/ascv_loc_cli.py": "SOURCE"}),
-            "upstream": {},
+            "upstream": cli_module.EXPECTED_UPSTREAM_SOURCE_SHA256,
         },
         "scientific_contract": {
             "state_machine": list(FROZEN_STATE_MACHINE),
@@ -81,6 +86,23 @@ def _args_and_manifest(
     }
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
+    predecessor_decisions = {
+        ASCVStage.MECHANISM_500: "PREFLIGHT_GO",
+        ASCVStage.SCREEN_10: "GO",
+        ASCVStage.SEED0_100: "SCREEN_GO",
+        ASCVStage.SEED1_100: "FORMAL_SEED0_GO",
+        ASCVStage.SEED2_100: "FORMAL_SEED0_GO",
+    }
+    predecessor = tmp_path / "predecessor.json"
+    predecessor.write_text(
+        json.dumps(
+            {
+                "decision": predecessor_decisions.get(stage),
+                "protocol_manifest_sha256": sha256_file(manifest_path),
+                "protocol_source_commit": manifest["source_commit"],
+            }
+        )
+    )
     data = subset_data if stage in {ASCVStage.PREFLIGHT_1, ASCVStage.MECHANISM_500, ASCVStage.SCREEN_10} else full_data
     args = build_parser().parse_args(
         [
@@ -101,6 +123,11 @@ def _args_and_manifest(
             "--seed",
             str(seed),
         ]
+        + (
+            []
+            if stage is ASCVStage.PREFLIGHT_1
+            else ["--predecessor-evidence", str(predecessor)]
+        )
     )
     monkeypatch.setattr(cli_module, "require_clean_repo", lambda _root: None)
     monkeypatch.setattr(cli_module, "repo_source_hashes", lambda _root: {"src/ascv_loc_cli.py": "SOURCE"})
@@ -121,6 +148,17 @@ def _args_and_manifest(
         "subset_signature",
         lambda _path, root: {"count": 1, "sha256": "SEMANTIC"},
     )
+    monkeypatch.setattr(
+        cli_module,
+        "replay_preflight_gate",
+        lambda gate: {
+            "decision": gate["decision"],
+            "protocol": {
+                "manifest_sha256": sha256_file(manifest_path),
+                "source_commit": manifest["source_commit"],
+            },
+        },
+    )
     return args
 
 
@@ -139,6 +177,27 @@ def test_cli_exposes_no_scientific_tuning_switches() -> None:
     assert "--batch" not in option_strings
     assert "--workers" not in option_strings
     assert "--amp" not in option_strings
+
+
+def test_runtime_rejects_any_device_other_than_single_gpu_zero(tmp_path: Path, monkeypatch) -> None:
+    args = _args_and_manifest(tmp_path, monkeypatch)
+    args.device = "0,1"
+    with pytest.raises(ValueError, match="single GPU device 0"):
+        validate_protocol_inputs(args)
+
+
+def test_non_preflight_stage_requires_valid_predecessor_evidence(tmp_path: Path, monkeypatch) -> None:
+    args = _args_and_manifest(tmp_path, monkeypatch)
+    args.predecessor_evidence = None
+    with pytest.raises(ValueError, match="requires predecessor evidence"):
+        validate_protocol_inputs(args)
+
+    args = _args_and_manifest(tmp_path / "wrong", monkeypatch)
+    predecessor = json.loads(args.predecessor_evidence.read_text())
+    predecessor["decision"] = "ASCV_LOC_STOP"
+    args.predecessor_evidence.write_text(json.dumps(predecessor))
+    with pytest.raises(ValueError, match="does not authorize"):
+        validate_protocol_inputs(args)
 
 
 def test_mechanism_settings_are_train_only_and_fixed(tmp_path: Path, monkeypatch) -> None:
@@ -176,7 +235,7 @@ def test_stage_rejects_wrong_data_and_test_dev(tmp_path: Path, monkeypatch) -> N
 
 
 def test_stage_rejects_source_commit_drift(tmp_path: Path, monkeypatch) -> None:
-    args = _args_and_manifest(tmp_path, monkeypatch)
+    args = _args_and_manifest(tmp_path, monkeypatch, ASCVStage.PREFLIGHT_1)
     manifest = json.loads(args.protocol_manifest.read_text())
     manifest["source_commit"] = "0" * 40
     args.protocol_manifest.write_text(json.dumps(manifest))
@@ -323,3 +382,72 @@ def test_mechanism_tail_requires_each_direction_in_at_least_80_batches_and_100_p
     assert passed is False
     assert "tail_tiny_batches_with_pairs=79, required>=80" in failures
     assert "tail_tiny_pairs=79, required>=100" in failures
+
+
+def test_mechanism_accumulator_retains_only_detached_python_scalars() -> None:
+    accumulator = ASCVMechanismAccumulator()
+    loss = torch.tensor(1.0, requires_grad=True) * 2
+    result = _result(0.1, 0.2)
+    result = ASCVLocLossResult(
+        loss=loss,
+        pair_count=result.pair_count,
+        tiny_pair_count=result.tiny_pair_count,
+        non_tiny_pair_count=result.non_tiny_pair_count,
+        tiny_teacher_advantage_sum=result.tiny_teacher_advantage_sum,
+        tiny_teacher_win_count=result.tiny_teacher_win_count,
+        non_tiny_teacher_advantage_sum=result.non_tiny_teacher_advantage_sum,
+        non_tiny_teacher_win_count=result.non_tiny_teacher_win_count,
+    )
+    accumulator.record(result)
+
+    assert all(
+        isinstance(value, (int, float))
+        for value in accumulator._results[0].values()
+    )
+
+
+def test_local_checkpoint_recompute_is_required_only_for_preflight() -> None:
+    with pytest.raises(RuntimeError, match="CHECKPOINT_RECOMPUTE_INVALID"):
+        validate_local_checkpoint_runtime(
+            stage=ASCVStage.PREFLIGHT_1,
+            calls=1,
+            batchnorm_preserved=True,
+            non_tiny_pair_count=0,
+        )
+
+    validate_local_checkpoint_runtime(
+        stage=ASCVStage.MECHANISM_500,
+        calls=1,
+        batchnorm_preserved=True,
+        non_tiny_pair_count=0,
+    )
+    validate_local_checkpoint_runtime(
+        stage=ASCVStage.MECHANISM_500,
+        calls=2,
+        batchnorm_preserved=True,
+        non_tiny_pair_count=1,
+    )
+    with pytest.raises(RuntimeError, match="CHECKPOINT_RECOMPUTE_INVALID"):
+        validate_local_checkpoint_runtime(
+            stage=ASCVStage.MECHANISM_500,
+            calls=1,
+            batchnorm_preserved=True,
+            non_tiny_pair_count=1,
+        )
+
+
+def test_local_checkpoint_runtime_rejects_impossible_calls_and_bn_drift() -> None:
+    with pytest.raises(RuntimeError, match="CHECKPOINT_RECOMPUTE_INVALID"):
+        validate_local_checkpoint_runtime(
+            stage=ASCVStage.MECHANISM_500,
+            calls=0,
+            batchnorm_preserved=True,
+            non_tiny_pair_count=0,
+        )
+    with pytest.raises(RuntimeError, match="BATCHNORM"):
+        validate_local_checkpoint_runtime(
+            stage=ASCVStage.MECHANISM_500,
+            calls=1,
+            batchnorm_preserved=False,
+            non_tiny_pair_count=0,
+        )

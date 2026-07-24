@@ -16,6 +16,7 @@ from torch.utils.checkpoint import checkpoint
 from src.ascv_loc import (
     ASCV_LAMBDA,
     ASCVLocLossResult,
+    add_preflight_checkpoint_probe,
     ascv_warmup,
     build_local_targets,
     canonical_image_id,
@@ -26,7 +27,11 @@ from src.ascv_loc import (
     select_target_anchored_crops,
 )
 from src.ascv_loc_stage import ASCVStage, ASCVStagePolicy, stage_policy
-from src.ascv_loc_protocol import state_fingerprint, validate_initial_state_artifact
+from src.ascv_loc_protocol import (
+    state_fingerprint,
+    training_batch_sha256,
+    validate_initial_state_artifact,
+)
 
 
 LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "ascv_loc_loss")
@@ -45,6 +50,17 @@ class RegularPredictions:
 def _require_finite(name: str, tensor: torch.Tensor) -> None:
     if not bool(torch.isfinite(tensor).all()):
         raise FloatingPointError(f"ASCV_LOC_NONFINITE_{name.upper()}")
+
+
+def _batchnorm_buffer_fingerprint(module: torch.nn.Module) -> str:
+    buffers = {}
+    for module_name, child in module.named_modules():
+        if isinstance(child, torch.nn.modules.batchnorm._BatchNorm):
+            for buffer_name in ("running_mean", "running_var", "num_batches_tracked"):
+                value = getattr(child, buffer_name, None)
+                if value is not None:
+                    buffers[f"{module_name}.{buffer_name}"] = value
+    return state_fingerprint(buffers)
 
 
 def _full_targets(batch: dict, image: torch.Tensor) -> dict:
@@ -108,6 +124,9 @@ class ASCVLocDetectionModel(RTDETRDetectionModel):
         self.last_ascv_result: ASCVLocLossResult | None = None
         self.last_ascv_diagnostics: dict[str, torch.Tensor | float] = {}
         self.ascv_dataset_root: Path | None = None
+        self.last_local_forward_calls = 0
+        self.last_local_bn_preserved = False
+        self.ascv_preflight_probe = False
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
         # Ultralytics 8.4.90 does not persist nc on RTDETRDetectionModel even
         # though init_criterion() reads it on the first loss call.
@@ -156,16 +175,28 @@ class ASCVLocDetectionModel(RTDETRDetectionModel):
             image_hw=tuple(image.shape[-2:]),
         )
         local_images = crop_and_resize(image, crops)
+        local_bn_fingerprint = _batchnorm_buffer_fingerprint(self)
+        self.last_local_forward_calls = 0
+        self.last_local_bn_preserved = True
 
         # No local targets are passed to the decoder: no DN queries and no
         # local detection/classification loss are created. Activation
         # checkpointing preserves the matched batch=8 contract on 24GB while
         # recomputing under the same frozen-BN context during backward.
-        def local_forward(local_input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        def local_forward(local_input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            self.last_local_forward_calls += 1
             regular = _regular_predictions(self.predict(local_input, batch=None))
-            return regular.boxes, regular.scores
+            if _batchnorm_buffer_fingerprint(self) != local_bn_fingerprint:
+                self.last_local_bn_preserved = False
+                raise RuntimeError("ASCV_LOC_LOCAL_BRANCH_MUTATED_BATCHNORM_BUFFERS")
+            # The scalar is used only by PREFLIGHT_1. Its nonlinear backward
+            # requires a saved tensor from inside the checkpointed closure,
+            # so a zero-weight runtime probe cannot be optimized into a
+            # no-recompute linear path.
+            checkpoint_probe = regular.boxes.float().square().mean()
+            return regular.boxes, regular.scores, checkpoint_probe
 
-        local_boxes, local_scores = checkpoint(
+        local_boxes, local_scores, checkpoint_probe = checkpoint(
             local_forward,
             local_images,
             use_reentrant=False,
@@ -206,6 +237,11 @@ class ASCVLocDetectionModel(RTDETRDetectionModel):
         active_weight = ASCV_LAMBDA * ascv_warmup(self.ascv_epoch)
         contribution = active_weight * ascv_result.loss
         total = detection_loss.float() + contribution
+        total = add_preflight_checkpoint_probe(
+            total,
+            checkpoint_probe,
+            enabled=self.ascv_preflight_probe,
+        )
         _require_finite("total_loss", total)
 
         self.last_ascv_result = ascv_result
@@ -263,6 +299,12 @@ class _MatchedTrainOnlyMixin:
         self.ascv_optimizer_attempts = 0
         self.ascv_amp_scale_min = MATCHED_AMP_SCALE
         self.ascv_amp_scale_max = MATCHED_AMP_SCALE
+        self.ascv_optimizer_observation: dict = {}
+        self.ascv_loader_observation: dict = {}
+        self.ascv_observed_tensor_batch_sizes: set[int] = set()
+        self.ascv_batch_canaries: list[dict[str, int | str]] = []
+        self.ascv_preprocessed_batch_count = 0
+        self.ascv_epoch_one_canary_recorded = False
         self.initial_state_path = Path(initial_state_path).resolve()
         self.initial_state = torch.load(self.initial_state_path, map_location="cpu", weights_only=False)
         overrides = kwargs.get("overrides")
@@ -271,6 +313,26 @@ class _MatchedTrainOnlyMixin:
         validate_initial_state_artifact(self.initial_state, seed=int(overrides["seed"]))
         self.frozen_batch_size = MATCHED_BATCH_SIZE
         super().__init__(*args, **kwargs)
+
+    def preprocess_batch(self, batch):
+        processed = super().preprocess_batch(batch)
+        observed_batch = int(processed["img"].shape[0])
+        self.ascv_observed_tensor_batch_sizes.add(observed_batch)
+        self.ascv_preprocessed_batch_count += 1
+        epoch = int(getattr(self, "epoch", 0))
+        should_bind = self.ascv_preprocessed_batch_count <= 2
+        if epoch == 1 and not self.ascv_epoch_one_canary_recorded:
+            should_bind = True
+            self.ascv_epoch_one_canary_recorded = True
+        if should_bind:
+            self.ascv_batch_canaries.append(
+                {
+                    "epoch": epoch,
+                    "batch": self.ascv_preprocessed_batch_count,
+                    "sha256": training_batch_sha256(processed),
+                }
+            )
+        return processed
 
     def _setup_train(self):
         # Skip Ultralytics' unrelated YOLO26 download-based AMP admission.
@@ -291,7 +353,7 @@ class _MatchedTrainOnlyMixin:
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
         if name not in {"auto", "MuSGD"}:
             raise ValueError(f"ASCV_LOC_OPTIMIZER_DRIFT: {name}")
-        return super().build_optimizer(
+        optimizer = super().build_optimizer(
             model,
             name="MuSGD",
             lr=0.01,
@@ -299,6 +361,27 @@ class _MatchedTrainOnlyMixin:
             decay=decay,
             iterations=iterations,
         )
+        self.ascv_optimizer_observation = {
+            "class": type(optimizer).__name__,
+            "requested_lr0": 0.01,
+            "requested_momentum": 0.937,
+            "groups": [
+                {
+                    "param_group": group.get("param_group"),
+                    "lr": float(group["lr"]),
+                    "momentum": float(group.get("momentum", 0.0)),
+                    "weight_decay": float(group.get("weight_decay", 0.0)),
+                    "use_muon": bool(group.get("use_muon", False)),
+                    "parameter_count": len(group["params"]),
+                }
+                for group in optimizer.param_groups
+            ],
+        }
+        if self.ascv_optimizer_observation["class"] != "MuSGD":
+            raise RuntimeError("ASCV_LOC_OPTIMIZER_CLASS_DRIFT")
+        if any(group["momentum"] != 0.937 for group in self.ascv_optimizer_observation["groups"]):
+            raise RuntimeError("ASCV_LOC_OPTIMIZER_MOMENTUM_DRIFT")
+        return optimizer
 
     def optimizer_step(self):
         scale_before = float(self.scaler.get_scale())
@@ -327,6 +410,19 @@ class _MatchedTrainOnlyMixin:
             rank=LOCAL_RANK,
             mode="train",
         )
+        self.ascv_loader_observation = {
+            "trainer_batch_size": int(self.batch_size),
+            "per_rank_batch_size": int(batch_size),
+            "loader_batch_size": int(getattr(self.train_loader, "batch_size", batch_size)),
+            "loader_num_workers": int(getattr(self.train_loader, "num_workers", -1)),
+        }
+        if self.ascv_loader_observation != {
+            "trainer_batch_size": 8,
+            "per_rank_batch_size": 8,
+            "loader_batch_size": 8,
+            "loader_num_workers": 8,
+        }:
+            raise RuntimeError(f"ASCV_LOC_LOADER_CONTRACT_DRIFT: {self.ascv_loader_observation}")
         self.test_loader = None
         self.accumulate = max(round(self.args.nbs / self.batch_size), 1)
         weight_decay = self.args.weight_decay * self.batch_size * self.accumulate / self.args.nbs
@@ -374,6 +470,7 @@ class ASCVLocTrainer(_MatchedTrainOnlyMixin, RTDETRTrainer):
             verbose=verbose and RANK == -1,
         )
         model.ascv_dataset_root = Path(self.data["path"]).resolve()
+        model.ascv_preflight_probe = self.ascv_stage is ASCVStage.PREFLIGHT_1
         load_matched_initial_state(model, self.initial_state, int(self.args.seed))
         return model
 

@@ -7,10 +7,14 @@ import json
 import os
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 import torch
 import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from src.ascv_loc_protocol import (
     EXPECTED_CATEGORY_MAPPING_SHA256,
@@ -20,6 +24,7 @@ from src.ascv_loc_protocol import (
     EXPECTED_ENVIRONMENT,
     EXPECTED_INITIAL_STATE_SHA256,
     EXPECTED_PARENT_ATTESTATION_SHA256,
+    EXPECTED_PARENT_SOURCE_SHA256,
     EXPECTED_SUBSET_COUNT,
     EXPECTED_SUBSET_FILE_SHA256,
     EXPECTED_SUBSET_SHA256,
@@ -84,6 +89,20 @@ def current_upstream_source_hashes() -> dict[str, str]:
         "head.py": root / "nn" / "modules" / "head.py",
         "tasks.py": root / "nn" / "tasks.py",
         "rtdetr-l.yaml": root / "cfg" / "models" / "rt-detr" / "rtdetr-l.yaml",
+        "data/augment.py": root / "data" / "augment.py",
+        "data/build.py": root / "data" / "build.py",
+        "data/dataset.py": root / "data" / "dataset.py",
+        "engine/trainer.py": root / "engine" / "trainer.py",
+        "models/rtdetr/model.py": root / "models" / "rtdetr" / "model.py",
+        "models/rtdetr/train.py": root / "models" / "rtdetr" / "train.py",
+        "models/utils/loss.py": root / "models" / "utils" / "loss.py",
+        "models/utils/ops.py": root / "models" / "utils" / "ops.py",
+        "nn/modules/block.py": root / "nn" / "modules" / "block.py",
+        "nn/modules/conv.py": root / "nn" / "modules" / "conv.py",
+        "nn/modules/transformer.py": root / "nn" / "modules" / "transformer.py",
+        "optim/muon.py": root / "optim" / "muon.py",
+        "utils/loss.py": root / "utils" / "loss.py",
+        "utils/torch_utils.py": root / "utils" / "torch_utils.py",
     }
     return {name: sha256_file(path) for name, path in paths.items()}
 
@@ -119,7 +138,7 @@ def _load_parent_protocol(path: Path) -> tuple[int, dict]:
         raise ValueError(f"subset semantic signature mismatch in {path}")
     if record.get("environment") != EXPECTED_ENVIRONMENT:
         raise ValueError(f"environment mismatch in {path}")
-    if record.get("source_sha256") != EXPECTED_UPSTREAM_SOURCE_SHA256:
+    if record.get("source_sha256") != EXPECTED_PARENT_SOURCE_SHA256:
         raise ValueError(f"upstream source signature mismatch in {path}")
     initial = record.get("initial_state", {})
     initial_path = Path(initial["path"]).resolve()
@@ -183,11 +202,14 @@ def prepare_protocol(
     _atomic_write(subset_yaml, yaml.safe_dump(subset_config, sort_keys=False, allow_unicode=True))
 
     full_yaml = output_dir / "matched_full_train_only.yaml"
-    full_train = full_data["train"]
+    dataset_root = Path(parent_data["path"]).resolve()
+    full_train = dataset_root / "images" / "train"
+    if not full_train.is_dir():
+        raise FileNotFoundError(full_train)
     full_config = {
-        "path": full_data.get("path"),
-        "train": full_train,
-        "val": full_train,
+        "path": dataset_root.as_posix(),
+        "train": full_train.as_posix(),
+        "val": full_train.as_posix(),
         "names": full_data["names"],
     }
     _atomic_write(full_yaml, yaml.safe_dump(full_config, sort_keys=False, allow_unicode=True))
@@ -198,6 +220,7 @@ def prepare_protocol(
         initial_states[str(seed)] = {
             "path": str(Path(record["initial_state"]["path"]).resolve()),
             "sha256": record["initial_state"]["sha256"],
+            "common_fingerprint": EXPECTED_COMMON_FINGERPRINTS[seed],
         }
         lineage[str(seed)] = {
             "parent_protocol": path.as_posix(),
@@ -214,7 +237,7 @@ def prepare_protocol(
             "train_images": 6471,
             "val_images": 548,
             "classes": 10,
-            "root": str(Path(parent_data["path"]).resolve()),
+            "root": dataset_root.as_posix(),
             "authority": "sealed-parent-attestation-only-before-val",
             "full_yaml": full_dataset_yaml.as_posix(),
             "full_yaml_sha256": sha256_file(full_dataset_yaml),
@@ -278,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-protocol", type=Path, action="append", required=True)
     parser.add_argument("--full-dataset-yaml", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--repo-root", type=Path, default=ROOT)
     return parser
 
 

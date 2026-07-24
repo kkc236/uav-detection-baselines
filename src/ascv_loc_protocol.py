@@ -30,10 +30,27 @@ EXPECTED_COMMON_FINGERPRINTS = {
     1: "A73D3A57F5DCF3F62FA4B30329C32204E3A74BC57AA4FFEE577873D14F0A3D65",
     2: "1CCA2D745106F949268B3978722A415439623376D01C1D188B1450C6230AF1B2",
 }
-EXPECTED_UPSTREAM_SOURCE_SHA256 = {
+EXPECTED_PARENT_SOURCE_SHA256 = {
     "head.py": "5701116D86881827AC9E1E7462DFAA44C33937BD68E23324763459685729E06F",
     "rtdetr-l.yaml": "85716F626769CB5DDF00D59FCF6CAFB5814AAD196328100BDC7C93306F650E83",
     "tasks.py": "B00935C1851BB9CEA240985704C12E654E68B369F6C59DE20E45FA295CB79B92",
+}
+EXPECTED_UPSTREAM_SOURCE_SHA256 = {
+    **EXPECTED_PARENT_SOURCE_SHA256,
+    "data/augment.py": "697492FD23C9D763B99ED65F56CF4EE5457732E30CAA10618A20A1ED96DE4B64",
+    "data/build.py": "80264B44C8C3C5049699E6548A9DCD8A5A9F5B2C66D9EC8BFF58132F9498D5AB",
+    "data/dataset.py": "6DA06C274091A27A6DFF9A71F928D8E765549591A85C399C5226AC917EB6F9FD",
+    "engine/trainer.py": "256EB7680A361308D8E5B55DEAF8148280DDEA1FC734663A3C46FA491388F0D8",
+    "models/rtdetr/model.py": "8C9CD287FE44FFFAD540EEFF2249A77290B88C876EF713622319534C8685255C",
+    "models/rtdetr/train.py": "7B13E6B1EB7F0962B76417ABDDBB44BC32EDB6030F5EEB0CAF6D56B091776E48",
+    "models/utils/loss.py": "265483A64AAB9DD63E56B3FA1A864B838916DDDDECBA21DAFB2121FC513BBFAF",
+    "models/utils/ops.py": "EF211FAFC112A715305A8070F0053FAC38FAF4D0F9F28BC04D91C9A112451778",
+    "nn/modules/block.py": "20EDA06BE7AD7FEA69DB8161C91F6681371AA6AEDB1DCAE18DB1A004783E1CBD",
+    "nn/modules/conv.py": "C802F36EA1596D8910F2B651D57877B50A4960857B97CBB5A20D44A1DBBAA774",
+    "nn/modules/transformer.py": "5D6C6904FB773722EB858663DE4D8601731D0EFBDA734E2FA6BA687072C6748B",
+    "optim/muon.py": "22EF96094E891696CCB8BB14C17C669A1E2E219698943F2E29AA55DB2812C1EE",
+    "utils/loss.py": "61F2FF23A8A468D6423C38F7629DA8D66E71D5463F43A1CF98EA6F170BFB1019",
+    "utils/torch_utils.py": "3C1A95BDCC98379A4506FFDBF7BC84F1475AA1A3B618AA2676FA81AE7707C807",
 }
 EXPECTED_ENVIRONMENT = {
     "python": "3.10.12",
@@ -102,6 +119,32 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest().upper()
+
+
+def training_batch_sha256(batch: Mapping) -> str:
+    """Bind an ordered, already-transformed training batch without serializing it."""
+
+    digest = hashlib.sha256()
+    digest.update(b"ascv-loc/training-batch-v1\0")
+    image_paths = batch.get("im_file")
+    if not isinstance(image_paths, (list, tuple)):
+        raise ValueError("training batch digest requires ordered im_file values")
+    digest.update(json.dumps([str(value) for value in image_paths], separators=(",", ":")).encode("utf-8"))
+    for name in ("img", "cls", "bboxes", "batch_idx"):
+        tensor = batch.get(name)
+        if not isinstance(tensor, torch.Tensor):
+            raise ValueError(f"training batch digest requires tensor {name}")
+        materialized = tensor.detach().cpu().contiguous()
+        header = {
+            "name": name,
+            "dtype": str(materialized.dtype),
+            "shape": list(materialized.shape),
+        }
+        digest.update(b"\0")
+        digest.update(json.dumps(header, sort_keys=True, separators=(",", ":")).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(materialized.numpy().tobytes(order="C"))
     return digest.hexdigest().upper()
 
 
@@ -184,7 +227,7 @@ def validate_initial_state_artifact(artifact: dict, *, seed: int) -> None:
             "fraction": 0.1,
             "sha256": EXPECTED_SUBSET_SHA256,
         },
-        "source_sha256": EXPECTED_UPSTREAM_SOURCE_SHA256,
+        "source_sha256": EXPECTED_PARENT_SOURCE_SHA256,
         "environment": EXPECTED_ENVIRONMENT,
         "control_parameters": 32_826_626,
         "innovation_seed": seed + 10_000,

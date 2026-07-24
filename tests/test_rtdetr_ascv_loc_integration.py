@@ -32,6 +32,17 @@ def _synthetic_predictions(class_count: int = 2):
     return dec_boxes, dec_scores, enc_boxes, enc_scores, None
 
 
+def _parameter_dependent_predictions(model, predictions):
+    anchor = next(model.parameters()).reshape(-1)[0]
+    values = []
+    for value in predictions:
+        if isinstance(value, torch.Tensor):
+            values.append(value + anchor.square() * 0.0)
+        else:
+            values.append(value)
+    return tuple(values)
+
+
 def test_model_has_stock_parameter_and_inference_contract() -> None:
     stock = RTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).eval()
     model = ASCVLocDetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).eval()
@@ -59,7 +70,11 @@ def test_training_adds_only_one_finite_auxiliary_item_and_shared_pairs(monkeypat
     model.set_ascv_progress(0)
     full_predictions = _synthetic_predictions()
     local_predictions = _synthetic_predictions()
-    monkeypatch.setattr(model, "predict", lambda image, batch=None: local_predictions)
+    monkeypatch.setattr(
+        model,
+        "predict",
+        lambda image, batch=None: _parameter_dependent_predictions(model, local_predictions),
+    )
     batch = {
         "img": torch.zeros((1, 3, 640, 640)),
         "cls": torch.tensor([[0.0], [0.0]]),
@@ -77,6 +92,60 @@ def test_training_adds_only_one_finite_auxiliary_item_and_shared_pairs(monkeypat
     assert torch.isfinite(items).all()
     assert model.last_ascv_result is not None
     assert model.last_ascv_result.pair_count > 0
+    assert model.last_local_forward_calls == 2
+    assert model.last_local_bn_preserved is True
+
+
+def test_all_tiny_teacher_only_batch_does_not_require_checkpoint_recompute(monkeypatch) -> None:
+    model = ASCVLocDetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).train()
+    model.set_ascv_progress(0)
+    full_predictions = _synthetic_predictions()
+    local_predictions = _synthetic_predictions()
+    monkeypatch.setattr(
+        model,
+        "predict",
+        lambda image, batch=None: _parameter_dependent_predictions(model, local_predictions),
+    )
+    batch = {
+        "img": torch.zeros((1, 3, 640, 640)),
+        "cls": torch.tensor([[0.0]]),
+        "bboxes": torch.tensor([[0.40, 0.50, 0.01, 0.01]]),
+        "batch_idx": torch.tensor([0.0]),
+        "im_file": ["train-image.jpg"],
+    }
+
+    total, _items = model.loss(batch, preds=full_predictions)
+    total.backward()
+
+    assert model.last_ascv_result is not None
+    assert model.last_ascv_result.tiny_pair_count == model.last_ascv_result.pair_count
+    assert model.last_local_forward_calls == 1
+    assert model.last_local_bn_preserved is True
+
+
+def test_preflight_zero_weight_probe_forces_real_checkpoint_recompute_on_tiny_batch(monkeypatch) -> None:
+    model = ASCVLocDetectionModel("rtdetr-l.yaml", ch=3, nc=2, verbose=False).train()
+    model.ascv_preflight_probe = True
+    full_predictions = _synthetic_predictions()
+    local_predictions = _synthetic_predictions()
+    monkeypatch.setattr(
+        model,
+        "predict",
+        lambda image, batch=None: _parameter_dependent_predictions(model, local_predictions),
+    )
+    batch = {
+        "img": torch.zeros((1, 3, 640, 640)),
+        "cls": torch.tensor([[0.0]]),
+        "bboxes": torch.tensor([[0.40, 0.50, 0.01, 0.01]]),
+        "batch_idx": torch.tensor([0.0]),
+        "im_file": ["train-image.jpg"],
+    }
+
+    total, _items = model.loss(batch, preds=full_predictions)
+    total.backward()
+
+    assert model.last_local_forward_calls == 2
+    assert model.last_local_bn_preserved is True
 
 
 def test_eval_loss_never_constructs_local_view(monkeypatch) -> None:
@@ -154,6 +223,8 @@ def test_stock_criterion_is_called_once_and_never_with_local_targets(monkeypatch
 def test_train_pipeline_never_requests_val_or_test_loader() -> None:
     class Loader:
         dataset = list(range(20))
+        batch_size = 8
+        num_workers = 8
 
     trainer = object.__new__(ASCVLocTrainer)
     trainer.batch_size = 8

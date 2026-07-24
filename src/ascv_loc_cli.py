@@ -32,6 +32,7 @@ from src.ascv_loc_protocol import (
     validate_parent_attestation,
 )
 from src.ascv_loc_stage import ASCVStage, allowed_seeds, stage_policy
+from src.ascv_loc_adjudicator import replay_preflight_gate
 
 
 def parse_bool(value: str) -> bool:
@@ -54,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", required=True)
     parser.add_argument("--device", default="0")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--predecessor-evidence", type=Path)
     return parser
 
 
@@ -82,6 +84,20 @@ def current_upstream_source_hashes() -> dict[str, str]:
         "head.py": root / "nn" / "modules" / "head.py",
         "tasks.py": root / "nn" / "tasks.py",
         "rtdetr-l.yaml": root / "cfg" / "models" / "rt-detr" / "rtdetr-l.yaml",
+        "data/augment.py": root / "data" / "augment.py",
+        "data/build.py": root / "data" / "build.py",
+        "data/dataset.py": root / "data" / "dataset.py",
+        "engine/trainer.py": root / "engine" / "trainer.py",
+        "models/rtdetr/model.py": root / "models" / "rtdetr" / "model.py",
+        "models/rtdetr/train.py": root / "models" / "rtdetr" / "train.py",
+        "models/utils/loss.py": root / "models" / "utils" / "loss.py",
+        "models/utils/ops.py": root / "models" / "utils" / "ops.py",
+        "nn/modules/block.py": root / "nn" / "modules" / "block.py",
+        "nn/modules/conv.py": root / "nn" / "modules" / "conv.py",
+        "nn/modules/transformer.py": root / "nn" / "modules" / "transformer.py",
+        "optim/muon.py": root / "optim" / "muon.py",
+        "utils/loss.py": root / "utils" / "loss.py",
+        "utils/torch_utils.py": root / "utils" / "torch_utils.py",
     }
     return {name: sha256_file(path) for name, path in paths.items()}
 
@@ -98,11 +114,19 @@ def _validate_train_only_yaml(data_path: Path, manifest: dict, *, uses_subset: b
         expected = Path(manifest["subset"]["path"]).resolve()
         if Path(train).resolve() != expected:
             raise ValueError("train-only YAML does not resolve to the sealed subset")
+    else:
+        expected = Path(manifest["dataset"]["root"]).resolve() / "images" / "train"
+        if Path(record.get("path", "")).resolve() != Path(manifest["dataset"]["root"]).resolve():
+            raise ValueError("full train-only YAML dataset root drift")
+        if Path(train).resolve() != expected:
+            raise ValueError("full train-only YAML does not resolve to sealed images/train")
 
 
 def validate_protocol_inputs(args: argparse.Namespace) -> dict:
     for value in (args.initial_state, args.data, args.protocol_manifest, args.project):
         _reject_forbidden(value)
+    if str(args.device) != "0":
+        raise ValueError("ASCV-Loc requires the single GPU device 0")
     manifest_path = args.protocol_manifest.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != "ascv-loc-matched/v2":
@@ -118,6 +142,36 @@ def validate_protocol_inputs(args: argparse.Namespace) -> dict:
     }
     if manifest.get("scientific_contract") != expected_scientific_contract:
         raise ValueError("protocol scientific contract drift")
+    predecessor_decisions = {
+        ASCVStage.MECHANISM_500: "PREFLIGHT_GO",
+        ASCVStage.SCREEN_10: "GO",
+        ASCVStage.SEED0_100: "SCREEN_GO",
+        ASCVStage.SEED1_100: "FORMAL_SEED0_GO",
+        ASCVStage.SEED2_100: "FORMAL_SEED0_GO",
+    }
+    predecessor_path = args.predecessor_evidence
+    if args.stage is ASCVStage.PREFLIGHT_1:
+        if predecessor_path is not None:
+            raise ValueError("PREFLIGHT_1 must not declare predecessor evidence")
+    else:
+        if predecessor_path is None:
+            raise ValueError(f"{args.stage.value} requires predecessor evidence")
+        _reject_forbidden(predecessor_path)
+        predecessor = json.loads(predecessor_path.resolve().read_text(encoding="utf-8"))
+        if predecessor.get("decision") != predecessor_decisions[args.stage]:
+            raise ValueError("predecessor decision does not authorize this stage")
+        if args.stage is ASCVStage.MECHANISM_500:
+            predecessor = replay_preflight_gate(predecessor)
+            protocol_binding = predecessor["protocol"]
+            if protocol_binding.get("manifest_sha256") != sha256_file(manifest_path):
+                raise ValueError("predecessor protocol manifest checksum mismatch")
+            if protocol_binding.get("source_commit") != manifest.get("source_commit"):
+                raise ValueError("predecessor source commit mismatch")
+        else:
+            if predecessor.get("protocol_manifest_sha256") != sha256_file(manifest_path):
+                raise ValueError("predecessor protocol manifest checksum mismatch")
+            if predecessor.get("protocol_source_commit") != manifest.get("source_commit"):
+                raise ValueError("predecessor source commit mismatch")
     repo_root = Path(__file__).resolve().parents[1]
     require_clean_repo(repo_root)
     actual_sources = repo_source_hashes(repo_root)
@@ -128,7 +182,11 @@ def validate_protocol_inputs(args: argparse.Namespace) -> dict:
         raise ValueError("source bundle checksum does not match the frozen protocol")
     if current_environment() != EXPECTED_ENVIRONMENT:
         raise ValueError("runtime environment does not match the frozen protocol")
-    if current_upstream_source_hashes() != EXPECTED_UPSTREAM_SOURCE_SHA256:
+    upstream_hashes = current_upstream_source_hashes()
+    if (
+        upstream_hashes != EXPECTED_UPSTREAM_SOURCE_SHA256
+        or upstream_hashes != source_record.get("upstream")
+    ):
         raise ValueError("Ultralytics source checksum does not match the frozen protocol")
     current_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],

@@ -13,6 +13,7 @@ from src.ascv_loc import (
     ASCV_TILE_RATIO,
     ASCV_TINY_BOUNDARY_PX,
     ASCV_WARMUP_EPOCHS,
+    add_preflight_checkpoint_probe,
     ascv_warmup,
     build_local_targets,
     canonical_image_id,
@@ -109,6 +110,28 @@ def test_warmup_is_frozen_three_epoch_linear_ramp() -> None:
     assert ascv_warmup(1) == 2 / 3
     assert ascv_warmup(2) == 1.0
     assert ascv_warmup(8) == 1.0
+
+
+def test_preflight_checkpoint_probe_preserves_loss_and_scientific_gradient_exactly() -> None:
+    parameter = torch.tensor([0.25, -0.5], requires_grad=True)
+    scientific_loss = parameter.square().sum()
+    runtime_probe = parameter.sin().square().mean()
+
+    without_probe = add_preflight_checkpoint_probe(
+        scientific_loss,
+        runtime_probe,
+        enabled=False,
+    )
+    with_probe = add_preflight_checkpoint_probe(
+        scientific_loss,
+        runtime_probe,
+        enabled=True,
+    )
+    gradient_without = torch.autograd.grad(without_probe, parameter, retain_graph=True)[0]
+    gradient_with = torch.autograd.grad(with_probe, parameter)[0]
+
+    torch.testing.assert_close(with_probe, without_probe, rtol=0, atol=0)
+    torch.testing.assert_close(gradient_with, gradient_without, rtol=0, atol=0)
 
 
 def test_target_anchored_crop_is_deterministic_and_contains_anchor() -> None:

@@ -177,6 +177,10 @@ The implementation must prove:
      `128`;
    - ASCV activation checkpointing must complete forward and backward
      recomputation below 24 GiB;
+   - a preflight-only nonlinear checkpoint probe is multiplied by exact zero
+     in the total loss; it cannot change any parameter update, but forces a
+     real backward recomputation even when the first batch contains only
+     detached local teachers;
    - OOM, batch reduction, scale drift, source drift, or any val/test read is
      `INVALID`.
 2. `MECHANISM_500`

@@ -4,6 +4,30 @@ from dataclasses import dataclass, field
 
 from src.ascv_loc import ASCVLocLossResult
 from src.ascv_loc_protocol import FROZEN_MECHANISM_GATE
+from src.ascv_loc_stage import ASCVStage
+
+
+def validate_local_checkpoint_runtime(
+    *,
+    stage: ASCVStage | str,
+    calls: int,
+    batchnorm_preserved: bool,
+    non_tiny_pair_count: int,
+) -> None:
+    """Fail closed on impossible local-forward behavior without rejecting teacher-only batches."""
+
+    resolved_stage = ASCVStage(stage)
+    if not batchnorm_preserved:
+        raise RuntimeError("ASCV_LOC_LOCAL_BRANCH_BATCHNORM_DRIFT")
+    requires_recompute = (
+        resolved_stage is ASCVStage.PREFLIGHT_1 or int(non_tiny_pair_count) > 0
+    )
+    allowed_calls = {2} if requires_recompute else {1, 2}
+    if int(calls) not in allowed_calls:
+        raise RuntimeError(
+            "ASCV_LOC_CHECKPOINT_RECOMPUTE_INVALID: "
+            f"stage={resolved_stage.value}, calls={calls}, allowed={sorted(allowed_calls)}"
+        )
 
 
 @dataclass
@@ -16,10 +40,24 @@ class ASCVMechanismAccumulator:
     tiny_wins: int = 0
     non_tiny_advantage_sum: float = 0.0
     non_tiny_wins: int = 0
-    _results: list[ASCVLocLossResult] = field(default_factory=list, repr=False)
+    _results: list[dict[str, int | float]] = field(default_factory=list, repr=False)
 
     def record(self, result: ASCVLocLossResult) -> None:
-        self._results.append(result)
+        self._results.append(
+            {
+                "pair_count": int(result.pair_count),
+                "tiny_pair_count": int(result.tiny_pair_count),
+                "non_tiny_pair_count": int(result.non_tiny_pair_count),
+                "tiny_teacher_advantage_sum": float(
+                    result.tiny_teacher_advantage_sum.detach().cpu()
+                ),
+                "tiny_teacher_win_count": int(result.tiny_teacher_win_count),
+                "non_tiny_teacher_advantage_sum": float(
+                    result.non_tiny_teacher_advantage_sum.detach().cpu()
+                ),
+                "non_tiny_teacher_win_count": int(result.non_tiny_teacher_win_count),
+            }
+        )
         self.batches += 1
         self.pairs += result.pair_count
         self.tiny_pairs += result.tiny_pair_count
@@ -30,20 +68,20 @@ class ASCVMechanismAccumulator:
         self.non_tiny_wins += result.non_tiny_teacher_win_count
 
     @staticmethod
-    def _scale_summary(results: list[ASCVLocLossResult]) -> dict:
-        tiny_pairs = sum(result.tiny_pair_count for result in results)
-        non_tiny_pairs = sum(result.non_tiny_pair_count for result in results)
-        tiny_advantage = sum(float(result.tiny_teacher_advantage_sum.cpu()) for result in results)
-        non_tiny_advantage = sum(float(result.non_tiny_teacher_advantage_sum.cpu()) for result in results)
-        tiny_wins = sum(result.tiny_teacher_win_count for result in results)
-        non_tiny_wins = sum(result.non_tiny_teacher_win_count for result in results)
+    def _scale_summary(results: list[dict[str, int | float]]) -> dict:
+        tiny_pairs = sum(int(result["tiny_pair_count"]) for result in results)
+        non_tiny_pairs = sum(int(result["non_tiny_pair_count"]) for result in results)
+        tiny_advantage = sum(float(result["tiny_teacher_advantage_sum"]) for result in results)
+        non_tiny_advantage = sum(float(result["non_tiny_teacher_advantage_sum"]) for result in results)
+        tiny_wins = sum(int(result["tiny_teacher_win_count"]) for result in results)
+        non_tiny_wins = sum(int(result["non_tiny_teacher_win_count"]) for result in results)
         return {
             "batches": len(results),
-            "pairs": sum(result.pair_count for result in results),
+            "pairs": sum(int(result["pair_count"]) for result in results),
             "tiny_pairs": tiny_pairs,
             "non_tiny_pairs": non_tiny_pairs,
-            "tiny_batches_with_pairs": sum(result.tiny_pair_count > 0 for result in results),
-            "non_tiny_batches_with_pairs": sum(result.non_tiny_pair_count > 0 for result in results),
+            "tiny_batches_with_pairs": sum(int(result["tiny_pair_count"]) > 0 for result in results),
+            "non_tiny_batches_with_pairs": sum(int(result["non_tiny_pair_count"]) > 0 for result in results),
             "tiny_teacher_advantage_mean": tiny_advantage / tiny_pairs if tiny_pairs else None,
             "tiny_teacher_win_rate": tiny_wins / tiny_pairs if tiny_pairs else None,
             "non_tiny_teacher_advantage_mean": non_tiny_advantage / non_tiny_pairs if non_tiny_pairs else None,

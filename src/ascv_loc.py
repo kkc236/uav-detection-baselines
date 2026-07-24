@@ -21,6 +21,17 @@ ASCV_IMAGE_SIZE = 640
 ASCV_CROP_SIZE = 384
 
 
+def add_preflight_checkpoint_probe(
+    scientific_loss: torch.Tensor,
+    checkpoint_probe: torch.Tensor,
+    *,
+    enabled: bool,
+) -> torch.Tensor:
+    """Force runtime recomputation in preflight without changing loss or gradients."""
+
+    return scientific_loss + checkpoint_probe * 0.0 if enabled else scientific_loss
+
+
 @dataclass(frozen=True)
 class LocalTargets:
     boxes: torch.Tensor

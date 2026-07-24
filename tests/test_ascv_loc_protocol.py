@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,6 +46,11 @@ def _parent_protocol(tmp_path: Path, monkeypatch, *, seed: int = 0) -> tuple[Pat
     monkeypatch.setattr(
         protocol_module,
         "EXPECTED_UPSTREAM_SOURCE_SHA256",
+        {"head.py": "HEAD", "rtdetr-l.yaml": "YAML", "tasks.py": "TASKS"},
+    )
+    monkeypatch.setattr(
+        protocol_module,
+        "EXPECTED_PARENT_SOURCE_SHA256",
         {"head.py": "HEAD", "rtdetr-l.yaml": "YAML", "tasks.py": "TASKS"},
     )
     monkeypatch.setattr(protocol_module, "REQUIRED_PARENT_SEEDS", frozenset({seed}))
@@ -118,6 +125,11 @@ def _parent_protocol(tmp_path: Path, monkeypatch, *, seed: int = 0) -> tuple[Pat
     monkeypatch.setattr(authority_module, "EXPECTED_SUBSET_SHA256", subset_semantic_sha)
     monkeypatch.setattr(
         authority_module,
+        "EXPECTED_PARENT_SOURCE_SHA256",
+        {"head.py": "HEAD", "rtdetr-l.yaml": "YAML", "tasks.py": "TASKS"},
+    )
+    monkeypatch.setattr(
+        authority_module,
         "EXPECTED_UPSTREAM_SOURCE_SHA256",
         {"head.py": "HEAD", "rtdetr-l.yaml": "YAML", "tasks.py": "TASKS"},
     )
@@ -172,6 +184,8 @@ def test_train_only_yamls_never_resolve_real_val_or_test_dev(tmp_path: Path, mon
 
     assert subset_data["train"] == subset_data["val"]
     assert full_data["train"] == full_data["val"]
+    assert Path(full_data["path"]).resolve() == (tmp_path / "dataset").resolve()
+    assert Path(full_data["train"]).resolve() == (tmp_path / "dataset/images/train").resolve()
     assert "test" not in subset_data and "test" not in full_data
 
 
@@ -310,3 +324,43 @@ def test_clean_repo_gate_rejects_tracked_and_untracked_source_drift(tmp_path: Pa
     (repo / "shadow.py").write_text("VALUE = 3\n")
     with pytest.raises(ValueError, match="source tree is not clean"):
         require_clean_repo(repo)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "scripts/prepare_ascv_loc_protocol.py",
+        "scripts/adjudicate_ascv_loc.py",
+    ],
+)
+def test_protocol_entrypoints_run_directly_from_repo_root(entrypoint: str) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, entrypoint, "--help"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_training_batch_digest_binds_ordered_images_tensor_and_targets() -> None:
+    batch = {
+        "im_file": ["b.jpg", "a.jpg"],
+        "img": torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2),
+        "cls": torch.tensor([[1.0], [2.0]]),
+        "bboxes": torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.2, 0.1]]),
+        "batch_idx": torch.tensor([0.0, 1.0]),
+    }
+
+    first = authority_module.training_batch_sha256(batch)
+    assert authority_module.training_batch_sha256(batch) == first
+
+    reordered = dict(batch)
+    reordered["im_file"] = list(reversed(batch["im_file"]))
+    assert authority_module.training_batch_sha256(reordered) != first
+
+    changed_tensor = dict(batch)
+    changed_tensor["img"] = batch["img"].clone()
+    changed_tensor["img"][0, 0, 0, 0] += 1
+    assert authority_module.training_batch_sha256(changed_tensor) != first

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 
-from src.ascv_loc_adjudicator import adjudicate_formal, adjudicate_screen
+import pytest
+
+from src.ascv_loc_adjudicator import adjudicate_formal, adjudicate_preflight, adjudicate_screen
 
 
 METRICS = ("mAP50-95", "AP-tiny-SBR", "tiny_recall", "AP75", "AP-large-SBR")
@@ -133,3 +135,110 @@ def test_formal_fails_when_any_original_gate_or_attribution_gate_fails() -> None
     records["0"]["control"]["A"]["mAP50-95"] = float("nan")
     decision = adjudicate_screen(records)
     assert decision["decision"] == "INVALID"
+
+
+def _preflight_summary(arm: str) -> dict:
+    return {
+        "schema_version": "ascv-loc-training-summary/v2",
+        "stage": "PREFLIGHT_1",
+        "arm": arm,
+        "seed": 0,
+        "protocol_manifest_sha256": "manifest",
+        "protocol_source_commit": "a" * 40,
+        "source_repo_bundle_sha256": "repo",
+        "source_upstream_bundle_sha256": "upstream",
+        "initial_state_sha256": "initial",
+        "initial_state_common_fingerprint": "fingerprint",
+        "data_sha256": "data",
+        "subset_binding": {
+            "count": 647,
+            "semantic_sha256": "semantic",
+            "file_sha256": "file",
+        },
+        "batch_canaries": [{"epoch": 0, "batch": 1, "sha256": "A" * 64}],
+        "batch": 8,
+        "workers": 8,
+        "observed_tensor_batch_sizes": [8],
+        "loader": {
+            "trainer_batch_size": 8,
+            "per_rank_batch_size": 8,
+            "loader_batch_size": 8,
+            "loader_num_workers": 8,
+        },
+        "optimizer": {
+            "class": "MuSGD",
+            "requested_lr0": 0.01,
+            "requested_momentum": 0.937,
+            "groups": [{"lr": 0.01, "momentum": 0.937, "weight_decay": 0.0005}],
+        },
+        "amp": True,
+        "amp_scale": 128.0,
+        "amp_scale_min": 128.0,
+        "amp_scale_max": 128.0,
+        "successful_batches": 1,
+        "optimizer_attempts": 1,
+        "internal_validation_bypass_count": 1,
+        "test_loader_is_none": True,
+        "hardware": {"gpu": "NVIDIA GeForce RTX 4090", "device": "cuda:0"},
+        "cuda_peak_reserved_mib": 20000.0 if arm == "ascv" else 12000.0,
+        "local_forward_calls": 2 if arm == "ascv" else 0,
+        "local_forward_call_histogram": {"1": 0, "2": 1 if arm == "ascv" else 0},
+        "local_bn_preserved_batches": 1 if arm == "ascv" else 0,
+        "checkpoint": {"kind": "last.pt", "path": f"/evidence/{arm}/last.pt", "sha256": arm},
+    }
+
+
+def test_preflight_go_requires_exact_matched_control_and_ascv_runtime() -> None:
+    decision = adjudicate_preflight(
+        {"control": _preflight_summary("control"), "ascv": _preflight_summary("ascv")}
+    )
+
+    assert decision["decision"] == "PREFLIGHT_GO"
+    assert decision["failures"] == []
+    assert decision["protocol_manifest_sha256"] == "manifest"
+    assert decision["protocol_source_commit"] == "a" * 40
+
+
+@pytest.mark.parametrize(
+    ("arm", "field", "value"),
+    [
+        ("control", "batch", 4),
+        ("ascv", "amp_scale_max", 256.0),
+        ("ascv", "local_forward_calls", 1),
+        ("ascv", "local_bn_preserved_batches", 0),
+        ("ascv", "protocol_manifest_sha256", "forged"),
+        ("ascv", "batch_canaries", [{"epoch": 0, "batch": 1, "sha256": "different"}]),
+    ],
+)
+def test_preflight_is_invalid_on_runtime_or_pairing_drift(arm: str, field: str, value) -> None:
+    summaries = {"control": _preflight_summary("control"), "ascv": _preflight_summary("ascv")}
+    summaries[arm][field] = value
+
+    decision = adjudicate_preflight(summaries)
+
+    assert decision["decision"] == "INVALID"
+    assert decision["failures"]
+
+
+@pytest.mark.parametrize(
+    "canaries",
+    [
+        [],
+        [{"epoch": 0, "batch": 1, "sha256": "A" * 63}],
+        [{"epoch": 1, "batch": 1, "sha256": "A" * 64}],
+        [{"epoch": 0, "batch": 2, "sha256": "A" * 64}],
+        [
+            {"epoch": 0, "batch": 1, "sha256": "A" * 64},
+            {"epoch": 0, "batch": 2, "sha256": "B" * 64},
+        ],
+    ],
+)
+def test_preflight_rejects_empty_malformed_or_multiple_batch_canaries(canaries) -> None:
+    summaries = {"control": _preflight_summary("control"), "ascv": _preflight_summary("ascv")}
+    summaries["control"]["batch_canaries"] = copy.deepcopy(canaries)
+    summaries["ascv"]["batch_canaries"] = copy.deepcopy(canaries)
+
+    decision = adjudicate_preflight(summaries)
+
+    assert decision["decision"] == "INVALID"
+    assert decision["failures"]
