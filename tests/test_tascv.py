@@ -259,12 +259,13 @@ def test_crop_v2_geometry_requires_integer_384_square(crop) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_cpu_crops_are_normalized_to_the_cuda_prediction_device() -> None:
     device = torch.device("cuda")
+    full = torch.tensor(
+        [[0.5, 0.5, 0.03, 0.03]],
+        device=device,
+        requires_grad=True,
+    )
     result = compute_tascv_loss(
-        full_pred_boxes=torch.tensor(
-            [[0.5, 0.5, 0.03, 0.03]],
-            device=device,
-            requires_grad=True,
-        ),
+        full_pred_boxes=full,
         local_pred_boxes=torch.tensor(
             [[0.5, 0.5, 0.04, 0.04]],
             device=device,
@@ -278,9 +279,9 @@ def test_cpu_crops_are_normalized_to_the_cuda_prediction_device() -> None:
         image_hw=(640, 640),
     )
 
-    assert result.loss.device == device
+    assert result.loss.device == full.device
     assert result.loss.dtype == torch.float32
-    assert result.tiny_teacher_advantage_sum.device == device
+    assert result.tiny_teacher_advantage_sum.device == full.device
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
