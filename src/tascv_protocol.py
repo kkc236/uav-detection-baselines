@@ -164,6 +164,24 @@ FROZEN_FORMAL_THRESHOLDS = {
         "strictly_greater": True,
     },
 }
+FROZEN_CONFIRMATION_CONTRACT = {
+    "state": "SEALED_UNOPENED",
+    "seeds": [0, 1, 2],
+    "systems": ["A", "route_control", "route_treatment"],
+    "prediction_files": [
+        f"seed{seed}_{system}.json"
+        for seed in range(3)
+        for system in ("A", "route_control", "route_treatment")
+    ],
+    "image_root_derivation": {
+        "base": "dataset.root",
+        "relative_parts": ["images", "test", "dev"],
+        "join_rule": "parts[0]/(parts[1]+'-'+parts[2])",
+    },
+    "claim_file": "confirmation_open_claim.json",
+    "claim_creation": "O_CREAT|O_EXCL",
+    "one_shot": True,
+}
 FROZEN_STAGE_CONTRACT = {
     "PREFLIGHT_1": {
         "seeds": [0],
@@ -288,13 +306,31 @@ CONTROL_SLOTS = tuple(
 )
 
 REPO_SOURCE_FILES = (
+    "scripts/adjudicate_saded_stage.py",
     "scripts/adjudicate_tascv.py",
+    "scripts/cache_saded_endpoint.py",
+    "scripts/evaluate_saded_confirmation_once.py",
+    "scripts/evaluate_saded_stage.py",
     "scripts/prepare_tascv_protocol.py",
     "scripts/resolve_saded_controls.py",
+    "scripts/route_saded_pair.py",
+    "scripts/seal_saded_confirmation_predictions.py",
     "scripts/train_rtdetr_tascv.py",
     "src/ascv_loc.py",
     "src/ascv_loc_protocol.py",
     "src/rtdetr_tascv.py",
+    "src/saded.py",
+    "src/saded_adjudicator.py",
+    "src/saded_confirmation.py",
+    "src/saded_stage.py",
+    "src/saded_stage_protocol.py",
+    "src/sbr_artifacts.py",
+    "src/sbr_fusion.py",
+    "src/sbr_g0.py",
+    "src/sbr_geometry.py",
+    "src/sbr_metrics.py",
+    "src/sbr_ppaf.py",
+    "src/sbr_v2_audit.py",
     "src/tascv.py",
     "src/tascv_adjudicator.py",
     "src/tascv_cli.py",
@@ -539,6 +575,7 @@ def frozen_scientific_contract() -> dict:
         "mechanism_gate": FROZEN_MECHANISM_GATE,
         "screen_gate": FROZEN_SCREEN_GATE,
         "formal_thresholds": FROZEN_FORMAL_THRESHOLDS,
+        "confirmation": FROZEN_CONFIRMATION_CONTRACT,
     }
 
 

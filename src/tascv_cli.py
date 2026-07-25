@@ -24,6 +24,7 @@ from src.tascv_protocol import (
     EXPECTED_SUBSET_SHA256,
     EXPECTED_UPSTREAM_SOURCE_SHA256,
     FROZEN_CROP_CONTRACT,
+    FROZEN_CONFIRMATION_CONTRACT,
     FROZEN_FORMAL_THRESHOLDS,
     FROZEN_MECHANISM_GATE,
     FROZEN_SCREEN_GATE,
@@ -46,6 +47,11 @@ from src.tascv_adjudicator import (
     replay_mechanism_gate,
     replay_preflight_gate,
     validate_paired_control_summary,
+)
+from src.saded_adjudicator import (
+    replay_formal_seed0_gate,
+    replay_screen_seed0_gate,
+    replay_screen_three_seed_gate,
 )
 
 
@@ -166,6 +172,7 @@ def _scientific_contract() -> dict:
         "mechanism_gate": FROZEN_MECHANISM_GATE,
         "screen_gate": FROZEN_SCREEN_GATE,
         "formal_thresholds": FROZEN_FORMAL_THRESHOLDS,
+        "confirmation": FROZEN_CONFIRMATION_CONTRACT,
     }
 
 
@@ -251,15 +258,14 @@ def _validate_predecessor(
     ):
         replay_mechanism_gate(predecessor)
     elif args.stage is TASCVStage.SCREEN_10:
-        raise ValueError(
-            "T-ASCV screen seeds1/2 remain closed until the new "
-            "seed0 attribution predecessor replay is implemented"
-        )
+        replay_screen_seed0_gate(predecessor)
+    elif (
+        args.stage is TASCVStage.FORMAL_100
+        and args.seed == 0
+    ):
+        replay_screen_three_seed_gate(predecessor)
     elif args.stage is TASCVStage.FORMAL_100:
-        raise ValueError(
-            "T-ASCV formal launch remains closed until the new "
-            "SADED screen predecessor replay is implemented"
-        )
+        replay_formal_seed0_gate(predecessor)
     if (
         predecessor.get("protocol_manifest_sha256") != manifest_sha
         or predecessor.get("protocol_source_commit")

@@ -31,6 +31,7 @@ from src.tascv_protocol import (
     EXPECTED_SUBSET_SHA256,
     EXPECTED_UPSTREAM_SOURCE_SHA256,
     FROZEN_CROP_CONTRACT,
+    FROZEN_CONFIRMATION_CONTRACT,
     FROZEN_FORMAL_THRESHOLDS,
     FROZEN_MECHANISM_GATE,
     FROZEN_SCREEN_GATE,
@@ -610,6 +611,7 @@ def finalize_protocol(
             "mechanism_gate": FROZEN_MECHANISM_GATE,
             "screen_gate": FROZEN_SCREEN_GATE,
             "formal_thresholds": FROZEN_FORMAL_THRESHOLDS,
+            "confirmation": FROZEN_CONFIRMATION_CONTRACT,
         },
         "control_allowlist": {
             "path": control_allowlist.resolve().as_posix(),
