@@ -22,7 +22,10 @@ def _args(tmp_path: Path) -> Namespace:
         f"train: {train}\n"
         f"val: {train}\n"
         "names:\n"
-        + "".join(f"  {index}: class-{index}\n" for index in range(10))
+        + "".join(
+            f"  {index}: {name}\n"
+            for index, name in cli.EXPECTED_NAMES.items()
+        )
     )
     initial = tmp_path / "initial-state-seed0.pt"
     torch.save({"format_version": 1}, initial)
@@ -218,4 +221,28 @@ def test_validation_rejects_source_or_data_drift(
     _patch_authorities(monkeypatch, args)
     args.data.write_text("changed")
     with pytest.raises(ValueError, match="data binding drift"):
+        cli.validate_protocol_inputs(args)
+
+
+def test_train_only_yaml_rejects_test_key_and_class_mapping_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args = _args(tmp_path)
+    _patch_authorities(monkeypatch, args)
+    payload = args.data.read_text()
+    args.data.write_text(payload + "test: images/test\n")
+    manifest = json.loads(args.protocol_manifest.read_text())
+    manifest["data"]["sha256"] = cli.sha256_file(args.data)
+    args.protocol_manifest.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        cli.validate_protocol_inputs(args)
+
+    args = _args(tmp_path / "names")
+    _patch_authorities(monkeypatch, args)
+    args.data.write_text(args.data.read_text().replace("0: pedestrian", "0: person"))
+    manifest = json.loads(args.protocol_manifest.read_text())
+    manifest["data"]["sha256"] = cli.sha256_file(args.data)
+    args.protocol_manifest.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="class mapping drift"):
         cli.validate_protocol_inputs(args)

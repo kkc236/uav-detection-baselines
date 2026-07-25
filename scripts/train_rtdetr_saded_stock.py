@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import io
 import os
 import sys
 from pathlib import Path
@@ -18,6 +20,7 @@ from src.saded_stock_cli import (
     source_closure,
     validate_protocol_inputs,
 )
+from src.saded_single_model_evidence import validate_checkpoint_metadata
 from src.tascv_protocol import (
     EXPECTED_UPSTREAM_SOURCE_SHA256,
     FROZEN_OPTIMIZER_OBSERVATION,
@@ -69,6 +72,7 @@ def validate_runtime_summary(summary: dict) -> list[str]:
         "source_unchanged": True,
         "data_unchanged": True,
         "initial_state_unchanged": True,
+        "protocol_manifest_unchanged": True,
     }
     labels = {
         "completed_epochs": "completed epoch count drift",
@@ -81,6 +85,9 @@ def validate_runtime_summary(summary: dict) -> list[str]:
         "source_unchanged": "source changed during training",
         "data_unchanged": "data changed during training",
         "initial_state_unchanged": "initial state changed during training",
+        "protocol_manifest_unchanged": (
+            "protocol manifest changed during training"
+        ),
     }
     amp_keys = {"amp", "amp_scale", "amp_scale_min", "amp_scale_max"}
     for key, expected in exact_values.items():
@@ -121,26 +128,68 @@ def validate_runtime_summary(summary: dict) -> list[str]:
     ) or len(canaries) != 3:
         failures.append("batch canary digest drift")
     checkpoint = summary.get("checkpoint", {})
+    checkpoint_file_valid = False
+    if isinstance(checkpoint, dict):
+        checkpoint_path = Path(str(checkpoint.get("path", "")))
+        if checkpoint_path.is_file():
+            try:
+                checkpoint_bytes = checkpoint_path.read_bytes()
+                checkpoint_sha = hashlib.sha256(
+                    checkpoint_bytes
+                ).hexdigest().upper()
+                checkpoint_payload = torch.load(
+                    io.BytesIO(checkpoint_bytes),
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                checkpoint_file_valid = (
+                    checkpoint_sha == checkpoint.get("sha256")
+                    and isinstance(checkpoint_payload, dict)
+                    and checkpoint_payload.get("epoch") == 99
+                    and isinstance(
+                        checkpoint_payload.get("optimizer"), dict
+                    )
+                    and checkpoint_payload.get("ema") is not None
+                )
+                validate_checkpoint_metadata(checkpoint_payload)
+                del checkpoint_payload
+                del checkpoint_bytes
+            except Exception:
+                checkpoint_file_valid = False
     if (
         not isinstance(checkpoint, dict)
         or checkpoint.get("kind") != "last.pt"
+        or checkpoint.get("path") != checkpoint.get("expected_path")
         or not _valid_sha(checkpoint.get("sha256"))
         or checkpoint.get("loadable") is not True
+        or checkpoint.get("epoch") != 99
+        or checkpoint.get("optimizer_present") is not True
+        or checkpoint.get("ema_present") is not True
+        or checkpoint.get("train_result_epochs") != 100
+        or checkpoint.get("train_args_match") is not True
+        or not checkpoint_file_valid
     ):
         failures.append("last checkpoint is invalid")
     return failures
 
 
-def _run(args, protocol: dict) -> None:
+def _run(args, protocol: dict, validated_manifest_sha: str) -> None:
+    source_before = source_closure(ROOT)
+    upstream_before = current_upstream_source_hashes()
+    manifest_before = sha256_file(Path(args.protocol_manifest).resolve())
+    data_before = sha256_file(Path(args.data).resolve())
+    initial_before = sha256_file(Path(args.initial_state).resolve())
+    if (
+        manifest_before != validated_manifest_sha
+        or data_before != protocol["data"]["sha256"]
+        or initial_before != protocol["initial_state"]["sha256"]
+        or source_before != protocol["runtime_source"]["repo_files"]
+    ):
+        raise RuntimeError("SADED_STOCK_PRELAUNCH_BINDING_DRIFT")
     from src.rtdetr_tascv import (
         MATCHED_AMP_SCALE,
         TASCVControlTrainer,
     )
-
-    source_before = source_closure(ROOT)
-    upstream_before = current_upstream_source_hashes()
-    data_before = sha256_file(Path(args.data).resolve())
-    initial_before = sha256_file(Path(args.initial_state).resolve())
     trainer = TASCVControlTrainer(
         overrides=build_settings(args),
         stage=TASCVStage.FORMAL_100,
@@ -162,21 +211,48 @@ def _run(args, protocol: dict) -> None:
 
     checkpoint_path = Path(trainer.last).resolve()
     checkpoint_loadable = False
+    checkpoint_sha = ""
+    checkpoint_epoch = None
+    optimizer_present = False
+    ema_present = False
+    train_result_epochs = 0
+    train_args_match = False
     if checkpoint_path.is_file():
         try:
+            checkpoint_bytes = checkpoint_path.read_bytes()
+            checkpoint_sha = hashlib.sha256(checkpoint_bytes).hexdigest().upper()
             loaded = torch.load(
-                checkpoint_path,
+                io.BytesIO(checkpoint_bytes),
                 map_location="cpu",
                 weights_only=False,
             )
             checkpoint_loadable = isinstance(loaded, dict)
+            checkpoint_epoch = loaded.get("epoch")
+            optimizer_present = isinstance(loaded.get("optimizer"), dict)
+            ema_present = loaded.get("ema") is not None
+            train_results = loaded.get("train_results")
+            if isinstance(train_results, dict):
+                epochs = train_results.get("epoch")
+                if isinstance(epochs, list):
+                    train_result_epochs = len(epochs)
+            checkpoint_args = loaded.get("train_args")
+            expected_args = build_settings(args)
+            train_args_match = (
+                isinstance(checkpoint_args, dict)
+                and all(
+                    checkpoint_args.get(key) == value
+                    for key, value in expected_args.items()
+                )
+            )
             del loaded
+            del checkpoint_bytes
         except Exception:
             checkpoint_loadable = False
     source_after = source_closure(ROOT)
     upstream_after = current_upstream_source_hashes()
     data_after = sha256_file(Path(args.data).resolve())
     initial_after = sha256_file(Path(args.initial_state).resolve())
+    manifest_after = sha256_file(Path(args.protocol_manifest).resolve())
     summary = {
         "schema_version": "saded-stock-training-summary/v1",
         "stage": "FORMAL_100",
@@ -237,8 +313,18 @@ def _run(args, protocol: dict) -> None:
             and upstream_before == upstream_after
             == EXPECTED_UPSTREAM_SOURCE_SHA256
         ),
-        "data_unchanged": data_before == data_after,
-        "initial_state_unchanged": initial_before == initial_after,
+        "data_unchanged": (
+            data_before == data_after == protocol["data"]["sha256"]
+        ),
+        "initial_state_unchanged": (
+            initial_before
+            == initial_after
+            == protocol["initial_state"]["sha256"]
+        ),
+        "protocol_manifest_unchanged": (
+            manifest_before == manifest_after
+            == validated_manifest_sha
+        ),
         "hardware": {
             "gpu": (
                 torch.cuda.get_device_name(0)
@@ -250,12 +336,16 @@ def _run(args, protocol: dict) -> None:
         "checkpoint": {
             "kind": "last.pt",
             "path": checkpoint_path.as_posix(),
-            "sha256": (
-                sha256_file(checkpoint_path)
-                if checkpoint_path.is_file()
-                else ""
-            ),
+            "expected_path": (
+                expected_target / "weights" / "last.pt"
+            ).as_posix(),
+            "sha256": checkpoint_sha,
             "loadable": checkpoint_loadable,
+            "epoch": checkpoint_epoch,
+            "optimizer_present": optimizer_present,
+            "ema_present": ema_present,
+            "train_result_epochs": train_result_epochs,
+            "train_args_match": train_args_match,
         },
     }
     if torch.cuda.is_available():
@@ -290,10 +380,15 @@ def _run(args, protocol: dict) -> None:
 
 def main() -> None:
     args = build_parser().parse_args()
+    manifest_path = Path(args.protocol_manifest).resolve()
+    manifest_sha_before = sha256_file(manifest_path)
     protocol = validate_protocol_inputs(args)
+    validated_manifest_sha = sha256_file(manifest_path)
+    if manifest_sha_before != validated_manifest_sha:
+        raise RuntimeError("SADED_STOCK_MANIFEST_CHANGED_DURING_VALIDATION")
     target = Path(args.project).resolve() / args.name
     try:
-        _run(args, protocol)
+        _run(args, protocol, validated_manifest_sha)
     except BaseException as error:
         normalized = target.as_posix().lower()
         if "test-dev" not in normalized and "test_dev" not in normalized:

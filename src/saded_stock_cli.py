@@ -23,6 +23,7 @@ from src.tascv_protocol import (
     EXPECTED_INITIAL_STATE_SHA256,
     EXPECTED_UPSTREAM_SOURCE_SHA256,
     FROZEN_TRAINING_CONTRACT,
+    REPO_SOURCE_FILES,
     current_environment,
     current_upstream_source_hashes,
     require_clean_repo,
@@ -34,17 +35,29 @@ from src.tascv_stage import TASCVStage
 
 
 PROTOCOL_SCHEMA = "saded-fresh100-stock/v1"
-SOURCE_FILES = (
-    "scripts/train_rtdetr_saded_stock.py",
-    "src/ascv_loc.py",
-    "src/ascv_loc_protocol.py",
-    "src/rtdetr_tascv.py",
-    "src/saded_stock_cli.py",
-    "src/tascv_cli.py",
-    "src/tascv_protocol.py",
-    "src/tascv_stage.py",
+SOURCE_FILES = tuple(
+    sorted(
+        set(REPO_SOURCE_FILES)
+        | {
+            "scripts/train_rtdetr_saded_stock.py",
+            "src/saded_single_model_evidence.py",
+            "src/saded_stock_cli.py",
+        }
+    )
 )
 MIN_FREE_BYTES = 3 * 1024**3
+EXPECTED_NAMES = {
+    0: "pedestrian",
+    1: "people",
+    2: "bicycle",
+    3: "car",
+    4: "van",
+    5: "truck",
+    6: "tricycle",
+    7: "awning-tricycle",
+    8: "bus",
+    9: "motor",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,7 +128,10 @@ def build_settings(args: Namespace) -> dict:
 
 def _validate_train_only_yaml(path: Path) -> None:
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"path", "train", "val", "names"}
+    ):
         raise ValueError("fresh stock data YAML must be a mapping")
     expected_train = (
         Path(EXPECTED_DATASET_ROOT).resolve() / "images" / "train"
@@ -129,8 +145,8 @@ def _validate_train_only_yaml(path: Path) -> None:
         != expected_train
     ):
         raise ValueError("fresh stock data must bind only the full train split")
-    if len(payload.get("names", {})) != 10:
-        raise ValueError("fresh stock data class count drift")
+    if payload.get("names") != EXPECTED_NAMES:
+        raise ValueError("fresh stock data class mapping drift")
     _reject_forbidden_record(payload)
 
 
