@@ -157,6 +157,54 @@ RAW_VIEW_KEYS = {
     "class_id",
 }
 
+LETTERBOX_TRANSFORM_KEYS = {
+    "source_width",
+    "source_height",
+    "network_width",
+    "network_height",
+    "gain_x",
+    "gain_y",
+    "pad_x",
+    "pad_y",
+    "resized_width",
+    "resized_height",
+    "auto",
+    "scale_fill",
+    "scaleup",
+    "center",
+    "padding_value",
+}
+
+
+def _letterbox_transform(record: Mapping[str, Any]) -> LetterboxTransform:
+    if set(record) != LETTERBOX_TRANSFORM_KEYS:
+        raise ValueError("SADED letterbox-transform schema drift")
+    network_width = record["network_width"]
+    network_height = record["network_height"]
+    if (network_width is None) != (network_height is None):
+        raise ValueError("SADED letterbox-transform network shape drift")
+    network_shape = (
+        None
+        if network_width is None
+        else (network_height, network_width)
+    )
+    return LetterboxTransform(
+        source_width=record["source_width"],
+        source_height=record["source_height"],
+        network_shape=network_shape,
+        gain_x=record["gain_x"],
+        gain_y=record["gain_y"],
+        pad_x=record["pad_x"],
+        pad_y=record["pad_y"],
+        resized_width=record["resized_width"],
+        resized_height=record["resized_height"],
+        auto=record["auto"],
+        scale_fill=record["scale_fill"],
+        scaleup=record["scaleup"],
+        center=record["center"],
+        padding_value=record["padding_value"],
+    )
+
 
 def _raw_view(record: Mapping[str, Any]) -> RawViewRecord:
     if set(record) != RAW_VIEW_KEYS:
@@ -174,7 +222,7 @@ def _raw_view(record: Mapping[str, Any]) -> RawViewRecord:
             if record["tile_bounds"] is None
             else tuple(record["tile_bounds"])
         ),
-        transform=LetterboxTransform(**record["transform"]),
+        transform=_letterbox_transform(record["transform"]),
         network_xyxy=tuple(record["network_xyxy"]),
         view_xyxy=tuple(record["view_xyxy"]),
         global_xyxy=tuple(record["global_xyxy"]),
