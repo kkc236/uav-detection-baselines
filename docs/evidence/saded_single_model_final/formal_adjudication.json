@@ -1,0 +1,90 @@
+{
+  "schema_version": "saded-single-model-public-evidence/v1",
+  "method": {
+    "name": "SADED-SM",
+    "description": "single-model scale-aware multi-view routing",
+    "detector": "Ultralytics RT-DETR-L",
+    "detector_epochs": 100,
+    "seed": 0,
+    "router_training_free": true,
+    "views": {
+      "full": 1,
+      "local_tiles": 4,
+      "total_detector_forwards_per_image": 5
+    }
+  },
+  "scope": {
+    "dataset": "VisDrone",
+    "split": "development val",
+    "image_count": 548,
+    "seeds": [
+      0
+    ],
+    "test_dev_read": false,
+    "claim": "single-seed development-validation main experiment"
+  },
+  "checkpoint": {
+    "sha256": "54ce60289dd34c6750b8ba5f7516eefcf3afef6c174c6e4f3b1ef810c883099b",
+    "fixed_endpoint_epoch": 100,
+    "pretrained": false,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "seed": 0,
+    "deterministic": true,
+    "amp": true,
+    "max_det": 300,
+    "nms": false
+  },
+  "absolute_metrics": {
+    "arm_a": {
+      "AP-tiny-SBR": 0.07105714429171933,
+      "mAP50-95": 0.18062139655466955,
+      "tiny_recall": 0.5537479710786484,
+      "AP75": 0.16666558492813208,
+      "AP-large-SBR": 0.14584679380950474
+    },
+    "saded_sm": {
+      "AP-tiny-SBR": 0.11025116665398038,
+      "mAP50-95": 0.20647030730840651,
+      "tiny_recall": 0.6555260439722591,
+      "AP75": 0.18690233019506805,
+      "AP-large-SBR": 0.1439375720841185
+    }
+  },
+  "deltas": {
+    "AP-tiny-SBR": 0.03919402236226105,
+    "mAP50-95": 0.025848910753736964,
+    "tiny_recall": 0.10177807289361074,
+    "AP75": 0.020236745266935974,
+    "AP-large-SBR": -0.0019092217253862398
+  },
+  "thresholds": {
+    "AP-tiny-SBR": 0.01,
+    "mAP50-95": 0.003,
+    "tiny_recall": 0.02,
+    "AP75": -0.002,
+    "AP-large-SBR": -0.005
+  },
+  "gates": {
+    "AP-tiny-SBR": true,
+    "mAP50-95": true,
+    "tiny_recall": true,
+    "AP75": true,
+    "AP-large-SBR": true
+  },
+  "decision": "SADED_SINGLE_SEED_GO",
+  "integrity": {
+    "successor_source_commit": "7f1f1e11f0c0c6d373e6172a7511ee645b4421cd",
+    "successor_source_tree": "0bbe6a3b76e37743184b91e670d28f5dae51b9e3",
+    "server_tests": "829 passed",
+    "formal_checksums_sha256": "731a74f9be5ff53f589cfa8cbd500b29c2fa1678830d410ae76245ff1cf55e29",
+    "formal_manifest_sha256": "5c03084d5ff39e7779952277c9c97f6c59508cc68a8d77e25ff52bb346ac6e00",
+    "formal_adjudication_sha256": "2d46754db4166a10e64c6ec17576679bc2ddb20ad2bd8884e111fe488c00d278",
+    "external_anchor_sha256": "9beb847c2d11db3ab67fd08c1a9c8990f4811674e2ca4864d9d8fb96f15eef02",
+    "parent_tascv_decision": "TASCV_STOP",
+    "parent_tascv_gate_sha256": "e039a9111e22badee2884fd25f25dd9b38805da29f678ffb5476abeed7652e40",
+    "route_predictions_sha256": "4c8e4998f0cbdbbc5963fecbf05ac4dc26d56db6b95d71a076fd129a66aa740e",
+    "all_invariants_passed": true
+  }
+}

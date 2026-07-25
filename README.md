@@ -2,6 +2,10 @@
 
 This workspace reproduces baseline detectors for UAV aerial object detection.
 
+Innovation 1 final seed-0 development result:
+[SADED-SM final handoff](docs/final-saded-single-model-result-handoff.md) and
+[public adjudication evidence](docs/evidence/saded_single_model_final/formal_adjudication.json).
+
 Scientific problems:
 
 1. Background interference: small objects have weak responses in complex aerial backgrounds.
