@@ -23,6 +23,10 @@ password is supplied only through the child process environment and is never
 written to the repository, state, or logs. It polls the remote `status`,
 `exit_code`, and original process identities.
 
+Mutable watcher state is stored outside the Git worktree at
+`tmp/runtime/sbr-fresh100-publisher`. This avoids both ephemeral application
+directories and contamination of the clean result branch.
+
 For `TRAIN_COMPLETE` with exit code `0`, it first records a
 `SUCCESS_CANDIDATE`. It then downloads the final training summary,
 configuration, protocol, log, results table, and `weights/last.pt`; replays

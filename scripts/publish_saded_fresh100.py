@@ -25,6 +25,13 @@ import paramiko
 import psutil
 
 
+def resolve_state_root(
+    configured: str | None,
+    default: Path,
+) -> Path:
+    return Path(configured).resolve() if configured else default.resolve()
+
+
 RUN_ID = "final-saded-fresh100-c5c35374"
 HOST = "36.103.177.186"
 USER = "ubuntu"
@@ -48,10 +55,11 @@ VALIDATOR_ROOT = (
 EVIDENCE_ROOT = (
     PUBLISHER_ROOT / "docs" / "evidence" / "saded_fresh100_seed0"
 )
-LOCAL_STATE_ROOT = (
-    Path(os.environ.get("LOCALAPPDATA", Path.home()))
-    / "Codex"
-    / "SbrFresh100Publisher"
+LOCAL_STATE_ROOT = resolve_state_root(
+    os.environ.get("SBR_FRESH100_STATE_ROOT"),
+    PUBLISHER_ROOT.parents[1]
+    / "runtime"
+    / "sbr-fresh100-publisher",
 )
 DOWNLOAD_ROOT = LOCAL_STATE_ROOT / "downloads"
 STATE_PATH = LOCAL_STATE_ROOT / "status.json"

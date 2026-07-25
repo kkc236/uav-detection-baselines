@@ -18,6 +18,7 @@ from scripts.publish_saded_fresh100 import (
     is_release_not_found,
     load_json_object,
     release_tag_for_state,
+    resolve_state_root,
     sha256_file,
     terminal_directory_name,
     validate_terminal_facts,
@@ -437,3 +438,11 @@ def test_process_baseline_requires_exact_run_and_pid_set() -> None:
             expected_run_id="run",
             expected_pids={1, 2},
         )
+
+
+def test_explicit_state_root_overrides_ephemeral_default(tmp_path) -> None:
+    explicit = tmp_path / "runtime"
+    default = tmp_path / "ephemeral"
+
+    assert resolve_state_root(str(explicit), default) == explicit.resolve()
+    assert resolve_state_root(None, default) == default.resolve()

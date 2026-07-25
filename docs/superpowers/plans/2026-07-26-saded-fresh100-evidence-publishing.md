@@ -161,7 +161,7 @@ Run:
 - Frozen validator checkout:
   `C:\Users\16946\Documents\OBJECTIVE CHECK PAPER\tmp\worktrees\saded-fresh100-validator-c5c35374`
 - Observe:
-  `%LOCALAPPDATA%\Codex\SbrFresh100Publisher\status.json`
+  `C:\Users\16946\Documents\OBJECTIVE CHECK PAPER\tmp\runtime\sbr-fresh100-publisher\status.json`
 
 - [ ] **Step 1: Stop only the old local watcher**
 
