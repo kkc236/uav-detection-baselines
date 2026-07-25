@@ -157,7 +157,12 @@ def _existing_parent(path: Path) -> Path:
     return candidate
 
 
-def validate_protocol_inputs(args: Namespace) -> dict:
+def validate_protocol_inputs(
+    args: Namespace,
+    *,
+    repo_root: Path | None = None,
+    require_fresh_target: bool = True,
+) -> dict:
     for value in (
         args.protocol_manifest,
         args.initial_state,
@@ -206,11 +211,15 @@ def validate_protocol_inputs(args: Namespace) -> dict:
     }:
         raise ValueError("fresh stock dataset authority drift")
 
-    repo_root = Path(__file__).resolve().parents[1]
-    require_clean_repo(repo_root)
+    resolved_repo = (
+        Path(repo_root).resolve()
+        if repo_root is not None
+        else Path(__file__).resolve().parents[1]
+    )
+    require_clean_repo(resolved_repo)
     source = manifest.get("runtime_source", {})
-    live_sources = source_closure(repo_root)
-    live_commit = current_commit(repo_root)
+    live_sources = source_closure(resolved_repo)
+    live_commit = current_commit(resolved_repo)
     if (
         source.get("commit") != live_commit
         or source.get("repo_files") != live_sources
@@ -231,7 +240,7 @@ def validate_protocol_inputs(args: Namespace) -> dict:
             APPROVED_TASCV_PARENT["commit"],
             "HEAD",
         ],
-        cwd=repo_root,
+        cwd=resolved_repo,
         check=False,
     )
     if ancestor.returncode != 0:
@@ -269,11 +278,17 @@ def validate_protocol_inputs(args: Namespace) -> dict:
         or Path(endpoint.get("target_dir", "")).resolve() != target
     ):
         raise ValueError("fresh stock endpoint drift")
-    if target.exists():
+    if require_fresh_target and target.exists():
         raise ValueError("fresh stock output target already exists")
+    if not require_fresh_target and not target.is_dir():
+        raise ValueError("completed fresh stock output target is missing")
     if target.as_posix().startswith("/mnt/uav/"):
         raise ValueError("fresh stock refuses output under /mnt/uav")
-    if shutil.disk_usage(_existing_parent(project)).free < MIN_FREE_BYTES:
+    if (
+        require_fresh_target
+        and shutil.disk_usage(_existing_parent(project)).free
+        < MIN_FREE_BYTES
+    ):
         raise ValueError("fresh stock requires at least 3 GiB free")
     return manifest
 

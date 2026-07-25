@@ -205,6 +205,21 @@ def test_validation_rejects_existing_target(
         cli.validate_protocol_inputs(args)
 
 
+def test_completed_endpoint_validation_allows_bound_existing_target(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args = _args(tmp_path)
+    _patch_authorities(monkeypatch, args)
+    (args.project / args.name).mkdir(parents=True)
+    protocol = cli.validate_protocol_inputs(
+        args,
+        repo_root=Path(__file__).resolve().parents[1],
+        require_fresh_target=False,
+    )
+    assert protocol["arm"] == "stock_control"
+
+
 def test_validation_rejects_source_or_data_drift(
     tmp_path: Path,
     monkeypatch,
