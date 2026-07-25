@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from src.saded_single_model_evidence import (
+    load_bound_json,
     source_state,
     validate_checkpoint_metadata,
     validate_binding_hashes,
@@ -59,6 +60,21 @@ def test_checksum_closure_rejects_extra_or_changed_artifact(tmp_path):
         )
 
 
+def test_checksum_closure_rejects_extra_subdirectory(tmp_path):
+    (tmp_path / "a.json").write_text("a", encoding="utf-8")
+    (tmp_path / "checksums.sha256").write_text(
+        f"{_sha(tmp_path / 'a.json')}  a.json\n",
+        encoding="ascii",
+    )
+    (tmp_path / "extra").mkdir()
+
+    with pytest.raises(ValueError, match="artifact set"):
+        verify_checksum_closure(
+            tmp_path,
+            expected_artifacts={"a.json"},
+        )
+
+
 def test_binding_hashes_require_exact_labels_and_values(tmp_path):
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -76,6 +92,18 @@ def test_binding_hashes_require_exact_labels_and_values(tmp_path):
             paths,
             {"first": expected["first"], "second": "0" * 64},
         )
+
+
+def test_bound_json_parses_only_the_authenticated_bytes(tmp_path):
+    record = tmp_path / "record.json"
+    record.write_text('{"decision":"GO"}', encoding="utf-8")
+    expected = _sha(record)
+
+    assert load_bound_json(record, expected) == {"decision": "GO"}
+
+    record.write_text('{"decision":"STOP"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="bound JSON checksum"):
+        load_bound_json(record, expected)
 
 
 def test_source_state_requires_clean_tracked_files(tmp_path):

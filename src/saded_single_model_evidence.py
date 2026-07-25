@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Set
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -15,6 +16,17 @@ def sha256_file(path: Path | str) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def load_bound_json(
+    path: Path | str,
+    expected_sha256: str,
+) -> Any:
+    payload = Path(path).read_bytes()
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != str(expected_sha256).lower():
+        raise ValueError("bound JSON checksum mismatch")
+    return json.loads(payload.decode("utf-8"))
 
 
 def _parse_checksum_file(path: Path) -> dict[str, str]:
@@ -42,11 +54,12 @@ def verify_checksum_closure(
     root = Path(directory).resolve()
     checksum_path = root / "checksums.sha256"
     expected = set(expected_artifacts)
-    actual_names = {
-        path.name for path in root.iterdir() if path.is_file()
-    }
+    entries = tuple(root.iterdir())
+    actual_names = {path.name for path in entries}
     if actual_names != expected | {"checksums.sha256"}:
         raise ValueError("checksum closure artifact set mismatch")
+    if any(not path.is_file() for path in entries):
+        raise ValueError("checksum closure artifact set is not file-only")
     records = _parse_checksum_file(checksum_path)
     if set(records) != expected:
         raise ValueError("checksum closure target set mismatch")
@@ -148,6 +161,7 @@ def validate_checkpoint_metadata(
 
 __all__ = [
     "sha256_file",
+    "load_bound_json",
     "source_state",
     "validate_checkpoint_metadata",
     "validate_binding_hashes",

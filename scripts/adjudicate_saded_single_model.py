@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -20,6 +22,7 @@ from src.saded_single_model_adjudicator import (  # noqa: E402
     adjudicate_single_model,
 )
 from src.saded_single_model_evidence import (  # noqa: E402
+    load_bound_json,
     sha256_file,
     source_state,
     validate_checkpoint_metadata,
@@ -183,25 +186,49 @@ def adjudicate(args: argparse.Namespace) -> Path:
         expected_artifacts=EVALUATION_ARTIFACTS,
     )
 
-    stopped_gate = _read_json(paths["tascv_gate"])
-    stopped_anchor = _read_json(
-        paths["tascv_adjudication_anchor"]
+    stopped_gate = load_bound_json(
+        paths["tascv_gate"],
+        bindings["tascv_gate"],
+    )
+    stopped_anchor = load_bound_json(
+        paths["tascv_adjudication_anchor"],
+        bindings["tascv_adjudication_anchor"],
+    )
+    route_anchor = load_bound_json(
+        paths["r0_route_anchor"],
+        bindings["r0_route_anchor"],
+    )
+    route_manifest = load_bound_json(
+        route_dir / "route_manifest.json",
+        route_closure["artifacts"]["route_manifest.json"],
+    )
+    route_invariants = load_bound_json(
+        route_dir / "route_invariants.json",
+        route_closure["artifacts"]["route_invariants.json"],
+    )
+    evaluation_manifest = load_bound_json(
+        evaluation_dir / "evaluation_manifest.json",
+        evaluation_closure["artifacts"]["evaluation_manifest.json"],
+    )
+    evaluation_invariants = load_bound_json(
+        evaluation_dir / "evaluation_invariants.json",
+        evaluation_closure["artifacts"][
+            "evaluation_invariants.json"
+        ],
+    )
+    r0_gate = load_bound_json(
+        evaluation_dir / "r0_gate.json",
+        evaluation_closure["artifacts"]["r0_gate.json"],
+    )
+    metrics = load_bound_json(
+        paths["r0_metrics"],
+        bindings["r0_metrics"],
+    )
+    recorded_deltas = load_bound_json(
+        evaluation_dir / "deltas.json",
+        evaluation_closure["artifacts"]["deltas.json"],
     )
     stopped_checksums = paths["tascv_gate"].parent / "checksums.sha256"
-    route_anchor = _read_json(paths["r0_route_anchor"])
-    route_manifest = _read_json(route_dir / "route_manifest.json")
-    route_invariants = _read_json(
-        route_dir / "route_invariants.json"
-    )
-    evaluation_manifest = _read_json(
-        evaluation_dir / "evaluation_manifest.json"
-    )
-    evaluation_invariants = _read_json(
-        evaluation_dir / "evaluation_invariants.json"
-    )
-    r0_gate = _read_json(evaluation_dir / "r0_gate.json")
-    metrics = _read_json(paths["r0_metrics"])
-    recorded_deltas = _read_json(evaluation_dir / "deltas.json")
     if not stopped_checksums.is_file():
         raise ValueError("T-ASCV adjudication checksum closure is missing")
     expected_tascv_checksum_line = (
@@ -227,9 +254,15 @@ def adjudicate(args: argparse.Namespace) -> Path:
         raise RuntimeError(
             "PyTorch is required to authenticate checkpoint metadata"
         ) from exc
+    checkpoint_payload = paths["checkpoint"].read_bytes()
+    if (
+        hashlib.sha256(checkpoint_payload).hexdigest()
+        != bindings["checkpoint"]
+    ):
+        raise ValueError("checkpoint changed before metadata load")
     checkpoint_metadata = validate_checkpoint_metadata(
         torch.load(
-            paths["checkpoint"],
+            io.BytesIO(checkpoint_payload),
             map_location="cpu",
             weights_only=False,
         )
@@ -340,6 +373,25 @@ def adjudicate(args: argparse.Namespace) -> Path:
                 invariants_passed=False,
             )
     source_after = source_state(REPO_ROOT, SOURCE_FILES)
+    bindings_after = validate_binding_hashes(
+        paths,
+        EXPECTED_BINDINGS,
+    )
+    route_closure_after = verify_checksum_closure(
+        route_dir,
+        expected_artifacts=ROUTE_ARTIFACTS,
+    )
+    evaluation_closure_after = verify_checksum_closure(
+        evaluation_dir,
+        expected_artifacts=EVALUATION_ARTIFACTS,
+    )
+    inputs_unchanged = (
+        bindings_after == bindings
+        and route_closure_after == route_closure
+        and evaluation_closure_after == evaluation_closure
+        and stopped_anchor.get("checksums_sha256")
+        == sha256_file(stopped_checksums)
+    )
     source_unchanged = source_after == source_before
     evidence_invariants["successor_source_unchanged"] = (
         source_unchanged
@@ -347,7 +399,13 @@ def adjudicate(args: argparse.Namespace) -> Path:
     evidence_invariants["passed"] = (
         evidence_invariants["passed"] and source_unchanged
     )
-    if not source_unchanged:
+    evidence_invariants["input_snapshot_unchanged"] = (
+        inputs_unchanged
+    )
+    evidence_invariants["passed"] = (
+        evidence_invariants["passed"] and inputs_unchanged
+    )
+    if not source_unchanged or not inputs_unchanged:
         decision = adjudicate_single_model(
             arm_a={},
             route_control={},

@@ -166,16 +166,19 @@ checksum closure.
 
 ## 7. Evidence and reporting boundary
 
-The final artifact set contains:
+The machine-generated formal checksum closure contains:
 
 - successor manifest;
 - authenticated parent bindings;
 - recomputed exact deltas and five Boolean gates;
 - decision;
 - checksums;
-- one external root anchor;
-- B and C review notes;
-- a paper-facing result summary.
+- one external root anchor outside the closed directory.
+
+The GitHub delivery commit separately contains the B/C review record and a
+paper-facing result summary. Those human-facing post-adjudication documents
+bind the formal root anchor but are not recursively inserted into the
+machine-generated closure they describe.
 
 This is a single-seed development-val result. Seeds 1/2, ablations, and
 test-dev are out of scope. The paper may call it the seed-0 main result, but
