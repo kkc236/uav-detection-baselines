@@ -124,6 +124,73 @@ def test_runtime_manifest_rejects_test_dev_path_before_read(
         validate_runtime_manifest(forbidden)
 
 
+def test_runtime_manifest_allows_only_the_sealed_forbidden_data_declaration(
+    tmp_path: Path,
+) -> None:
+    protocol_dir = tmp_path / "final-tascv-aaaaaaaa"
+    protocol_dir.mkdir()
+    manifest = _sealed(
+        protocol_dir / "protocol_manifest.json",
+        {
+            "schema_version": "tascv-saded-protocol/v1",
+            "protocol_id": "final-tascv-aaaaaaaa",
+            "runtime_source": {"commit": "a" * 40},
+            "environment": {
+                "python": "3.10.12",
+                "torch": "2.5.1+cu121",
+                "ultralytics": "8.4.90",
+                "cuda": "12.1",
+                "gpu": "NVIDIA GeForce RTX 4090",
+            },
+            "forbidden_data": ["test-dev", "test_dev"],
+        },
+    )
+    with pytest.raises(ValueError, match="environment|approved parent"):
+        validate_runtime_manifest(manifest)
+
+
+def test_runtime_manifest_still_rejects_test_dev_in_any_artifact_field(
+    tmp_path: Path,
+) -> None:
+    protocol_dir = tmp_path / "final-tascv-aaaaaaaa"
+    protocol_dir.mkdir()
+    manifest = _sealed(
+        protocol_dir / "protocol_manifest.json",
+        {
+            "schema_version": "tascv-saded-protocol/v1",
+            "protocol_id": "final-tascv-aaaaaaaa",
+            "runtime_source": {"commit": "a" * 40},
+            "forbidden_data": ["test-dev", "test_dev"],
+            "artifact": {"path": "/sealed/test-dev/predictions.json"},
+        },
+    )
+    with pytest.raises(ValueError, match="test-dev"):
+        validate_runtime_manifest(manifest)
+
+
+def test_runtime_manifest_rejects_nested_forbidden_data_key(
+    tmp_path: Path,
+) -> None:
+    protocol_dir = tmp_path / "final-tascv-aaaaaaaa"
+    protocol_dir.mkdir()
+    manifest = _sealed(
+        protocol_dir / "protocol_manifest.json",
+        {
+            "schema_version": "tascv-saded-protocol/v1",
+            "protocol_id": "final-tascv-aaaaaaaa",
+            "runtime_source": {
+                "commit": "a" * 40,
+                "forbidden_data": [
+                    "/sealed/test-dev/predictions.json"
+                ],
+            },
+            "forbidden_data": ["test-dev", "test_dev"],
+        },
+    )
+    with pytest.raises(ValueError, match="test-dev"):
+        validate_runtime_manifest(manifest)
+
+
 def test_approved_parent_and_stage_table_are_exactly_frozen() -> None:
     assert APPROVED_TASCV_PARENT["commit"] == (
         "c8fc52db0744177481c8e742b16871df76dd175a"

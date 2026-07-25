@@ -769,7 +769,13 @@ def validate_runtime_manifest(
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("T-ASCV manifest must be an object")
-    _reject_forbidden_manifest_values(manifest)
+    _reject_forbidden_manifest_values(
+        {
+            key: value
+            for key, value in manifest.items()
+            if key != "forbidden_data"
+        }
+    )
     source = manifest.get("runtime_source", {})
     commit = source.get("commit")
     if (
