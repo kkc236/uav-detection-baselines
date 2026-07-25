@@ -71,18 +71,20 @@ from different systems after evaluation.
 ## Integrity closure
 
 - successor source commit:
-  `7f1f1e11f0c0c6d373e6172a7511ee645b4421cd`;
-- full server suite: `829 passed`;
+  `1891d6a33d63e93dee5e8c7ab6d73a6a5cc2d3b8`;
+- full server suite: `831 passed`;
 - formal checksum closure:
-  `731a74f9be5ff53f589cfa8cbd500b29c2fa1678830d410ae76245ff1cf55e29`;
+  `04b5e67747c50261655450474296038e23b40e359fdad4e82ebea3b6c99bf482`;
 - formal adjudication:
   `2d46754db4166a10e64c6ec17576679bc2ddb20ad2bd8884e111fe488c00d278`;
 - external root anchor:
-  `9beb847c2d11db3ab67fd08c1a9c8990f4811674e2ca4864d9d8fb96f15eef02`;
+  `07f3f2f07a4e34f3615e174111c5490e9e20ac1c34a908831f7845d6241c34cd`;
 - route prediction JSON:
   `4c8e4998f0cbdbbc5963fecbf05ac4dc26d56db6b95d71a076fd129a66aa740e`;
 - all source, route, evaluation, checkpoint, parent-STOP, and recorded-delta
   invariants passed.
+- the final adjudicator rehashed every bound input after reading it and
+  rejected non-file closure entries; `input_snapshot_unchanged` passed.
 
 ## Paper-ready claim
 
