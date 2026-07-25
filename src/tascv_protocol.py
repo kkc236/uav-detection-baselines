@@ -773,7 +773,7 @@ def validate_runtime_manifest(
         {
             key: value
             for key, value in manifest.items()
-            if key != "forbidden_data"
+            if key not in {"forbidden_data", "scientific_contract"}
         }
     )
     source = manifest.get("runtime_source", {})

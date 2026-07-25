@@ -19,6 +19,7 @@ from src.tascv_protocol import (
     sha256_file,
     validate_r0_authority,
     validate_runtime_manifest,
+    frozen_scientific_contract,
 )
 
 
@@ -143,6 +144,7 @@ def test_runtime_manifest_allows_only_the_sealed_forbidden_data_declaration(
                 "gpu": "NVIDIA GeForce RTX 4090",
             },
             "forbidden_data": ["test-dev", "test_dev"],
+            "scientific_contract": frozen_scientific_contract(),
         },
     )
     with pytest.raises(ValueError, match="environment|approved parent"):
