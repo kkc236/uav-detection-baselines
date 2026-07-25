@@ -17,13 +17,20 @@ terminal evidence bundle automatically when the run ends.
 
 ## Architecture
 
-The existing Windows watcher remains separate from the scientific training
-process. It polls only the remote `status` and `exit_code` files.
+The Windows watcher remains separate from the scientific training process. It
+uses the pinned SSH host key from the user's existing `known_hosts`; the SSH
+password is supplied only through the child process environment and is never
+written to the repository, state, or logs. It polls the remote `status`,
+`exit_code`, and original process identities.
 
-For `TRAIN_COMPLETE` with exit code `0`, it downloads and validates the final
-training summary, configuration, protocol, log, results table, and
-`weights/last.pt`. Lightweight evidence is committed to the dedicated result
-branch and the checkpoint is attached to a GitHub Release.
+For `TRAIN_COMPLETE` with exit code `0`, it first records a
+`SUCCESS_CANDIDATE`. It then downloads the final training summary,
+configuration, protocol, log, results table, and `weights/last.pt`; replays
+the byte-exact validator from detached commit `c5c35374`; checks the protocol,
+source, data, initial-state, checkpoint, optimizer, EMA, and epoch bindings;
+and only then permits `SUCCESS`. Lightweight evidence is committed to the
+dedicated result branch and the checkpoint is attached to a draft GitHub
+Release. The release becomes public only after asset verification.
 
 For `TRAIN_INVALID` or a non-zero exit code, it downloads only the available
 forensic evidence, writes an `INVALID` manifest, commits the lightweight
@@ -43,8 +50,8 @@ validation metrics.
 - Success tag: `saded-fresh100-seed0-c5c35374`
 - Failure tag prefix: `saded-fresh100-seed0-c5c35374-invalid`
 - Every downloaded artifact receives a SHA256 checksum.
-- Existing matching releases are reused; conflicting terminal state is an
-  error.
+- Existing matching releases are reused; conflicting terminal state or asset
+  size is an error. Uploads never overwrite an existing release asset.
 - A lock prevents concurrent watcher instances.
 - GitHub credentials remain on the Windows host and are not copied to the
   training server.
@@ -58,4 +65,3 @@ validation metrics.
 4. A simulated success produces a success publication plan.
 5. A simulated failure produces an `INVALID` prerelease plan and cannot
    produce a success plan.
-

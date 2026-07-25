@@ -3,6 +3,8 @@
   "collected_at": "2026-07-26T00:49:07+08:00",
   "run_id": "final-saded-fresh100-c5c35374",
   "source_commit": "c5c353744f0d07366350389bf8d6c5fe0f62b8f8",
+  "source_repo": "/home/ubuntu/repo-saded-fresh100-c5c35374",
+  "protocol_manifest": "/home/ubuntu/saded-fresh100-protocols/final-saded-fresh100-c5c35374/protocol_manifest.json",
   "stage": "FORMAL_100",
   "arm": "stock_control",
   "seed": 0,
@@ -59,5 +61,8 @@
     "terminal_artifact": false
   },
   "scientific_metrics_read": false,
-  "snapshot_kind": "non_terminal_progress"
+  "snapshot_kind": "non_terminal_progress",
+  "terminal": false,
+  "scientific_success": false,
+  "checkpoint_uploaded": false
 }

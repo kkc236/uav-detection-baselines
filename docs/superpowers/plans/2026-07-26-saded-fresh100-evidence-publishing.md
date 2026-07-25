@@ -26,7 +26,10 @@ from scripts.publish_saded_fresh100 import classify_terminal_state
 
 
 def test_complete_zero_is_success():
-    assert classify_terminal_state("TRAIN_COMPLETE", "0") == "SUCCESS"
+    assert (
+        classify_terminal_state("TRAIN_COMPLETE", "0")
+        == "SUCCESS_CANDIDATE"
+    )
 
 
 def test_invalid_or_nonzero_is_invalid():
@@ -49,7 +52,7 @@ Expected: FAIL because `scripts.publish_saded_fresh100` does not exist.
 ```python
 def classify_terminal_state(status: str | None, exit_code: str | None) -> str | None:
     if status == "TRAIN_COMPLETE" and exit_code == "0":
-        return "SUCCESS"
+        return "SUCCESS_CANDIDATE"
     if status == "TRAIN_INVALID":
         return "INVALID"
     if exit_code not in (None, "", "0"):
@@ -92,15 +95,25 @@ Expected: FAIL because `build_terminal_manifest` is missing.
 - [ ] **Step 3: Implement the minimal manifest builder**
 
 ```python
-def build_terminal_manifest(*, run_id, terminal_state, exit_code, artifacts):
+def build_terminal_manifest(
+    *,
+    run_id,
+    terminal_state,
+    exit_code,
+    artifacts,
+    validation_passed,
+):
     if terminal_state not in {"SUCCESS", "INVALID"}:
         raise ValueError("terminal_state must be SUCCESS or INVALID")
+    if terminal_state == "SUCCESS" and not validation_passed:
+        raise ValueError("SUCCESS evidence must be independently validated")
     return {
         "schema_version": "saded-fresh100-publication/v1",
         "run_id": run_id,
         "terminal_state": terminal_state,
         "exit_code": exit_code,
         "publish_as_success": terminal_state == "SUCCESS",
+        "validation_passed": validation_passed,
         "artifacts": dict(sorted(artifacts.items())),
     }
 ```
@@ -143,8 +156,12 @@ Run:
 ### Task 4: Deploy and verify the terminal watcher
 
 **Files:**
-- Deploy: `%LOCALAPPDATA%\Temp\codex-sbr-fresh100-publish.py`
-- Observe: `%LOCALAPPDATA%\Temp\codex-sbr-fresh100-publish.status.json`
+- Execute in place:
+  `C:\Users\16946\Documents\OBJECTIVE CHECK PAPER\tmp\worktrees\sbr-fresh100-publisher\scripts\publish_saded_fresh100.py`
+- Frozen validator checkout:
+  `C:\Users\16946\Documents\OBJECTIVE CHECK PAPER\tmp\worktrees\saded-fresh100-validator-c5c35374`
+- Observe:
+  `%LOCALAPPDATA%\Codex\SbrFresh100Publisher\status.json`
 
 - [ ] **Step 1: Stop only the old local watcher**
 
@@ -153,7 +170,11 @@ Do not signal the remote training PIDs.
 
 - [ ] **Step 2: Start the tested watcher hidden**
 
-Run the publisher using `Start-Process -WindowStyle Hidden`.
+Verify both worktrees are clean and at their expected commits. Supply the SSH
+password only in the child process environment, then run the publisher from
+the result worktree using `Start-Process -WindowStyle Hidden`. Do not copy the
+script to `%TEMP%`, because its repository and validator paths are deliberately
+derived from the checked-in script location.
 
 - [ ] **Step 3: Verify live state**
 
@@ -170,4 +191,3 @@ Expected local status:
 
 Confirm PID `417400` and driver PID `417396` remain alive, with remote status
 `RUNNING` and unchanged command line.
-

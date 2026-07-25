@@ -10,6 +10,8 @@ This directory preserves a read-only operational snapshot of
 - Intermediate scientific metrics were not read.
 - The observed `last.pt` is a non-terminal checkpoint and is not uploaded by
   this snapshot.
+- This snapshot is explicitly non-terminal and does not claim scientific
+  success.
 
 The terminal publisher will write successful evidence under `terminal/` or
 failed-run evidence under `invalid/`. A failed run is never presented as a
