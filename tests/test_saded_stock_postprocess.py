@@ -10,6 +10,7 @@ from scripts.adjudicate_saded_stock_fresh import (
 )
 from scripts.evaluate_saded_stock_single import (
     create_evaluation_claim,
+    dataset_authority_matches,
     evaluation_invariants_passed,
     metric_row,
 )
@@ -202,3 +203,40 @@ def test_adjudicator_exit_code_distinguishes_invalid(
     expected: int,
 ) -> None:
     assert exit_code_for_decision(decision) == expected
+
+
+def test_dataset_authority_accepts_signature_case_only_difference() -> None:
+    image_list = ["a.jpg", "b.jpg"]
+    protocol_dataset = {
+        "signature": "AB" * 32,
+    }
+    dataset = {
+        "image_count": 2,
+        "image_list": image_list,
+        "dataset_signature": "ab" * 32,
+    }
+
+    assert dataset_authority_matches(
+        dataset,
+        image_list=image_list,
+        expected=protocol_dataset,
+        expected_count=2,
+    )
+    assert not dataset_authority_matches(
+        {**dataset, "image_list": list(reversed(image_list))},
+        image_list=image_list,
+        expected=protocol_dataset,
+        expected_count=2,
+    )
+    assert not dataset_authority_matches(
+        {**dataset, "dataset_signature": "cd" * 32},
+        image_list=image_list,
+        expected=protocol_dataset,
+        expected_count=2,
+    )
+    assert not dataset_authority_matches(
+        {key: value for key, value in dataset.items() if key != "dataset_signature"},
+        image_list=image_list,
+        expected=protocol_dataset,
+        expected_count=2,
+    )

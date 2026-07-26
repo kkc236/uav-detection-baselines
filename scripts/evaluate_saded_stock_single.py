@@ -25,6 +25,7 @@ from scripts.route_saded_stock_single import (  # noqa: E402
     _verify_checksums,
 )
 from src.saded_stock_evaluation_protocol import (  # noqa: E402
+    digests_equal,
     postprocess_source_state,
     reject_forbidden,
     validate_evaluation_protocol,
@@ -148,6 +149,23 @@ def evaluation_invariants_passed(
     )
 
 
+def dataset_authority_matches(
+    dataset: Mapping[str, Any],
+    *,
+    image_list: Sequence[str],
+    expected: Mapping[str, Any],
+    expected_count: int,
+) -> bool:
+    return (
+        dataset.get("image_count") == expected_count
+        and dataset.get("image_list") == list(image_list)
+        and digests_equal(
+            dataset.get("dataset_signature"),
+            expected.get("signature"),
+        )
+    )
+
+
 def _verify_route(
     protocol: dict[str, Any],
     protocol_path: Path,
@@ -260,11 +278,11 @@ def evaluate(args: argparse.Namespace) -> Path:
             protocol["protocol_artifacts"]["image_list"]["path"]
         ).resolve()
     )
-    if (
-        dataset["image_count"] != 548
-        or dataset["image_list"] != image_list
-        or dataset["dataset_signature"]
-        != protocol["dataset"]["signature"]
+    if not dataset_authority_matches(
+        dataset,
+        image_list=image_list,
+        expected=protocol["dataset"],
+        expected_count=548,
     ):
         raise ValueError("fresh evaluation dataset authority drift")
     image_by_id = {
@@ -310,9 +328,11 @@ def evaluate(args: argparse.Namespace) -> Path:
         "source_unchanged": (
             postprocess_source_state(REPO_ROOT) == source_before
         ),
-        "dataset_signature_exact": (
-            dataset["dataset_signature"]
-            == protocol["dataset"]["signature"]
+        "dataset_authority_exact": dataset_authority_matches(
+            dataset,
+            image_list=image_list,
+            expected=protocol["dataset"],
+            expected_count=548,
         ),
         "image_order_exact": dataset["image_list"] == image_list,
         "two_metric_sets_exact": set(metrics) == {"A", "route_control"},
