@@ -1,0 +1,51 @@
+{
+  "artifacts": {
+    "driver.log": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "driver.sh": "8EECEE6E15E56AA54F8934EE791D6CC4714EEEE3DB3FE6FC2903BCEF8554E814",
+    "exit_code": "9A271F2A916B0B6EE6CECB2426F0B3206EF074578BE55D9BC94F6F3FE3AB86AA",
+    "protocol_manifest.json": "F3C89D0F36827079F8EF149FAF1D088FDF43F112ADDCC68391EA9B6564F27D64",
+    "status": "5CECF8E5D7177ABCBA3CCE32DD7184DFFC86094107BD45BE5208927BAB6ABC9E",
+    "train.log": "2B639E122663CB4391005E7CB1D9C7F6CC6B772378575C42EE3D8F058BE5EA34"
+  },
+  "checkpoint_uploaded": false,
+  "exit_code": "0",
+  "publish_as_success": false,
+  "reason": "success candidate rejected: runtime validation failed: ['last checkpoint is invalid']",
+  "run_id": "final-saded-fresh100-c5c35374",
+  "schema_version": "saded-fresh100-publication/v1",
+  "source_commit": "c5c353744f0d07366350389bf8d6c5fe0f62b8f8",
+  "terminal_state": "INVALID",
+  "transfer": {
+    "driver.log": {
+      "mtime": 1784980988,
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "size": 0
+    },
+    "driver.sh": {
+      "mtime": 1784980988,
+      "sha256": "8EECEE6E15E56AA54F8934EE791D6CC4714EEEE3DB3FE6FC2903BCEF8554E814",
+      "size": 1290
+    },
+    "exit_code": {
+      "mtime": 1785016880,
+      "sha256": "9A271F2A916B0B6EE6CECB2426F0B3206EF074578BE55D9BC94F6F3FE3AB86AA",
+      "size": 2
+    },
+    "protocol_manifest.json": {
+      "mtime": 1784980928,
+      "sha256": "F3C89D0F36827079F8EF149FAF1D088FDF43F112ADDCC68391EA9B6564F27D64",
+      "size": 7830
+    },
+    "status": {
+      "mtime": 1785016880,
+      "sha256": "5CECF8E5D7177ABCBA3CCE32DD7184DFFC86094107BD45BE5208927BAB6ABC9E",
+      "size": 15
+    },
+    "train.log": {
+      "mtime": 1785016878,
+      "sha256": "2B639E122663CB4391005E7CB1D9C7F6CC6B772378575C42EE3D8F058BE5EA34",
+      "size": 12148595
+    }
+  },
+  "validation_passed": false
+}
