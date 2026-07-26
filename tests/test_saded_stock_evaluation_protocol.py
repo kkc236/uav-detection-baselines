@@ -8,10 +8,14 @@ import pytest
 from src.saded_stock_evaluation_protocol import (
     EXPECTED_DATASET_SIGNATURE,
     EXPECTED_IMAGE_LIST_SHA256,
+    POSTPROCESS_SOURCE_FILES,
     build_image_authority,
+    digests_equal,
     frozen_route_contract,
     reject_forbidden,
+    verify_named_checksums,
 )
+from src.sbr_artifacts import sha256_file, write_checksums
 
 
 def test_frozen_route_contract_matches_final_method() -> None:
@@ -69,3 +73,58 @@ def test_forbidden_paths_are_rejected_recursively(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="test-dev"):
         reject_forbidden({"nested": [str(tmp_path / "test-dev")]})
     reject_forbidden({"ordinary": json.dumps(["dev-val"])})
+
+
+def test_protocol_source_file_set_contains_every_runtime_cli() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    required = {
+        "scripts/prepare_saded_stock_evaluation_protocol.py",
+        "scripts/cache_saded_stock_endpoint.py",
+        "scripts/route_saded_stock_single.py",
+        "scripts/evaluate_saded_stock_single.py",
+        "scripts/adjudicate_saded_stock_fresh.py",
+    }
+
+    assert required <= set(POSTPROCESS_SOURCE_FILES)
+    assert {
+        name for name in required if not (repo_root / name).is_file()
+    } == set()
+
+
+def test_protocol_source_file_set_contains_runtime_dependencies() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    required = {
+        "scripts/route_saded.py",
+        "scripts/train_rtdetr_saded_stock.py",
+        "src/saded_stock_cli.py",
+    }
+
+    assert required <= set(POSTPROCESS_SOURCE_FILES)
+    assert all((repo_root / name).is_file() for name in required)
+
+
+def test_protocol_checksum_reader_accepts_writer_output(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}", encoding="utf-8")
+    checksum_path = write_checksums(
+        tmp_path / "checksums.sha256",
+        [artifact],
+        root=tmp_path,
+    )
+
+    observed = verify_named_checksums(
+        checksum_path,
+        root=tmp_path,
+        expected_names={"artifact.json"},
+    )
+
+    assert observed["artifact.json"] == sha256_file(artifact)
+
+
+def test_digest_comparison_accepts_uppercase_training_records() -> None:
+    digest = "a1" * 32
+
+    assert digests_equal(digest.upper(), digest)
+    assert not digests_equal("b2" * 32, digest)
