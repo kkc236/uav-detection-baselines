@@ -39,9 +39,9 @@ SBR 分尺度是本研究的自定义有效尺度口径：有效 GT 等效边长
 
 | 编号 | 研究问题 | 当前判据 | 状态 |
 |---|---|---|:---:|
-| RQ1 | 固定多视图路由能否提高 tiny 检测能力？ | AP-tiny-SBR、Tiny Recall | 已回答 |
-| RQ2 | tiny 增益能否转化为统一预测集的总体收益？ | mAP50-95、AP50、AP75 | 已回答 |
-| RQ3 | 增加局部视图时能否基本保持 large 能力？ | AP-large-SBR 下降不超过0.5pp | 已回答 |
+| RQ1 | 固定多视图路由能否提高 tiny 检测能力？ | AP-tiny-SBR、Tiny Recall | seed0 dev-val 证据支持 |
+| RQ2 | tiny 增益能否转化为统一预测集的总体收益？ | mAP50-95、AP50、AP75 | seed0 dev-val 证据支持 |
+| RQ3 | 增加局部视图时能否基本保持 large 能力？ | AP-large-SBR 下降不超过0.5pp | seed0 dev-val 证据支持 |
 | RQ4 | small/medium 负向变化来自何处？ | 路由边界、Top-300、组件消融 | 待消融 |
 | RQ5 | 五视图方案的计算代价是否可接受？ | Latency、FPS、VRAM、GFLOPs | 待测试 |
 | RQ6 | 结果是否具备跨种子和测试集稳定性？ | seed1/2、一次锁定测试确认 | 延后 |
@@ -129,8 +129,8 @@ tiny 增益不再明显破坏全图 large 定位。
 ### 9.1 可作为论文核心结果的部分
 
 - mAP50-95 提升 1.5402pp，统一预测集总体精度提高；
-- AP50 提升 4.8059pp，目标发现能力明显增强；
-- AP75 提升 0.6248pp，定位质量没有因切片路由而下降；
+- AP50 提升 4.8059pp；
+- 整体 AP75 提升 0.6248pp；
 - AP-tiny-SBR 提升 1.8680pp，Tiny Recall 提升 16.7220pp；
 - AP-large-SBR 仅变化 -0.0428pp，本次运行中近似保持。
 
