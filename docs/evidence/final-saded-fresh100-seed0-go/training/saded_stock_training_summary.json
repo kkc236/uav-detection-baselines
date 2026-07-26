@@ -1,0 +1,156 @@
+{
+  "amp": true,
+  "amp_scale": 128.0,
+  "amp_scale_max": 128.0,
+  "amp_scale_min": 128.0,
+  "arm": "stock_control",
+  "auxiliary_non_tiny_pair_count": 0,
+  "batch": 8,
+  "batch_canaries": [
+    {
+      "batch": 1,
+      "epoch": 0,
+      "sha256": "185392A639060F7C429B083677A32670C5D5A60A4BB4A8EAEDA79D529D0E04A2"
+    },
+    {
+      "batch": 2,
+      "epoch": 0,
+      "sha256": "04C6B8E2FFBA2C59124C345BCD19ABA9B26674D9B3581D164EB4AEC8A5D503EC"
+    },
+    {
+      "batch": 810,
+      "epoch": 1,
+      "sha256": "6E8EF89C620FC8961696D3B680CE3344B47F94EF238E89960623EA040D7A0A93"
+    }
+  ],
+  "checkpoint": {
+    "ema_present": true,
+    "epoch": 99,
+    "expected_path": "/home/ubuntu/saded-fresh100-runs/final-saded-fresh100-c5c35374/seed0/weights/last.pt",
+    "kind": "last.pt",
+    "loadable": true,
+    "optimizer_present": true,
+    "path": "/home/ubuntu/saded-fresh100-runs/final-saded-fresh100-c5c35374/seed0/weights/last.pt",
+    "sha256": "515674348D0FF542663FE6FB4317240FC167A71EA31FACC1DEFE6A7E91B521F8",
+    "train_args_match": true,
+    "train_result_epochs": 100
+  },
+  "completed_epochs": 100,
+  "cuda_peak_mib": 17435.45,
+  "cuda_peak_reserved_mib": 23660.0,
+  "data": "/home/ubuntu/tascv-protocols/final-tascv-dbf84670/tascv_full_train_only.yaml",
+  "data_sha256": "E34EAF36B934E8F86655B62CDE976F00CA9917920C2000F16939F1C35FD05278",
+  "data_unchanged": true,
+  "expected_optimizer_attempts": 10556,
+  "expected_successful_batches": 80900,
+  "hardware": {
+    "device": "cuda:0",
+    "gpu": "NVIDIA GeForce RTX 4090"
+  },
+  "initial_state": "/mnt/uav/protocols/ebc-qp-d2-musgd-seed0/initial-state-seed0.pt",
+  "initial_state_common_fingerprint": "0B968046FDC89BE5A31581C81F7335A9742BC422503428113637B1CC829F0FA0",
+  "initial_state_sha256": "3F4EC67E4C760E6FB70999CD45399E5DE8CC7CBB2C870F28F8A58AD945CE3F75",
+  "initial_state_unchanged": true,
+  "internal_validation_bypass_count": 1,
+  "loader": {
+    "loader_batch_size": 8,
+    "loader_num_workers": 8,
+    "per_rank_batch_size": 8,
+    "trainer_batch_size": 8
+  },
+  "local_bn_preserved_batches": 0,
+  "local_forward_call_histogram": {
+    "1": 0,
+    "2": 0
+  },
+  "local_forward_calls": 0,
+  "observed_tensor_batch_sizes": [
+    7,
+    8
+  ],
+  "optimizer": {
+    "class": "MuSGD",
+    "groups": [
+      {
+        "lr": 0.03,
+        "momentum": 0.937,
+        "param_group": "weight",
+        "parameter_count": 0,
+        "use_muon": false,
+        "weight_decay": 0.0005
+      },
+      {
+        "lr": 0.01,
+        "momentum": 0.937,
+        "param_group": "weight",
+        "parameter_count": 0,
+        "use_muon": false,
+        "weight_decay": 0.0005
+      },
+      {
+        "lr": 0.03,
+        "momentum": 0.937,
+        "param_group": "bn",
+        "parameter_count": 0,
+        "use_muon": false,
+        "weight_decay": 0.0
+      },
+      {
+        "lr": 0.01,
+        "momentum": 0.937,
+        "param_group": "bn",
+        "parameter_count": 143,
+        "use_muon": false,
+        "weight_decay": 0.0
+      },
+      {
+        "lr": 0.03,
+        "momentum": 0.937,
+        "param_group": "bias",
+        "parameter_count": 0,
+        "use_muon": false,
+        "weight_decay": 0.0
+      },
+      {
+        "lr": 0.01,
+        "momentum": 0.937,
+        "param_group": "bias",
+        "parameter_count": 226,
+        "use_muon": false,
+        "weight_decay": 0.0
+      },
+      {
+        "lr": 0.03,
+        "momentum": 0.937,
+        "param_group": "muon",
+        "parameter_count": 0,
+        "use_muon": true,
+        "weight_decay": 0.0005
+      },
+      {
+        "lr": 0.01,
+        "momentum": 0.937,
+        "param_group": "muon",
+        "parameter_count": 206,
+        "use_muon": true,
+        "weight_decay": 0.0005
+      }
+    ],
+    "requested_lr0": 0.01,
+    "requested_momentum": 0.937
+  },
+  "optimizer_attempts": 10556,
+  "protocol_manifest": "/home/ubuntu/saded-fresh100-protocols/final-saded-fresh100-c5c35374/protocol_manifest.json",
+  "protocol_manifest_sha256": "F3C89D0F36827079F8EF149FAF1D088FDF43F112ADDCC68391EA9B6564F27D64",
+  "protocol_manifest_unchanged": true,
+  "protocol_source_commit": "c5c353744f0d07366350389bf8d6c5fe0f62b8f8",
+  "schema_version": "saded-stock-training-summary/v1",
+  "seed": 0,
+  "source_repo_bundle_sha256": "8F1AD37408DA01364CB4A67E7583B0C412D67E9ADEE0AF34448E7E907F120666",
+  "source_unchanged": true,
+  "source_upstream_bundle_sha256": "0B98A5F1819FBB567AEBD4FBFF38774931000EE18CDE94E30B8304834A741E75",
+  "stage": "FORMAL_100",
+  "successful_batches": 80900,
+  "test_loader_is_none": true,
+  "workers": 8
+}

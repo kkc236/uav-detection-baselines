@@ -1,0 +1,6 @@
+metric,total,min,median,max
+accepted_local,112348,15,218.0,300
+capacity_rejected,59792,6,109.0,205
+protected_baseline,68305,0,112.5,300
+remaining_tiny_slots,96095,0,187.5,300
+image_count,548,,,

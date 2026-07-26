@@ -2,9 +2,14 @@
 
 This workspace reproduces baseline detectors for UAV aerial object detection.
 
-Innovation 1 final seed-0 development result:
-[SADED-SM final handoff](docs/final-saded-single-model-result-handoff.md) and
-[public adjudication evidence](docs/evidence/saded_single_model_final/formal_adjudication.json).
+Innovation 1 authoritative fresh100 seed-0 development result:
+[SADED-SM fresh100 handoff](docs/final-saded-fresh100-seed0-result.md) and
+[fresh100 evidence package](docs/evidence/final-saded-fresh100-seed0-go/README.md).
+
+The earlier
+[SADED-SM result handoff](docs/final-saded-single-model-result-handoff.md)
+uses a different checkpoint and is retained as historical evidence only.
+Metrics from the two endpoints must not be mixed.
 
 Scientific problems:
 

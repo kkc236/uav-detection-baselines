@@ -1,0 +1,115 @@
+{
+  "schema_version": "final-saded-fresh100-seed0-go-release/v1",
+  "status": "PIPELINE_GO",
+  "decision": "SADED_SINGLE_SEED_GO",
+  "run_id": "final-saded-fresh-eval-f9d01f65",
+  "method": "SADED-SM",
+  "seed": 0,
+  "detector_epochs": 100,
+  "postprocess_source": {
+    "commit": "f9d01f6510e95e02454688654115a6b0d3f9ad33",
+    "bundle_sha256": "15E785AA7221ED97D4F2A0954B7813E566E4D5C4BDBA15520CE9325028FFF033",
+    "bundle_sha256_semantics": "sealed canonical 46-file source-closure digest; not a git transport bundle file hash",
+    "server_tests_passed": 867,
+    "server_test_duration_seconds": 29.83
+  },
+  "training_source": {
+    "commit": "c5c353744f0d07366350389bf8d6c5fe0f62b8f8",
+    "checkpoint_sha256": "515674348D0FF542663FE6FB4317240FC167A71EA31FACC1DEFE6A7E91B521F8",
+    "completed_epochs": 100,
+    "successful_batches": 80900,
+    "optimizer_attempts": 10556,
+    "amp_scale": 128
+  },
+  "dataset": {
+    "name": "VisDrone",
+    "split": "val",
+    "image_count": 548,
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "image_list_sha256": "87C1B9FE8CD39CAF7F46494E7FE55DC4315573B64EE83A5B71778DBF55933B3A",
+    "test_dev_accessed": false
+  },
+  "metrics": {
+    "mAP50-95": {
+      "arm_a": 0.07256641085549745,
+      "saded_sm": 0.08796812211653607,
+      "delta": 0.01540171126103862,
+      "passed": true
+    },
+    "AP75": {
+      "arm_a": 0.0575086669253303,
+      "saded_sm": 0.06375656010696448,
+      "delta": 0.006247893181634184,
+      "passed": true
+    },
+    "AP-tiny-SBR": {
+      "arm_a": 0.009811499771235865,
+      "saded_sm": 0.0284914872133644,
+      "delta": 0.018679987442128534,
+      "passed": true
+    },
+    "tiny_recall": {
+      "arm_a": 0.22251733805518667,
+      "saded_sm": 0.38973734690866163,
+      "delta": 0.16722000885347496,
+      "passed": true
+    },
+    "AP-large-SBR": {
+      "arm_a": 0.14639262318420113,
+      "saded_sm": 0.14596480710705875,
+      "delta": -0.00042781607714237335,
+      "passed": true
+    }
+  },
+  "closure": {
+    "protocol": "PASS",
+    "cache": "PASS",
+    "route": "PASS",
+    "evaluation": "PASS",
+    "adjudication": "PASS",
+    "adjudication_root_anchor_sha256": "D8AE2EACD52C26BCC40E01671CD96C49BD9FBEC241F666DD405E732F49437FFA",
+    "adjudication_checksums_sha256": "BC526022D8D8595AFCBE01DCFCF9EEE3C56FBE579DCAF602C8093863AAFC5AAE"
+  },
+  "github_omitted_large_files": [
+    {
+      "path": "evidence/cache/raw_views.jsonl.gz",
+      "bytes": 70553411,
+      "sha256": "A8892EA5115D22BDDC111B346F8ACBF23D15D85FD76AF83BA726340AD49FDFF9"
+    },
+    {
+      "path": "evidence/cache/predictions.jsonl.gz",
+      "bytes": 19467637,
+      "sha256": "31D9E1426AB883D268EA3526E741022F0480E4B3209118F3B173B66F59D5DD68"
+    },
+    {
+      "path": "evidence/route/predictions.jsonl.gz",
+      "bytes": 16907271,
+      "sha256": "69BB52D23B8F14BB0D346A86558B31773942D25A55334FB62C617009058E841B"
+    },
+    {
+      "path": "saded-fresh100-seed0-last.pt",
+      "bytes": 197583309,
+      "sha256": "515674348D0FF542663FE6FB4317240FC167A71EA31FACC1DEFE6A7E91B521F8",
+      "role": "evaluated_paper_endpoint"
+    },
+    {
+      "path": "saded-fresh100-seed0-best.pt",
+      "bytes": 197581197,
+      "sha256": "5B794327F6F23D13E4CB2A84B820D66D48556E59B69530DF048C5F68FE4350D8",
+      "role": "archive_only_not_evaluated"
+    },
+    {
+      "path": "train.log",
+      "bytes": 12148595,
+      "sha256": "2B639E122663CB4391005E7CB1D9C7F6CC6B772378575C42EE3D8F058BE5EA34",
+      "role": "full_training_log_archive"
+    }
+  ],
+  "limitations": [
+    "single seed",
+    "development validation only",
+    "no test-dev access",
+    "no cross-dataset confirmation",
+    "AP-small-SBR and AP-medium-SBR decline"
+  ]
+}

@@ -1,5 +1,12 @@
 # Innovation 1 Final Handoff: SADED-SM
 
+> **Historical result — superseded for main-paper reporting.** This document
+> uses checkpoint SHA256 `54ce6028...` and must not be mixed with the later
+> authoritative fresh100 result using checkpoint SHA256 `51567434...`.
+> Use [`final-saded-fresh100-seed0-result.md`](final-saded-fresh100-seed0-result.md)
+> for the current main-paper seed-0 result. This file remains immutable
+> scientific history.
+
 Date: 2026-07-25
 
 Status: `SADED_SINGLE_SEED_GO`
