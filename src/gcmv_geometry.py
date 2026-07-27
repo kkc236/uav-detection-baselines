@@ -1,4 +1,4 @@
-"""Exact feature-lattice geometry for GCMV's PVC module."""
+"""Exact feature-lattice geometry for GCMV's PLEC module."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _PHASE_OFFSETS = (
 
 
 @dataclass(frozen=True)
-class PVCGeometry:
+class PLECGeometry:
     sample_grid: torch.Tensor
     sample_valid: torch.Tensor
     center_valid: torch.Tensor
@@ -40,7 +40,7 @@ class PVCGeometry:
         *,
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
-    ) -> PVCGeometry:
+    ) -> PLECGeometry:
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("geometry dtype must be floating point")
 
@@ -48,7 +48,7 @@ class PVCGeometry:
             target_dtype = dtype if value.is_floating_point() else value.dtype
             return value.to(device=device, dtype=target_dtype).detach()
 
-        return PVCGeometry(
+        return PLECGeometry(
             sample_grid=move(self.sample_grid),
             sample_valid=move(self.sample_valid),
             center_valid=move(self.center_valid),
@@ -130,7 +130,7 @@ def _validate_arguments(
         image_tiles = tiles[image_index]
         image_local_transforms = local_transforms[image_index]
         if len(image_tiles) != 4 or len(image_local_transforms) != 4:
-            raise ValueError("PVC geometry requires exactly four local views")
+            raise ValueError("PLEC geometry requires exactly four local views")
         if [tile.index for tile in image_tiles] != [0, 1, 2, 3]:
             raise ValueError("tile order must be TL/TR/BL/BR with indices 0,1,2,3")
         _validate_transform(
@@ -151,7 +151,7 @@ def _validate_arguments(
     return global_shape, local_shape
 
 
-def build_pvc_geometry(
+def build_plec_geometry(
     *,
     source_shapes: Sequence[tuple[int, int]],
     tiles: Sequence[Sequence[Tile]],
@@ -161,7 +161,7 @@ def build_pvc_geometry(
     local_feature_shape: tuple[int, int],
     device: torch.device | str | None = None,
     dtype: torch.dtype = torch.float32,
-) -> PVCGeometry:
+) -> PLECGeometry:
     (global_height, global_width), (local_height, local_width) = _validate_arguments(
         source_shapes=source_shapes,
         tiles=tiles,
@@ -295,7 +295,7 @@ def build_pvc_geometry(
         batch_magnification.append(torch.stack(view_magnification))
         batch_edge_distance.append(torch.stack(view_edge_distance))
 
-    return PVCGeometry(
+    return PLECGeometry(
         sample_grid=torch.stack(batch_grids),
         sample_valid=torch.stack(batch_sample_valid),
         center_valid=torch.stack(batch_center_valid),

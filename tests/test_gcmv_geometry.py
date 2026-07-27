@@ -3,18 +3,18 @@ import math
 import pytest
 import torch
 
-from src.gcmv_geometry import PVCGeometry, build_pvc_geometry
+from src.gcmv_geometry import PLECGeometry, build_plec_geometry
 from src.sbr_geometry import LetterboxTransform, Tile, overlapping_tiles
 
 
 def test_public_geometry_contract_is_importable():
-    assert PVCGeometry is not None
-    assert callable(build_pvc_geometry)
+    assert PLECGeometry is not None
+    assert callable(build_plec_geometry)
     assert LetterboxTransform is not None
     assert Tile is not None
 
 
-def identity_geometry(*, height: int = 4, width: int = 6) -> PVCGeometry:
+def identity_geometry(*, height: int = 4, width: int = 6) -> PLECGeometry:
     transform = LetterboxTransform(
         source_width=width,
         source_height=height,
@@ -25,7 +25,7 @@ def identity_geometry(*, height: int = 4, width: int = 6) -> PVCGeometry:
         resized_height=height,
     )
     views = tuple(Tile(0, 0, width, height, index) for index in range(4))
-    return build_pvc_geometry(
+    return build_plec_geometry(
         source_shapes=[(height, width)],
         tiles=[views],
         global_transforms=[transform],
@@ -95,7 +95,7 @@ def test_non_integer_magnification_is_preserved():
         pad=(2.0, 3.0),
     )
 
-    geometry = build_pvc_geometry(
+    geometry = build_plec_geometry(
         source_shapes=[(height, width)],
         tiles=[tile_views],
         global_transforms=[global_transform],
@@ -137,7 +137,7 @@ def test_60_percent_tiles_produce_expected_coverage_and_edge_distance():
         for tile in image_tiles
     ]
 
-    geometry = build_pvc_geometry(
+    geometry = build_plec_geometry(
         source_shapes=[(height, width)],
         tiles=[image_tiles],
         global_transforms=[global_transform],
@@ -225,7 +225,7 @@ def test_invalid_geometry_contract_fails_closed(mutation, message):
     mutation(arguments)
 
     with pytest.raises((TypeError, ValueError), match=message):
-        build_pvc_geometry(**arguments)
+        build_plec_geometry(**arguments)
 
 
 def test_tile_and_transform_metadata_must_match_source_frame():
@@ -237,7 +237,7 @@ def test_tile_and_transform_metadata_must_match_source_frame():
         )
     ]
     with pytest.raises(ValueError, match="bounds"):
-        build_pvc_geometry(**arguments)
+        build_plec_geometry(**arguments)
 
     arguments = valid_geometry_arguments()
     wrong = LetterboxTransform(
@@ -249,7 +249,7 @@ def test_tile_and_transform_metadata_must_match_source_frame():
     )
     arguments["global_transforms"] = [wrong]
     with pytest.raises(ValueError, match="source"):
-        build_pvc_geometry(**arguments)
+        build_plec_geometry(**arguments)
 
 
 def test_geometry_tensors_are_finite_and_non_trainable():

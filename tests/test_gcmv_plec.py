@@ -2,19 +2,22 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import torch
+from torch import nn
 from torch.nn import functional as F
 
-from src.gcmv_geometry import build_pvc_geometry
-from src.gcmv_pvc import (
-    PVCOutput,
+from src.gcmv_geometry import build_plec_geometry
+from src.gcmv_plec import (
+    ChannelLayerNorm,
+    PLECOutput,
+    PhasePreservingLocalEvidenceCanonicalizer,
     sample_local_phases,
     uniform_bilinear_canonicalize,
 )
 from src.sbr_geometry import LetterboxTransform, Tile
 
 
-def test_public_pvc_sampling_contract_is_importable():
-    assert PVCOutput is not None
+def test_public_plec_sampling_contract_is_importable():
+    assert PLECOutput is not None
     assert callable(sample_local_phases)
     assert callable(uniform_bilinear_canonicalize)
 
@@ -28,7 +31,7 @@ def identity_geometry(*, height: int = 6, width: int = 8):
         pad=0.0,
     )
     tiles = tuple(Tile(0, 0, width, height, index) for index in range(4))
-    return build_pvc_geometry(
+    return build_plec_geometry(
         source_shapes=[(height, width)],
         tiles=[tiles],
         global_transforms=[transform],
@@ -84,7 +87,7 @@ def test_invalid_phase_samples_are_exact_zero_and_alignment_is_explicit():
     sample_valid[:, 2, 0, 2, 3] = False
     geometry = replace(geometry, sample_valid=sample_valid)
 
-    with patch("src.gcmv_pvc.F.grid_sample", wraps=F.grid_sample) as grid_sample:
+    with patch("src.gcmv_plec.F.grid_sample", wraps=F.grid_sample) as grid_sample:
         sampled = sample_local_phases(ramp_features(), geometry)
 
     assert sampled[0, 2, 0, 0, 2, 3].item() == 0.0
@@ -141,3 +144,33 @@ def test_uniform_reference_backpropagates_only_through_features():
     ):
         assert not value.requires_grad
         assert value.grad is None
+
+
+def test_full_plec_constructs_the_frozen_trainable_layers():
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=256,
+        embedding_hidden=64,
+        overlap_hidden=64,
+        use_phase_embedding=True,
+        use_view_embedding=True,
+        use_metadata_embedding=True,
+        learned_overlap=True,
+    )
+
+    assert isinstance(module.view_embedding, nn.Embedding)
+    assert module.view_embedding.num_embeddings == 4
+    assert module.view_embedding.embedding_dim == 256
+    assert module.phase_mlp[0].in_features == 2
+    assert module.phase_mlp[0].out_features == 64
+    assert module.phase_mlp[2].out_features == 256
+    assert module.metadata_mlp[0].in_features == 3
+    assert module.metadata_mlp[0].out_features == 64
+    assert module.metadata_mlp[2].out_features == 256
+    assert module.phase_reducer.in_channels == 9 * 256
+    assert module.phase_reducer.out_channels == 256
+    assert module.phase_reducer.groups == 256
+    assert module.spatial_mixer.kernel_size == (3, 3)
+    assert module.spatial_mixer.groups == 256
+    assert module.pointwise.kernel_size == (1, 1)
+    assert isinstance(module.overlap_head, nn.Sequential)
+    assert isinstance(module.output_norm, ChannelLayerNorm)
