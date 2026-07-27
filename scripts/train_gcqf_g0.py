@@ -17,6 +17,7 @@ import torch
 
 from src.gcqf import GCQF
 from src.gcqf_cache import VerifiedEvidenceCache
+from src.gcqf_cache import SRPEG_CACHE_SCHEMA_VERSION
 from src.gcqf_loss import compute_gcqf_loss
 from src.gcqf_training import (
     GCQF_BATCH_SIZE,
@@ -29,20 +30,22 @@ from src.gcqf_training import (
     GCQF_WARMUP_MOMENTUM,
     build_module_optimizer,
     collate_evidence_records,
+    compute_positive_weights,
+    split_seed0_records,
 )
 
 
-MODULE_ARTIFACT_SCHEMA = "gcte-gcqf-module/v1"
+MODULE_ARTIFACT_SCHEMA = "gcte-gcqf-module/v2"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the two-seed module-only GCQF G0 screen."
+        description="Run the sealed seed0-only SR-PEG module screen."
     )
     parser.add_argument("--train-cache", type=Path, required=True)
-    parser.add_argument("--val-cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--seed", type=int, choices=(0, 1), required=True)
+    parser.add_argument("--seed", type=int, choices=(0,), required=True)
+    parser.add_argument("--source-commit", required=True)
     parser.add_argument("--epochs", type=int, default=GCQF_EPOCHS)
     parser.add_argument("--batch", type=int, default=GCQF_BATCH_SIZE)
     parser.add_argument("--optimizer", default="MuSGD")
@@ -101,7 +104,10 @@ def build_module_artifact(
     seed: int,
     epoch: int,
     train_cache_sha256: str,
-    val_cache_sha256: str,
+    source_commit: str,
+    train_image_ids: tuple[str, ...],
+    calibration_image_ids: tuple[str, ...],
+    positive_weights: dict[str, float],
 ) -> dict[str, Any]:
     return {
         "schema_version": MODULE_ARTIFACT_SCHEMA,
@@ -115,18 +121,41 @@ def build_module_artifact(
                 module.geometry_projector.residual_cap
             ),
             "residual_eta": (
-                module.residual_fusion.residual_eta
+                module.sr_peg.residual_eta
             ),
         },
         "seed": int(seed),
         "epoch": int(epoch),
         "train_cache_sha256": train_cache_sha256.upper(),
-        "val_cache_sha256": val_cache_sha256.upper(),
+        "source_commit": source_commit.lower(),
+        "train_image_ids": list(train_image_ids),
+        "calibration_image_ids": list(calibration_image_ids),
+        "positive_weights": dict(positive_weights),
         "module_state": {
             name: value.detach().cpu().clone()
             for name, value in module.state_dict().items()
         },
     }
+
+
+def validate_training_protocol(args: argparse.Namespace) -> None:
+    """Fail closed on any deviation from the approved seed0 diagnostic."""
+
+    if (
+        args.seed != 0
+        or args.epochs != GCQF_EPOCHS
+        or args.batch != GCQF_BATCH_SIZE
+        or args.optimizer != "MuSGD"
+        or args.device != "0"
+        or args.amp_scale != GCQF_FIXED_AMP_SCALE
+        or not args.amp
+    ):
+        raise ValueError("GCQF G0 training protocol drift")
+    commit = str(args.source_commit).lower()
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ValueError("source commit must be an exact 40-character Git SHA")
 
 
 def _seed_everything(seed: int) -> None:
@@ -145,6 +174,7 @@ def _loss_for_batch(
     batch,
     *,
     amp: bool,
+    positive_weights: dict[str, float],
 ):
     with torch.autocast(
         device_type="cuda",
@@ -166,6 +196,13 @@ def _loss_for_batch(
             score_residual=output.score_residual,
             valid_mask=batch.geometry.valid_mask,
             anchor_mask=batch.anchor_mask,
+            tiny_utility_logits=output.tiny_utility_logits,
+            tiny_utility_targets=batch.local_tiny_utility_targets,
+            non_tiny_risk_logits=output.non_tiny_risk_logits,
+            non_tiny_risk_targets=batch.local_non_tiny_risk_targets,
+            global_retain_logits=output.global_retain_logits,
+            global_retain_targets=batch.global_retain_targets,
+            positive_weights=positive_weights,
         )
     return output, loss
 
@@ -181,6 +218,7 @@ def _epoch(
     step_offset: int = 0,
     total_steps: int = 1,
     warmup_steps: int = 0,
+    positive_weights: dict[str, float],
 ) -> tuple[dict[str, float], int]:
     training = optimizer is not None
     module.train(training)
@@ -189,11 +227,17 @@ def _epoch(
         "quality": 0.0,
         "equivariance": 0.0,
         "residual": 0.0,
+        "tiny_utility": 0.0,
+        "non_tiny_risk": 0.0,
+        "global_retain": 0.0,
     }
     count = 0
     step = step_offset
     for records in loader:
-        batch = collate_evidence_records(records).to(device)
+        batch = collate_evidence_records(
+            records,
+            require_sr_peg_targets=True,
+        ).to(device)
         if training:
             learning_rate, momentum = schedule_values(
                 step=step,
@@ -204,7 +248,12 @@ def _epoch(
                 group["lr"] = learning_rate
                 group["momentum"] = momentum
             optimizer.zero_grad(set_to_none=True)
-            _output, loss = _loss_for_batch(module, batch, amp=amp)
+            _output, loss = _loss_for_batch(
+                module,
+                batch,
+                amp=amp,
+                positive_weights=positive_weights,
+            )
             scaler.scale(loss.total).backward()
             if float(scaler.get_scale()) != GCQF_FIXED_AMP_SCALE:
                 raise FloatingPointError("GCQF AMP scale drift before step")
@@ -215,7 +264,12 @@ def _epoch(
             step += 1
         else:
             with torch.no_grad():
-                _output, loss = _loss_for_batch(module, batch, amp=amp)
+                _output, loss = _loss_for_batch(
+                    module,
+                    batch,
+                    amp=amp,
+                    positive_weights=positive_weights,
+                )
         batch_size = batch.global_evidence.batch_size
         count += batch_size
         totals["total"] += float(loss.total.detach()) * batch_size
@@ -226,6 +280,15 @@ def _epoch(
         totals["residual"] += (
             float(loss.residual_regularization.detach()) * batch_size
         )
+        totals["tiny_utility"] += (
+            float(loss.tiny_utility.detach()) * batch_size
+        )
+        totals["non_tiny_risk"] += (
+            float(loss.non_tiny_risk.detach()) * batch_size
+        )
+        totals["global_retain"] += (
+            float(loss.global_retain.detach()) * batch_size
+        )
     if count <= 0:
         raise RuntimeError("GCQF epoch received no records")
     return {
@@ -234,15 +297,7 @@ def _epoch(
 
 
 def train(args: argparse.Namespace) -> Path:
-    if (
-        args.epochs != GCQF_EPOCHS
-        or args.batch != GCQF_BATCH_SIZE
-        or args.optimizer != "MuSGD"
-        or args.device != "0"
-        or args.amp_scale != GCQF_FIXED_AMP_SCALE
-        or not args.amp
-    ):
-        raise ValueError("GCQF G0 training protocol drift")
+    validate_training_protocol(args)
     if not torch.cuda.is_available():
         raise RuntimeError("GCQF G0 training requires CUDA")
     output = args.output.resolve()
@@ -251,14 +306,11 @@ def train(args: argparse.Namespace) -> Path:
     output.mkdir(parents=True)
     _seed_everything(args.seed)
     train_cache = VerifiedEvidenceCache(args.train_cache)
-    val_cache = VerifiedEvidenceCache(args.val_cache)
-    if (
-        train_cache.manifest["baseline_sha256"]
-        != val_cache.manifest["baseline_sha256"]
-    ):
-        raise ValueError("train and val cache baseline authorities differ")
-    train_records = list(train_cache.iter_records())
-    val_records = list(val_cache.iter_records())
+    if train_cache.manifest["schema_version"] != SRPEG_CACHE_SCHEMA_VERSION:
+        raise ValueError("training requires a supervised v2 train cache")
+    all_records = list(train_cache.iter_records())
+    train_records, calibration_records = split_seed0_records(all_records)
+    positive_weights = compute_positive_weights(train_records)
     first = train_records[0]
     module = GCQF(
         query_dim=first.global_evidence.query_dim,
@@ -284,8 +336,8 @@ def train(args: argparse.Namespace) -> Path:
         num_workers=0,
         collate_fn=lambda values: values,
     )
-    val_loader = torch.utils.data.DataLoader(
-        val_records,
+    calibration_loader = torch.utils.data.DataLoader(
+        calibration_records,
         batch_size=args.batch,
         shuffle=False,
         num_workers=0,
@@ -294,7 +346,7 @@ def train(args: argparse.Namespace) -> Path:
     steps_per_epoch = math.ceil(len(train_records) / args.batch)
     total_steps = steps_per_epoch * args.epochs
     warmup_steps = int(round(GCQF_WARMUP_EPOCHS * steps_per_epoch))
-    results_path = output / "results.csv"
+    results_path = output / "losses.csv"
     best_loss = float("inf")
     best_path = output / "best-module.pt"
     last_path = output / "last-module.pt"
@@ -306,10 +358,16 @@ def train(args: argparse.Namespace) -> Path:
             "train_quality",
             "train_equivariance",
             "train_residual",
-            "val_total",
-            "val_quality",
-            "val_equivariance",
-            "val_residual",
+            "train_tiny_utility",
+            "train_non_tiny_risk",
+            "train_global_retain",
+            "calibration_total",
+            "calibration_quality",
+            "calibration_equivariance",
+            "calibration_residual",
+            "calibration_tiny_utility",
+            "calibration_non_tiny_risk",
+            "calibration_global_retain",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -324,12 +382,14 @@ def train(args: argparse.Namespace) -> Path:
                 step_offset=step,
                 total_steps=total_steps,
                 warmup_steps=warmup_steps,
+                positive_weights=positive_weights,
             )
-            val_metrics, _ = _epoch(
+            calibration_metrics, _ = _epoch(
                 module=module,
-                loader=val_loader,
+                loader=calibration_loader,
                 device=torch.device("cuda:0"),
                 amp=args.amp,
+                positive_weights=positive_weights,
             )
             row = {
                 "epoch": epoch,
@@ -338,8 +398,8 @@ def train(args: argparse.Namespace) -> Path:
                     for name, value in train_metrics.items()
                 },
                 **{
-                    f"val_{name}": value
-                    for name, value in val_metrics.items()
+                    f"calibration_{name}": value
+                    for name, value in calibration_metrics.items()
                 },
             }
             writer.writerow(row)
@@ -351,20 +411,28 @@ def train(args: argparse.Namespace) -> Path:
                 train_cache_sha256=_sha256_file(
                     Path(args.train_cache)
                 ),
-                val_cache_sha256=_sha256_file(Path(args.val_cache)),
+                source_commit=args.source_commit,
+                train_image_ids=tuple(
+                    record.image_id for record in train_records
+                ),
+                calibration_image_ids=tuple(
+                    record.image_id for record in calibration_records
+                ),
+                positive_weights=positive_weights,
             )
             torch.save(artifact, last_path)
-            if val_metrics["total"] < best_loss:
-                best_loss = val_metrics["total"]
+            if calibration_metrics["total"] < best_loss:
+                best_loss = calibration_metrics["total"]
                 torch.save(artifact, best_path)
             print(
                 f"GCQF_TRAIN epoch={epoch}/{args.epochs} "
                 f"train={train_metrics['total']:.8f} "
-                f"val={val_metrics['total']:.8f}",
+                f"calibration={calibration_metrics['total']:.8f}",
                 flush=True,
             )
     manifest = {
-        "schema_version": "gcte-gcqf-training/v1",
+        "schema_version": "gcte-gcqf-training/v2",
+        "source_commit": args.source_commit.lower(),
         "seed": args.seed,
         "epochs": args.epochs,
         "batch": args.batch,
@@ -374,11 +442,17 @@ def train(args: argparse.Namespace) -> Path:
         "train_cache_manifest_sha256": _sha256_file(
             Path(args.train_cache)
         ),
-        "val_cache_manifest_sha256": _sha256_file(Path(args.val_cache)),
+        "train_image_ids": [
+            record.image_id for record in train_records
+        ],
+        "calibration_image_ids": [
+            record.image_id for record in calibration_records
+        ],
+        "positive_weights": positive_weights,
         "best_module_sha256": _sha256_file(best_path),
         "last_module_sha256": _sha256_file(last_path),
-        "results_sha256": _sha256_file(results_path),
-        "best_val_loss": best_loss,
+        "losses_sha256": _sha256_file(results_path),
+        "best_calibration_loss": best_loss,
         "parameter_count": sum(
             parameter.numel() for parameter in module.parameters()
         ),

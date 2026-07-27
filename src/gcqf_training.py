@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Callable, Sequence
 
 import torch
@@ -243,6 +244,28 @@ def compute_positive_weights(
     return weights
 
 
+def split_seed0_records(
+    records: Sequence[GCQFEvidenceRecord] | Sequence[str],
+) -> tuple[tuple[GCQFEvidenceRecord, ...], tuple[GCQFEvidenceRecord, ...]] | tuple[tuple[str, ...], tuple[str, ...]]:
+    """Create the sealed 518/129 split using SHA256(seed0:image_id)."""
+
+    if len(records) != 647:
+        raise ValueError("seed0 split requires exactly 647 records")
+    keyed = []
+    identities: set[str] = set()
+    for record in records:
+        image_id = record if isinstance(record, str) else record.image_id
+        if not isinstance(image_id, str) or not image_id:
+            raise ValueError("seed0 split requires canonical image identities")
+        if image_id in identities:
+            raise ValueError("seed0 split identities must be unique")
+        identities.add(image_id)
+        digest = sha256(f"seed0:{image_id}".encode("utf-8")).hexdigest()
+        keyed.append((digest, image_id, record))
+    ordered = tuple(item[2] for item in sorted(keyed))
+    return ordered[:518], ordered[518:]
+
+
 def build_module_optimizer(
     module: nn.Module,
     *,
@@ -327,4 +350,5 @@ __all__ = [
     "build_module_optimizer",
     "collate_evidence_records",
     "compute_positive_weights",
+    "split_seed0_records",
 ]

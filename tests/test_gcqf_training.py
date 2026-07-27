@@ -9,6 +9,7 @@ from src.gcqf_training import (
     build_module_optimizer,
     collate_evidence_records,
     compute_positive_weights,
+    split_seed0_records,
 )
 from src.gcte_types import QueryEvidence, ViewGeometry
 from src.sr_peg_targets import SRPEGTargets
@@ -133,6 +134,17 @@ def test_positive_weights_are_independent_and_clipped():
         "risk": 20.0,
         "retain": 20.0,
     }
+
+
+def test_seed0_split_is_exact_stable_and_disjoint():
+    ids = [f"train/{index:04d}.jpg" for index in range(647)]
+
+    train, calibration = split_seed0_records(ids)
+
+    assert len(train) == 518
+    assert len(calibration) == 129
+    assert set(train).isdisjoint(calibration)
+    assert split_seed0_records(list(reversed(ids))) == (train, calibration)
 
 
 class _RecordingOptimizer:
