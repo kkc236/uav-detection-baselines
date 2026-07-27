@@ -357,6 +357,23 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
 class GCMVPLECTrainer(RTDETRTrainer):
     """Bounded train-only trainer for the first PLEC screen."""
 
+    def _setup_train(self) -> None:
+        requested_amp = bool(self.args.amp)
+        self.args.amp = False
+        super()._setup_train()
+        if not requested_amp:
+            return
+        if not torch.cuda.is_available() or self.device.type != "cuda":
+            raise RuntimeError("GCMV PLEC AMP requires CUDA")
+        self.args.amp = True
+        self.amp = True
+        self.scaler = torch.amp.GradScaler(
+            "cuda",
+            enabled=True,
+            init_scale=128.0,
+            growth_interval=2**31 - 1,
+        )
+
     def get_model(
         self,
         cfg: dict | str | None = None,
@@ -410,4 +427,3 @@ class GCMVPLECTrainer(RTDETRTrainer):
 
     def final_eval(self):
         return None
-

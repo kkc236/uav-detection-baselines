@@ -7,6 +7,7 @@ import yaml
 
 from src.rtdetr_gcmv_plec import (
     GCMVPLECDetectionModel,
+    GCMVPLECTrainer,
     PLECReferenceAdapter,
 )
 from src.sbr_geometry import LetterboxTransform, overlapping_tiles
@@ -35,6 +36,10 @@ def test_model_yaml_exposes_plec_at_the_frozen_predecoder_boundary():
     }
     assert payload["head"][-1][0] == [21, 24, 27]
     assert payload["head"][-1][2] == "RTDETRDecoder"
+
+
+def test_trainer_owns_amp_setup_instead_of_running_download_admission():
+    assert "_setup_train" in GCMVPLECTrainer.__dict__
 
 
 def test_reference_adapter_is_exact_stock_identity_at_zero_gamma():
