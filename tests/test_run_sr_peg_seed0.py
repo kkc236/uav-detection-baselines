@@ -13,7 +13,7 @@ from scripts.run_sr_peg_seed0 import (
 )
 
 
-def _args(tmp_path: Path):
+def _args(tmp_path: Path, *extra: str):
     return build_parser().parse_args(
         [
             "--source",
@@ -34,6 +34,7 @@ def _args(tmp_path: Path):
             str(tmp_path / "anchor-reference.json"),
             "--seed",
             "0",
+            *extra,
         ]
     )
 
@@ -90,6 +91,24 @@ def test_stage_commands_never_regenerate_val_or_request_extra_seeds(tmp_path):
         token in joined.lower()
         for token in ("shutdown", "reboot", "poweroff", "kill")
     )
+
+
+def test_stage_commands_can_reuse_a_sealed_train_cache_without_recomputing_it(
+    tmp_path,
+):
+    reused_manifest = tmp_path / "sealed-train-cache" / "manifest.json"
+    args = _args(
+        tmp_path,
+        "--reuse-train-cache",
+        str(reused_manifest),
+    )
+    commands = build_stage_commands(args, python="/venv/python")
+
+    assert commands["TRAIN_CACHE"] == []
+    assert str(reused_manifest.resolve()) in " ".join(
+        commands["TRAIN_SEED0"]
+    )
+    assert str(reused_manifest.resolve()) in " ".join(commands["CALIBRATE"])
 
 
 def test_pipeline_complete_is_written_only_for_passing_evaluation(tmp_path):
