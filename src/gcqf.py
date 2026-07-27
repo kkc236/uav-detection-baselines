@@ -15,6 +15,7 @@ import torch
 from torch import nn
 
 from src.gcte_types import QueryEvidence, ViewGeometry
+from src.gcte_views import transform_xywh_homography
 
 
 @dataclass(frozen=True)
@@ -74,45 +75,6 @@ class GeometryQueryProjector(nn.Module):
         _zero_linear(self.query_adapter[-1])
 
     @staticmethod
-    def _global_xywh(
-        local_xywh: torch.Tensor,
-        homography: torch.Tensor,
-    ) -> torch.Tensor:
-        """Transform all four box corners with detached normalized homographies."""
-
-        x, y, width, height = local_xywh.unbind(dim=-1)
-        half_width = width * 0.5
-        half_height = height * 0.5
-        left, right = x - half_width, x + half_width
-        top, bottom = y - half_height, y + half_height
-        corners = torch.stack(
-            (
-                torch.stack((left, top), dim=-1),
-                torch.stack((right, top), dim=-1),
-                torch.stack((right, bottom), dim=-1),
-                torch.stack((left, bottom), dim=-1),
-            ),
-            dim=-2,
-        )
-        homogeneous = torch.cat(
-            (corners, torch.ones_like(corners[..., :1])),
-            dim=-1,
-        )
-        mapped = torch.matmul(
-            homography.detach().unsqueeze(-3),
-            homogeneous.unsqueeze(-1),
-        ).squeeze(-1)
-        divisor = mapped[..., 2:3]
-        if bool((divisor.detach().abs() <= 1e-12).any()):
-            raise ValueError("homography maps a box corner to infinity")
-        mapped_xy = (mapped[..., :2] / divisor).clamp(0.0, 1.0)
-        minimum = mapped_xy.amin(dim=-2)
-        maximum = mapped_xy.amax(dim=-2)
-        center = (minimum + maximum) * 0.5
-        size = maximum - minimum
-        return torch.cat((center, size), dim=-1)
-
-    @staticmethod
     def _boundary_distances(local_xywh: torch.Tensor) -> torch.Tensor:
         x, y, width, height = local_xywh.unbind(dim=-1)
         return torch.stack(
@@ -145,9 +107,10 @@ class GeometryQueryProjector(nn.Module):
         ):
             raise ValueError("view_index exceeds configured num_views")
 
-        global_boxes = self._global_xywh(
+        global_boxes = transform_xywh_homography(
             local.boxes,
             geometry.homography,
+            clip=True,
         )
         raw_geometry = torch.cat(
             (

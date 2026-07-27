@@ -20,6 +20,54 @@ LOCAL_VIEWS = 4
 TILE_RATIO = 0.6
 
 
+def transform_xywh_homography(
+    boxes: torch.Tensor,
+    homography: torch.Tensor,
+    *,
+    clip: bool,
+) -> torch.Tensor:
+    """Transform all four corners and return axis-aligned normalized ``xywh``."""
+
+    if boxes.ndim < 2 or boxes.shape[-1] != 4:
+        raise ValueError("boxes must end in xywh")
+    if homography.shape != (*boxes.shape[:-1], 3, 3):
+        raise ValueError("homography must match every input box")
+    x, y, width, height = boxes.unbind(dim=-1)
+    half_width = width * 0.5
+    half_height = height * 0.5
+    left, right = x - half_width, x + half_width
+    top, bottom = y - half_height, y + half_height
+    corners = torch.stack(
+        (
+            torch.stack((left, top), dim=-1),
+            torch.stack((right, top), dim=-1),
+            torch.stack((right, bottom), dim=-1),
+            torch.stack((left, bottom), dim=-1),
+        ),
+        dim=-2,
+    )
+    homogeneous = torch.cat(
+        (corners, torch.ones_like(corners[..., :1])),
+        dim=-1,
+    )
+    mapped = torch.matmul(
+        homography.detach().unsqueeze(-3),
+        homogeneous.unsqueeze(-1),
+    ).squeeze(-1)
+    divisor = mapped[..., 2:3]
+    if bool((divisor.detach().abs() <= 1e-12).any()):
+        raise ValueError("homography maps a box corner to infinity")
+    mapped_xy = mapped[..., :2] / divisor
+    if clip:
+        mapped_xy = mapped_xy.clamp(0.0, 1.0)
+    minimum = mapped_xy.amin(dim=-2)
+    maximum = mapped_xy.amax(dim=-2)
+    return torch.cat(
+        ((minimum + maximum) * 0.5, maximum - minimum),
+        dim=-1,
+    )
+
+
 def build_local_to_global_homography(
     *,
     tile: Tile,
@@ -235,4 +283,5 @@ __all__ = [
     "build_frozen_view_geometry",
     "build_local_to_global_homography",
     "build_local_view_tensor",
+    "transform_xywh_homography",
 ]
