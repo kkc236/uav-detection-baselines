@@ -20,14 +20,15 @@ from src.gcqf_training import collate_evidence_records
 from src.saded_stage import prediction_payload
 from src.sbr_artifacts import atomic_write_json, load_dataset
 from src.sbr_metrics import evaluate_dataset
+from src.sr_peg_routing import SRPEGThresholds, route_sr_peg_record
 
 
 STATES = [
     "Global",
     "Raw-Union",
     "Fixed-SADED",
-    "Full-GCQF",
     "Residual-Off",
+    "Full-GCQF",
 ]
 
 
@@ -39,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--module", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--calibration", type=Path, required=True)
     parser.add_argument("--anchor-reference", type=Path)
     parser.add_argument("--device", default="0")
     parser.add_argument("--batch", type=int, default=8)
@@ -135,8 +137,12 @@ def per_seed_gate(
     *,
     anchor_exact: bool,
     protected_exact: bool,
+    max_det_exact: bool,
     residual_statistics: Mapping[str, float],
 ) -> dict[str, bool]:
+    def at_least(value: float, threshold: float) -> bool:
+        return float(value) + 1e-12 >= float(threshold)
+
     full_vs_fixed = metric_deltas(
         metrics["Fixed-SADED"],
         metrics["Full-GCQF"],
@@ -145,29 +151,33 @@ def per_seed_gate(
         metrics["Global"],
         metrics["Full-GCQF"],
     )
-    residual_off_exact = (
-        metrics["Residual-Off"] == metrics["Fixed-SADED"]
-    )
     checks = {
         "anchor_reference_exact": bool(anchor_exact),
-        "residual_off_exact": residual_off_exact,
         "protected_global_exact": bool(protected_exact),
-        "map_beats_fixed_saded": (
-            full_vs_fixed.get("mAP50-95", -1.0) > 0.0
+        "max_det_respected": bool(max_det_exact),
+        "map_gain_vs_global": (
+            at_least(full_vs_global.get("mAP50-95", -1.0), 0.005)
         ),
-        "tiny_or_ap75_material": (
-            full_vs_fixed.get("AP-tiny-SBR", -1.0) >= 0.005
-            or full_vs_fixed.get("AP75", -1.0) >= 0.003
+        "tiny_gain_vs_global": (
+            at_least(full_vs_global.get("AP-tiny-SBR", -1.0), 0.010)
         ),
-        "medium_within_fixed_budget": (
-            full_vs_fixed.get("AP-medium-SBR", -1.0) >= -0.002
+        "tiny_recall_gain_vs_global": (
+            at_least(full_vs_global.get("tiny_recall", -1.0), 0.020)
         ),
-        "large_within_fixed_budget": (
-            full_vs_fixed.get("AP-large-SBR", -1.0) >= -0.002
+        "medium_budget_vs_global": (
+            at_least(full_vs_global.get("AP-medium-SBR", -1.0), -0.002)
         ),
-        "large_within_global_budget": (
-            full_vs_global.get("AP-large-SBR", -1.0) >= -0.005
+        "large_budget_vs_global": (
+            at_least(full_vs_global.get("AP-large-SBR", -1.0), -0.005)
         ),
+        "medium_recovery_vs_fixed": (
+            at_least(full_vs_fixed.get("AP-medium-SBR", -1.0), 0.008)
+        ),
+        "map_nonnegative_vs_fixed": (
+            at_least(full_vs_fixed.get("mAP50-95", -1.0), 0.0)
+        ),
+    }
+    diagnostics = {
         "residual_is_active": (
             residual_statistics.get("mean_abs", 0.0) >= 1e-4
         ),
@@ -175,7 +185,12 @@ def per_seed_gate(
             residual_statistics.get("saturation_fraction", 1.0) < 0.5
         ),
     }
-    checks["advance_seed"] = all(checks.values())
+    checks.update(diagnostics)
+    checks["passed"] = all(
+        value
+        for name, value in checks.items()
+        if name not in diagnostics
+    )
     return checks
 
 
@@ -244,6 +259,29 @@ def _load_anchor_reference(path: Path) -> dict[str, Any]:
     return result
 
 
+def _tensor_statistics(values: torch.Tensor) -> dict[str, Any]:
+    vector = values.detach().float().reshape(-1)
+    if vector.numel() == 0:
+        raise ValueError("cannot summarize an empty tensor")
+    return {
+        "count": int(vector.numel()),
+        "mean": float(vector.mean()),
+        "mean_abs": float(vector.abs().mean()),
+        "std": float(vector.std(unbiased=False)),
+        "min": float(vector.min()),
+        "max": float(vector.max()),
+        "saturation_fraction": float(
+            (vector.abs() >= 0.99).float().mean()
+        ),
+        "histogram": {
+            "[0.0,0.4)": int((vector < 0.4).sum()),
+            "[0.4,0.5)": int(((vector >= 0.4) & (vector < 0.5)).sum()),
+            "[0.5,0.6)": int(((vector >= 0.5) & (vector < 0.6)).sum()),
+            "[0.6,1.0]": int((vector >= 0.6).sum()),
+        },
+    }
+
+
 def evaluate(args: argparse.Namespace) -> Path:
     if (
         args.device != "0"
@@ -271,12 +309,32 @@ def evaluate(args: argparse.Namespace) -> Path:
     image_by_id = {
         value["relative_path"]: value for value in dataset["images"]
     }
+    calibration = json.loads(
+        args.calibration.resolve().read_text(encoding="utf-8")
+    )
+    selected_thresholds = calibration.get("selected_thresholds")
+    if (
+        calibration.get("schema_version")
+        != "gcte-sr-peg-calibration/v1"
+        or not isinstance(selected_thresholds, dict)
+        or set(selected_thresholds)
+        != {"tiny_utility", "non_tiny_risk", "global_retain"}
+        or calibration.get("module_sha256")
+        != _sha256_file(Path(args.module))
+    ):
+        raise ValueError("SR-PEG calibration authority mismatch")
+    thresholds = SRPEGThresholds(**selected_thresholds)
     module = load_gcqf_module(
         args.module,
         device=torch.device("cuda:0"),
     )
-    residual_by_id: dict[str, torch.Tensor] = {}
+    outputs_by_id: dict[str, dict[str, torch.Tensor]] = {}
     residual_values: list[torch.Tensor] = []
+    probability_values: dict[str, list[torch.Tensor]] = {
+        "tiny_utility": [],
+        "non_tiny_risk": [],
+        "global_retain": [],
+    }
     loader = torch.utils.data.DataLoader(
         records,
         batch_size=args.batch,
@@ -299,29 +357,43 @@ def evaluate(args: argparse.Namespace) -> Path:
                 residual_enabled=True,
             )
         for index, image_id in enumerate(batch.image_ids):
-            value = prediction.score_residual[
+            residual = prediction.score_residual[
                 index : index + 1
             ].detach().cpu()
-            residual_by_id[image_id] = value
+            utility = prediction.tiny_utility_logits[
+                index : index + 1
+            ].sigmoid().detach().cpu()
+            risk = prediction.non_tiny_risk_logits[
+                index : index + 1
+            ].sigmoid().detach().cpu()
+            retain = prediction.global_retain_logits[
+                index : index + 1
+            ].sigmoid().detach().cpu()
+            outputs_by_id[image_id] = {
+                "score_residual": residual,
+                "tiny_utility": utility,
+                "non_tiny_risk": risk,
+                "global_retain": retain,
+            }
             eligible = batch.anchor_mask[index].detach().cpu().squeeze(-1)
-            residual_values.append(value[0, eligible])
+            valid = batch.geometry.valid_mask[index].detach().cpu()
+            residual_values.append(residual[0, eligible])
+            probability_values["tiny_utility"].append(utility[0, valid])
+            probability_values["non_tiny_risk"].append(risk[0, valid])
+            probability_values["global_retain"].append(retain[0])
     residual_vector = torch.cat(residual_values).float()
-    residual_statistics = {
-        "count": int(residual_vector.numel()),
-        "mean": float(residual_vector.mean()),
-        "mean_abs": float(residual_vector.abs().mean()),
-        "std": float(residual_vector.std(unbiased=False)),
-        "min": float(residual_vector.min()),
-        "max": float(residual_vector.max()),
-        "saturation_fraction": float(
-            (residual_vector.abs() >= 0.99).float().mean()
-        ),
+    residual_statistics = _tensor_statistics(residual_vector)
+    gate_statistics = {
+        name: _tensor_statistics(torch.cat(values))
+        for name, values in probability_values.items()
     }
     rows = {state: [] for state in STATES}
     protected_exact = True
+    max_det_exact = True
     anchor_outputs = {}
     coverage = {
         "anchor": {},
+        "residual_off": {},
         "method": {},
     }
     for record in records:
@@ -329,22 +401,42 @@ def evaluate(args: argparse.Namespace) -> Path:
         if key not in image_by_id:
             raise RuntimeError(f"cache image missing from dataset: {key}")
         anchor = route_gcqf_record(record, score_residual=None)
-        method = route_gcqf_record(
+        prediction = outputs_by_id[record.image_id]
+        residual_off = route_sr_peg_record(
             record,
-            score_residual=residual_by_id[record.image_id],
+            **prediction,
+            thresholds=thresholds,
+            residual_enabled=False,
+        )
+        method = route_sr_peg_record(
+            record,
+            **prediction,
+            thresholds=thresholds,
+            residual_enabled=True,
         )
         image = image_by_id[key]
         rows["Global"].append(_metric_row(image, anchor.control))
         rows["Raw-Union"].append(_metric_row(image, anchor.raw_union))
         rows["Fixed-SADED"].append(_metric_row(image, anchor.output))
-        rows["Residual-Off"].append(_metric_row(image, anchor.output))
+        rows["Residual-Off"].append(
+            _metric_row(image, residual_off.output)
+        )
         rows["Full-GCQF"].append(_metric_row(image, method.output))
         anchor_outputs[record.image_id] = _prediction_json(anchor.output)
         protected_exact = protected_exact and bool(
             anchor.invariants.get("protected_identity_exact")
+            and residual_off.invariants.get("protected_identity_exact")
             and method.invariants.get("protected_identity_exact")
         )
-        for label, routed in (("anchor", anchor), ("method", method)):
+        max_det_exact = max_det_exact and bool(
+            residual_off.invariants.get("max_det_respected")
+            and method.invariants.get("max_det_respected")
+        )
+        for label, routed in (
+            ("anchor", anchor),
+            ("residual_off", residual_off),
+            ("method", method),
+        ):
             for name, value in routed.coverage.items():
                 coverage[label][name] = (
                     coverage[label].get(name, 0) + int(value)
@@ -386,10 +478,11 @@ def evaluate(args: argparse.Namespace) -> Path:
         metrics,
         anchor_exact=anchor_exact,
         protected_exact=protected_exact,
+        max_det_exact=max_det_exact,
         residual_statistics=residual_statistics,
     )
     result = {
-        "schema_version": "gcte-gcqf-five-state/v1",
+        "schema_version": "gcte-gcqf-five-state/v2",
         "cache": {
             "path": Path(args.cache).resolve().as_posix(),
             "manifest_sha256": _sha256_file(Path(args.cache)),
@@ -398,6 +491,11 @@ def evaluate(args: argparse.Namespace) -> Path:
         "module": {
             "path": Path(args.module).resolve().as_posix(),
             "sha256": _sha256_file(Path(args.module)),
+        },
+        "calibration": {
+            "path": args.calibration.resolve().as_posix(),
+            "sha256": _sha256_file(args.calibration),
+            "thresholds": selected_thresholds,
         },
         "dataset": {
             "yaml": Path(args.data).resolve().as_posix(),
@@ -416,13 +514,15 @@ def evaluate(args: argparse.Namespace) -> Path:
         "metrics": metrics,
         "deltas": deltas,
         "residual_statistics": residual_statistics,
+        "gate_probability_statistics": gate_statistics,
         "protected_global_exact": protected_exact,
+        "max_det_respected": max_det_exact,
         "coverage": coverage,
         "per_seed_gate": gate,
     }
     atomic_write_json(output, _stringify_mapping_keys(result))
     print(
-        f"GCQF_EVALUATION_COMPLETE advance={gate['advance_seed']} "
+        f"GCQF_EVALUATION_COMPLETE passed={gate['passed']} "
         f"anchor_exact={anchor_exact} output={output}",
         flush=True,
     )

@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from scripts.evaluate_gcqf_g0 import (
+    STATES,
     _stringify_mapping_keys,
     per_seed_gate,
     build_parser,
@@ -27,7 +28,7 @@ def _metrics(**overrides):
     return values
 
 
-def test_evaluator_cli_reports_four_required_states():
+def test_evaluator_cli_reports_five_required_states():
     args = build_parser().parse_args(
         [
             "--cache",
@@ -38,6 +39,8 @@ def test_evaluator_cli_reports_four_required_states():
             "visdrone.yaml",
             "--output",
             "evaluation.json",
+            "--calibration",
+            "calibration.json",
         ]
     )
 
@@ -45,9 +48,10 @@ def test_evaluator_cli_reports_four_required_states():
         "Global",
         "Raw-Union",
         "Fixed-SADED",
-        "Full-GCQF",
         "Residual-Off",
+        "Full-GCQF",
     ]
+    assert STATES == args.states
     assert args.batch == 8
 
 
@@ -79,35 +83,77 @@ def test_evaluation_stringifies_nested_metric_threshold_keys():
     }
 
 
-def test_per_seed_gate_is_relative_to_fixed_saded_not_only_global():
+def test_per_seed_gate_enforces_global_and_fixed_saded_success_budgets():
     metrics = {
-        "Global": _metrics(**{"mAP50-95": 0.18}),
-        "Raw-Union": _metrics(**{"mAP50-95": 0.19}),
-        "Fixed-SADED": _metrics(),
-        "Full-GCQF": _metrics(
+        "Global": _metrics(),
+        "Raw-Union": _metrics(),
+        "Fixed-SADED": _metrics(
             **{
-                "mAP50-95": 0.204,
-                "AP-tiny-SBR": 0.106,
-                "AP-medium-SBR": 0.249,
-                "AP-large-SBR": 0.299,
+                "mAP50-95": 0.224,
+                "AP-tiny-SBR": 0.12,
+                "AP-medium-SBR": 0.24,
             }
         ),
-        "Residual-Off": _metrics(),
+        "Full-GCQF": _metrics(
+            **{
+                "mAP50-95": 0.225,
+                "AP-tiny-SBR": 0.125,
+                "tiny_recall": 0.63,
+                "AP-medium-SBR": 0.248,
+                "AP-large-SBR": 0.296,
+            }
+        ),
+        "Residual-Off": _metrics(**{"mAP50-95": 0.223}),
     }
 
     gate = per_seed_gate(
         metrics,
         anchor_exact=True,
         protected_exact=True,
+        max_det_exact=True,
         residual_statistics={
             "mean_abs": 0.1,
             "saturation_fraction": 0.0,
         },
     )
 
-    assert gate["map_beats_fixed_saded"] is True
-    assert gate["large_within_fixed_budget"] is True
-    assert gate["advance_seed"] is True
+    assert gate["map_gain_vs_global"] is True
+    assert gate["tiny_gain_vs_global"] is True
+    assert gate["tiny_recall_gain_vs_global"] is True
+    assert gate["medium_budget_vs_global"] is True
+    assert gate["large_budget_vs_global"] is True
+    assert gate["medium_recovery_vs_fixed"] is True
+    assert gate["map_nonnegative_vs_fixed"] is True
+    assert gate["passed"] is True
+
+
+def test_per_seed_gate_rejects_insufficient_medium_recovery():
+    metrics = {
+        "Global": _metrics(),
+        "Raw-Union": _metrics(),
+        "Fixed-SADED": _metrics(**{"AP-medium-SBR": 0.24}),
+        "Residual-Off": _metrics(),
+        "Full-GCQF": _metrics(
+            **{
+                "mAP50-95": 0.21,
+                "AP-tiny-SBR": 0.12,
+                "tiny_recall": 0.63,
+                "AP-medium-SBR": 0.247,
+                "AP-large-SBR": 0.30,
+            }
+        ),
+    }
+
+    gate = per_seed_gate(
+        metrics,
+        anchor_exact=True,
+        protected_exact=True,
+        max_det_exact=True,
+        residual_statistics={"mean_abs": 0.1, "saturation_fraction": 0.0},
+    )
+
+    assert gate["medium_recovery_vs_fixed"] is False
+    assert gate["passed"] is False
 
 
 def test_module_loader_rejects_state_or_schema_drift(tmp_path):
@@ -122,7 +168,10 @@ def test_module_loader_rejects_state_or_schema_drift(tmp_path):
         seed=0,
         epoch=1,
         train_cache_sha256="A" * 64,
-        val_cache_sha256="B" * 64,
+        source_commit="B" * 40,
+        train_image_ids=("a.jpg",),
+        calibration_image_ids=("b.jpg",),
+        positive_weights={"tiny": 2.0, "risk": 3.0, "retain": 4.0},
     )
     path = tmp_path / "module.pt"
     torch.save(artifact, path)
