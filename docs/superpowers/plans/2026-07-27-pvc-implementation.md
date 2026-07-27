@@ -1,5 +1,9 @@
 # PVC Core Implementation Plan
 
+> **Superseded:** Continue from the approved PLEC freeze using
+> `2026-07-27-plec-implementation.md`. This file is retained as implementation
+> history for the two already completed geometry/reference commits.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement and locally verify the first GCMV-RTDETR network module, PVC (Phase-Preserving View Canonicalizer), as an isolated trainable PyTorch component before any GRCA, QCVR, RT-DETR integration, YAML work, or server training.

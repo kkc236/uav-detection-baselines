@@ -1,5 +1,10 @@
 # GCMV-RTDETR Network Design
 
+> **Historical design:** Paper-facing PVC/GRCA/QCVR names in this document were
+> superseded by the approved PLEC/GGLF/PEG freeze in
+> `2026-07-27-gcmv-rtdetr-frozen-design.md`. Use the frozen document for all
+> new implementation and paper wording.
+
 Date: 2026-07-27
 
 Status: proposed for written-spec review; implementation is not authorized until
