@@ -64,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--train-images", type=Path, required=True)
+    parser.add_argument(
+        "--reuse-train-cache",
+        type=Path,
+        help=(
+            "Read-only reuse of an already sealed SR-PEG train-cache "
+            "manifest. Its full authority contract is revalidated."
+        ),
+    )
     parser.add_argument("--val-cache", type=Path, required=True)
     parser.add_argument("--anchor-reference", type=Path, required=True)
     parser.add_argument("--seed", type=int, choices=(0,), required=True)
@@ -113,12 +121,16 @@ def build_stage_commands(
 ) -> dict[str, list[str]]:
     output = args.output.resolve()
     source = args.source.resolve()
-    train_manifest = output / "train-cache" / "manifest.json"
+    train_manifest = (
+        args.reuse_train_cache.resolve()
+        if args.reuse_train_cache is not None
+        else output / "train-cache" / "manifest.json"
+    )
     training = output / "train-seed0"
     calibration = output / "calibration.json"
     evaluation = output / "seed0-evaluation.json"
     return {
-        "TRAIN_CACHE": [
+        "TRAIN_CACHE": [] if args.reuse_train_cache is not None else [
             python,
             "-m",
             "scripts.cache_gcqf_evidence",
@@ -187,9 +199,17 @@ def build_stage_commands(
     }
 
 
-def _stage_artifacts(output: Path) -> dict[str, Path]:
+def _stage_artifacts(
+    output: Path,
+    *,
+    reused_train_cache: Path | None = None,
+) -> dict[str, Path]:
     return {
-        "TRAIN_CACHE": output / "train-cache" / "manifest.json",
+        "TRAIN_CACHE": (
+            reused_train_cache.resolve()
+            if reused_train_cache is not None
+            else output / "train-cache" / "manifest.json"
+        ),
         "TRAIN_SEED0": output / "train-seed0" / "manifest.json",
         "CALIBRATE": output / "calibration.json",
         "EVALUATE": output / "seed0-evaluation.json",
@@ -286,6 +306,8 @@ def _preflight(args: argparse.Namespace) -> dict[str, Any]:
         or val_cache.manifest["record_count"] != 548
     ):
         raise ValueError("sealed val cache authority mismatch")
+    if args.reuse_train_cache is not None:
+        _verify_stage("TRAIN_CACHE", args.reuse_train_cache.resolve())
     output_parent = args.output.resolve().parent
     output_parent.mkdir(parents=True, exist_ok=True)
     free_bytes = shutil.disk_usage(output_parent).free
@@ -342,7 +364,10 @@ def run(args: argparse.Namespace) -> Path:
         preflight = _preflight(args)
         _write_json(output / "preflight.json", preflight)
         commands = build_stage_commands(args, python=sys.executable)
-        artifacts = _stage_artifacts(output)
+        artifacts = _stage_artifacts(
+            output,
+            reused_train_cache=args.reuse_train_cache,
+        )
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(args.source.resolve())
         environment["PYTHONHASHSEED"] = "0"
@@ -355,6 +380,18 @@ def run(args: argparse.Namespace) -> Path:
                 _verify_stage(stage, artifact)
                 if marker_value.get("artifact_sha256") != _sha256_file(artifact):
                     raise RuntimeError(f"{stage} completion checksum drift")
+                continue
+            if stage == "TRAIN_CACHE" and args.reuse_train_cache is not None:
+                _verify_stage(stage, artifact)
+                _write_json(
+                    marker,
+                    {
+                        "stage": stage,
+                        "artifact": artifact.resolve().as_posix(),
+                        "artifact_sha256": _sha256_file(artifact),
+                        "reused_read_only": True,
+                    },
+                )
                 continue
             if artifact.exists() or (
                 stage in {"TRAIN_CACHE", "TRAIN_SEED0"}
