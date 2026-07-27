@@ -25,12 +25,27 @@ def test_gcte_yaml_freezes_single_gcqf_module_and_protocol():
         "tile_ratio": 0.6,
         "residual_cap": 0.2,
         "residual_eta": 0.2,
+        "stages": [
+            "GeometryQueryProjector",
+            "GlobalLocalQueryInteraction",
+            "ScaleRiskProtectedEvidenceGate",
+        ],
+        "sr_peg": {
+            "local_trunk": [769, 256, 256],
+            "global_box_embedding": 64,
+            "tiny_utility_head": True,
+            "non_tiny_risk_head": True,
+            "global_retain_head": True,
+        },
         "protect_global_non_tiny": True,
         "exact_anchor_fallback": True,
         "loss": {
             "quality": 1.0,
             "equivariance": 0.1,
             "residual": 0.01,
+            "tiny_utility": 1.0,
+            "non_tiny_risk": 2.0,
+            "global_retain": 2.0,
         },
     }
 
