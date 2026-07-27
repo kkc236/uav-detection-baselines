@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from src.gcte_views import IMAGE_SIZE, build_local_view_tensor
@@ -37,6 +39,14 @@ def build_gcqf_dataset(
         ) from error
 
     class GCQFRTDETRDataset(GCMVRTDETRDataset):
+        def cache_labels(self, path: Path = Path("./labels.cache")):
+            # Ultralytics writes its label index even when image caching is
+            # disabled.  The sealed VisDrone mount can be read-only or full,
+            # so build the same index in a disposable local directory.
+            with TemporaryDirectory(prefix="gcqf-label-cache-") as directory:
+                temporary = Path(directory) / Path(path).name
+                return super().cache_labels(temporary)
+
         def __getitem__(self, index: int) -> dict[str, Any]:
             sample = super().__getitem__(index)
             source = imread(self.im_files[index], flags=self.cv2_flag)
