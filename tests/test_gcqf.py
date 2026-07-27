@@ -42,7 +42,7 @@ def _geometry(
     )
 
 
-def test_gcqf_is_one_top_level_module_with_three_registered_stages():
+def test_gcqf_registers_exactly_three_stages_with_sr_peg_third():
     module = GCQF(
         query_dim=32,
         num_classes=3,
@@ -50,11 +50,11 @@ def test_gcqf_is_one_top_level_module_with_three_registered_stages():
         num_views=4,
     )
 
-    assert set(dict(module.named_children())) == {
+    assert tuple(dict(module.named_children())) == (
         "geometry_projector",
         "query_interaction",
-        "residual_fusion",
-    }
+        "sr_peg",
+    )
 
 
 def test_geometry_projection_identity_and_zero_initialized_query_adapter():
@@ -188,8 +188,8 @@ def test_residual_is_bounded_and_only_changes_anchor_eligible_candidates():
         residual_eta=0.2,
     )
     with torch.no_grad():
-        module.residual_fusion.head[-1].weight.fill_(100.0)
-        module.residual_fusion.head[-1].bias.fill_(100.0)
+        module.sr_peg.score_residual_head.weight.fill_(100.0)
+        module.sr_peg.score_residual_head.bias.fill_(100.0)
     local = _evidence(queries=2)
     mask = torch.tensor([[[True], [False]]])
 
@@ -231,11 +231,17 @@ def test_trainable_stages_receive_gradients_but_frozen_evidence_and_geometry_do_
         output.adjusted_local_scores.sum()
         + output.canonical_local.queries.square().mean()
         + output.global_context.square().mean()
+        + output.tiny_utility_logits.sum()
+        + output.non_tiny_risk_logits.sum()
+        + output.global_retain_logits.sum()
     ).backward()
 
     assert module.geometry_projector.query_adapter[-1].weight.grad is not None
     assert module.query_interaction.attention.in_proj_weight.grad is not None
-    assert module.residual_fusion.head[-1].weight.grad is not None
+    assert module.sr_peg.score_residual_head.weight.grad is not None
+    assert module.sr_peg.tiny_utility_head.weight.grad is not None
+    assert module.sr_peg.non_tiny_risk_head.weight.grad is not None
+    assert module.sr_peg.global_retain_head[-1].weight.grad is not None
     assert global_evidence.queries.grad is None
     assert local.queries.grad is None
     assert geometry.homography.grad is None

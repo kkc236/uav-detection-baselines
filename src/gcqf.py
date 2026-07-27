@@ -16,6 +16,7 @@ from torch import nn
 
 from src.gcte_types import QueryEvidence, ViewGeometry
 from src.gcte_views import transform_xywh_homography
+from src.sr_peg import ScaleRiskProtectedEvidenceGate
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,9 @@ class GCQFOutput:
     canonical_local: QueryEvidence
     geometry_embedding: torch.Tensor
     global_context: torch.Tensor
+    tiny_utility_logits: torch.Tensor
+    non_tiny_risk_logits: torch.Tensor
+    global_retain_logits: torch.Tensor
     score_residual: torch.Tensor
     adjusted_local_scores: torch.Tensor
 
@@ -294,8 +298,9 @@ class GCQF(nn.Module):
             query_dim=query_dim,
             num_heads=num_heads,
         )
-        self.residual_fusion = AnchorPreservedResidualFusion(
+        self.sr_peg = ScaleRiskProtectedEvidenceGate(
             query_dim=query_dim,
+            num_heads=num_heads,
             residual_eta=residual_eta,
         )
 
@@ -322,21 +327,28 @@ class GCQF(nn.Module):
             global_evidence,
             geometry.valid_mask,
         )
-        residual, adjusted = self.residual_fusion(
+        gated = self.sr_peg(
             canonical_queries=projected.canonical_local.queries,
             global_context=context,
             geometry_embedding=projected.geometry_embedding,
-            base_scores=local_evidence.quality,
-            anchor_mask=anchor_mask,
+            local_scores=local_evidence.quality,
+            global_queries=global_evidence.queries,
+            global_boxes=global_evidence.boxes,
+            global_scores=global_evidence.quality,
+            local_valid_mask=geometry.valid_mask,
             residual_enabled=residual_enabled,
+            residual_eligible_mask=anchor_mask,
         )
         return GCQFOutput(
             global_evidence=global_evidence,
             canonical_local=projected.canonical_local,
             geometry_embedding=projected.geometry_embedding,
             global_context=context,
-            score_residual=residual,
-            adjusted_local_scores=adjusted,
+            tiny_utility_logits=gated.tiny_utility_logits,
+            non_tiny_risk_logits=gated.non_tiny_risk_logits,
+            global_retain_logits=gated.global_retain_logits,
+            score_residual=gated.score_residual,
+            adjusted_local_scores=gated.adjusted_local_scores,
         )
 
 
