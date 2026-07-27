@@ -442,3 +442,133 @@ def test_malformed_geometry_field_fails_with_field_name(field):
 
     with pytest.raises(ValueError, match=field):
         module(features, geometry)
+
+
+def test_full_plec_backpropagates_to_every_parameter_family():
+    torch.manual_seed(7)
+    geometry = identity_geometry(height=4, width=5)
+    features = [
+        torch.randn(1, 4, 4, 5, requires_grad=True)
+        for _ in range(4)
+    ]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4,
+        embedding_hidden=8,
+        overlap_hidden=8,
+    )
+
+    output = module(features, geometry)
+    spatial_weight = torch.linspace(
+        0.3,
+        1.7,
+        output.canonical.numel(),
+        device=output.canonical.device,
+    ).reshape_as(output.canonical)
+    loss = (output.canonical * spatial_weight).square().mean()
+    loss.backward()
+
+    for feature in features:
+        assert feature.grad is not None
+        assert torch.isfinite(feature.grad).all()
+        assert torch.count_nonzero(feature.grad).item() > 0
+
+    families = (
+        "view_embedding",
+        "phase_mlp",
+        "metadata_mlp",
+        "phase_reducer",
+        "spatial_mixer",
+        "pointwise",
+        "overlap_head",
+        "output_norm",
+    )
+    named_parameters = dict(module.named_parameters())
+    for family in families:
+        gradients = [
+            parameter.grad
+            for name, parameter in named_parameters.items()
+            if name.startswith(family)
+        ]
+        assert gradients, f"missing parameter family: {family}"
+        assert all(gradient is not None for gradient in gradients), family
+        assert all(torch.isfinite(gradient).all() for gradient in gradients), family
+        total_nonzero = sum(
+            torch.count_nonzero(gradient).item()
+            for gradient in gradients
+        )
+        assert total_nonzero > 0, family
+
+
+def test_full_plec_respects_frozen_parameter_budget():
+    module = PhasePreservingLocalEvidenceCanonicalizer(channels=256)
+
+    trainable = sum(
+        parameter.numel()
+        for parameter in module.parameters()
+        if parameter.requires_grad
+    )
+
+    assert 0 < trainable <= 200_000
+
+
+def test_state_dict_roundtrip_preserves_all_output_tensors():
+    torch.manual_seed(11)
+    geometry = identity_geometry(height=4, width=5)
+    features = [torch.randn(1, 4, 4, 5) for _ in range(4)]
+    first = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4,
+        embedding_hidden=8,
+        overlap_hidden=8,
+    ).eval()
+    second = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4,
+        embedding_hidden=8,
+        overlap_hidden=8,
+    ).eval()
+    second.load_state_dict(first.state_dict())
+
+    with torch.no_grad():
+        first_output = first(features, geometry)
+        second_output = second(features, geometry)
+
+    for first_value, second_value in zip(
+        (
+            first_output.canonical,
+            first_output.valid_count,
+            first_output.edge_prior,
+            first_output.overlap_weights,
+        ),
+        (
+            second_output.canonical,
+            second_output.valid_count,
+            second_output.edge_prior,
+            second_output.overlap_weights,
+        ),
+    ):
+        torch.testing.assert_close(first_value, second_value)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_cuda_autocast_forward_and_backward_are_finite():
+    torch.manual_seed(13)
+    geometry = identity_geometry(height=4, width=5).to(device="cuda")
+    features = [
+        torch.randn(1, 4, 4, 5, device="cuda", requires_grad=True)
+        for _ in range(4)
+    ]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4,
+        embedding_hidden=8,
+        overlap_hidden=8,
+    ).cuda()
+
+    with torch.autocast("cuda", dtype=torch.float16):
+        output = module(features, geometry)
+        loss = output.canonical.square().mean()
+    loss.backward()
+
+    assert torch.isfinite(output.canonical).all()
+    assert torch.isfinite(loss)
+    for feature in features:
+        assert feature.grad is not None
+        assert torch.isfinite(feature.grad).all()
