@@ -1,6 +1,7 @@
 from dataclasses import replace
 from unittest.mock import patch
 
+import pytest
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -271,3 +272,173 @@ def test_ablation_flags_disable_only_requested_families():
     assert no_metadata.phase_mlp is not None
     assert uniform_overlap.overlap_head is None
     assert uniform_overlap.phase_reducer is not None
+
+
+def partial_coverage_geometry():
+    geometry = identity_geometry(height=2, width=3)
+    center_valid = torch.zeros_like(geometry.center_valid)
+    center_valid[:, 0, :, 0, 0] = True
+    center_valid[:, :2, :, 0, 1] = True
+    center_valid[:, :, :, 1, :] = True
+    return replace(geometry, center_valid=center_valid)
+
+
+def test_learned_overlap_masks_invalid_views_and_normalizes_valid_views():
+    geometry = partial_coverage_geometry()
+    features = [
+        torch.randn(1, 2, 2, 3) + float(view)
+        for view in range(4)
+    ]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=2,
+        embedding_hidden=4,
+        overlap_hidden=4,
+    )
+
+    output = module(features, geometry)
+
+    invalid = output.overlap_weights.masked_select(~geometry.center_valid)
+    assert torch.equal(invalid, torch.zeros_like(invalid))
+    torch.testing.assert_close(
+        output.overlap_weights.sum(dim=1),
+        (output.valid_count > 0).to(output.overlap_weights.dtype),
+    )
+    assert output.canonical.shape == (1, 2, 2, 3)
+    assert output.valid_count.shape == (1, 1, 2, 3)
+    assert output.edge_prior.shape == (1, 1, 2, 3)
+    assert output.overlap_weights.shape == (1, 4, 1, 2, 3)
+
+
+def test_bias_leak_cannot_change_empty_location_from_exact_zero():
+    geometry = partial_coverage_geometry()
+    features = [torch.randn(1, 2, 2, 3) for _ in range(4)]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=2,
+        embedding_hidden=4,
+        overlap_hidden=4,
+    )
+    with torch.no_grad():
+        for name, parameter in module.named_parameters():
+            if name.endswith("bias"):
+                parameter.fill_(2.0)
+
+    output = module(features, geometry)
+
+    assert torch.equal(output.canonical[0, :, 0, 2], torch.zeros(2))
+    assert output.valid_count[0, 0, 0, 2].item() == 0.0
+    assert output.edge_prior[0, 0, 0, 2].item() == 0.0
+    assert torch.equal(
+        output.overlap_weights[0, :, 0, 0, 2],
+        torch.zeros(4),
+    )
+
+
+def shaped_geometry(
+    *,
+    batch_size: int = 2,
+    global_shape: tuple[int, int] = (3, 5),
+    local_shape: tuple[int, int] = (2, 4),
+):
+    source_height, source_width = 12, 20
+    transform = LetterboxTransform(
+        source_width=source_width,
+        source_height=source_height,
+        network_shape=(source_height, source_width),
+        gain=1.0,
+        pad=0.0,
+    )
+    image_tiles = tuple(
+        Tile(0, 0, source_width, source_height, index)
+        for index in range(4)
+    )
+    return build_plec_geometry(
+        source_shapes=[(source_height, source_width)] * batch_size,
+        tiles=[image_tiles] * batch_size,
+        global_transforms=[transform] * batch_size,
+        local_transforms=[[transform] * 4 for _ in range(batch_size)],
+        global_feature_shape=global_shape,
+        local_feature_shape=local_shape,
+    )
+
+
+def test_forward_supports_batched_non_square_local_and_global_features():
+    geometry = shaped_geometry()
+    features = [torch.randn(2, 3, 2, 4) for _ in range(4)]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=3,
+        embedding_hidden=5,
+        overlap_hidden=5,
+    )
+
+    output = module(features, geometry)
+
+    assert output.canonical.shape == (2, 3, 3, 5)
+    assert output.valid_count.shape == (2, 1, 3, 5)
+    assert output.edge_prior.shape == (2, 1, 3, 5)
+    assert output.overlap_weights.shape == (2, 4, 1, 3, 5)
+    assert torch.isfinite(output.canonical).all()
+
+
+@pytest.mark.parametrize(
+    ("feature_factory", "message"),
+    [
+        (lambda features: features[:3], "four"),
+        (
+            lambda features: [
+                torch.randn(1, 3, 2, 4),
+                *features[1:],
+            ],
+            "share",
+        ),
+        (
+            lambda features: [
+                torch.randn(2, 2, 2, 4),
+                *features[1:],
+            ],
+            "share",
+        ),
+        (
+            lambda features: [
+                torch.randn(2, 3, 3, 4),
+                *features[1:],
+            ],
+            "share",
+        ),
+        (
+            lambda features: [
+                feature.to(torch.int64)
+                for feature in features
+            ],
+            "floating",
+        ),
+    ],
+)
+def test_invalid_local_feature_contract_fails_closed(feature_factory, message):
+    geometry = shaped_geometry()
+    features = [torch.randn(2, 3, 2, 4) for _ in range(4)]
+    module = PhasePreservingLocalEvidenceCanonicalizer(channels=3)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        module(feature_factory(features), geometry)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "sample_grid",
+        "sample_valid",
+        "center_valid",
+        "subcell_offset",
+        "magnification",
+        "edge_distance",
+    ],
+)
+def test_malformed_geometry_field_fails_with_field_name(field):
+    geometry = shaped_geometry()
+    malformed = getattr(geometry, field)[..., :-1]
+    geometry = replace(geometry, **{field: malformed})
+    features = [torch.randn(2, 3, 2, 4) for _ in range(4)]
+    module = PhasePreservingLocalEvidenceCanonicalizer(channels=3)
+
+    with pytest.raises(ValueError, match=field):
+        module(features, geometry)

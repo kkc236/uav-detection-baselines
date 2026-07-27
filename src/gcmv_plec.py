@@ -183,20 +183,38 @@ class PhasePreservingLocalEvidenceCanonicalizer(nn.Module):
             global_width,
         )
 
-        if self.overlap_head is not None:
-            raise NotImplementedError("learned PLEC overlap fusion is not implemented")
         valid = numeric_geometry.center_valid
-        numeric_valid = valid.to(encoded.dtype)
-        weights = numeric_valid / numeric_valid.sum(
-            dim=1, keepdim=True
-        ).clamp_min(1.0)
-        valid_count = numeric_valid.sum(dim=1)
+        edge = numeric_geometry.edge_distance
+        if self.overlap_head is None:
+            numeric_valid = valid.to(encoded.dtype)
+            weights = numeric_valid / numeric_valid.sum(
+                dim=1, keepdim=True
+            ).clamp_min(1.0)
+        else:
+            logits_input = torch.cat((encoded, edge), dim=2).reshape(
+                batch_size * 4,
+                self.channels + 1,
+                global_height,
+                global_width,
+            )
+            logits = self.overlap_head(logits_input).reshape(
+                batch_size, 4, 1, global_height, global_width
+            )
+            masked_logits = logits.masked_fill(
+                ~valid, torch.finfo(logits.dtype).min
+            )
+            weights = torch.softmax(masked_logits, dim=1) * valid.to(
+                logits.dtype
+            )
+            weights = weights / weights.sum(
+                dim=1, keepdim=True
+            ).clamp_min(torch.finfo(logits.dtype).eps)
+
+        valid_count = valid.sum(dim=1).to(encoded.dtype)
         any_valid = (valid_count > 0).to(encoded.dtype)
         canonical = (weights * encoded).sum(dim=1)
         canonical = self.output_norm(canonical) * any_valid
-        edge_prior = (
-            weights * numeric_geometry.edge_distance
-        ).sum(dim=1) * any_valid
+        edge_prior = (weights * edge).sum(dim=1) * any_valid
         return PLECOutput(
             canonical=canonical,
             valid_count=valid_count,
@@ -227,11 +245,67 @@ def _validate_local_features(
             raise ValueError("all local features must share device and dtype")
     if (local_height, local_width) != geometry.local_feature_shape:
         raise ValueError("local feature spatial shape does not match geometry")
-    if geometry.sample_grid.shape[0] != batch_size:
-        raise ValueError("feature batch size does not match geometry")
-    if geometry.sample_grid.device != first.device:
-        raise ValueError("features and geometry must share a device")
+    _validate_geometry_contract(
+        geometry, batch_size=batch_size, device=first.device
+    )
     return batch_size, channels, local_height, local_width
+
+
+def _validate_geometry_contract(
+    geometry: PLECGeometry,
+    *,
+    batch_size: int,
+    device: torch.device,
+) -> None:
+    if not isinstance(geometry, PLECGeometry):
+        raise TypeError("geometry must be a PLECGeometry")
+    try:
+        global_height, global_width = geometry.global_feature_shape
+    except (TypeError, ValueError) as error:
+        raise ValueError("global_feature_shape must contain height and width") from error
+    if global_height <= 0 or global_width <= 0:
+        raise ValueError("global_feature_shape dimensions must be positive")
+
+    expected_shapes = {
+        "sample_grid": (batch_size, 4, 9, global_height, global_width, 2),
+        "sample_valid": (batch_size, 4, 9, global_height, global_width),
+        "center_valid": (batch_size, 4, 1, global_height, global_width),
+        "subcell_offset": (
+            batch_size,
+            4,
+            9,
+            2,
+            global_height,
+            global_width,
+        ),
+        "magnification": (
+            batch_size,
+            4,
+            2,
+            global_height,
+            global_width,
+        ),
+        "edge_distance": (
+            batch_size,
+            4,
+            1,
+            global_height,
+            global_width,
+        ),
+    }
+    for name, expected in expected_shapes.items():
+        value = getattr(geometry, name)
+        if not isinstance(value, torch.Tensor) or tuple(value.shape) != expected:
+            raise ValueError(f"{name} must have shape {expected}")
+        if value.device != device:
+            raise ValueError(f"{name} and local features must share a device")
+
+    for name in ("sample_grid", "subcell_offset", "magnification", "edge_distance"):
+        if not getattr(geometry, name).is_floating_point():
+            raise ValueError(f"{name} must use a floating dtype")
+    for name in ("sample_valid", "center_valid"):
+        if getattr(geometry, name).dtype != torch.bool:
+            raise ValueError(f"{name} must use boolean dtype")
 
 
 def sample_local_phases(
