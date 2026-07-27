@@ -82,11 +82,18 @@ def compute_gcqf_loss(
 
     eligible = valid_mask.unsqueeze(-1) & anchor_mask
     probabilities = adjusted_scores.float().clamp(1e-6, 1.0 - 1e-6)
-    quality_terms = F.binary_cross_entropy(
-        probabilities,
-        detached_targets.float(),
-        reduction="none",
-    )
+    # Probability-form BCE is deliberately rejected by CUDA autocast. Keep
+    # this numerically sensitive legacy term in FP32 while the surrounding
+    # query module remains under the frozen FP16 autocast protocol.
+    with torch.autocast(
+        device_type=adjusted_scores.device.type,
+        enabled=False,
+    ):
+        quality_terms = F.binary_cross_entropy(
+            probabilities,
+            detached_targets.float(),
+            reduction="none",
+        )
     quality = _masked_mean(quality_terms, eligible)
     residual_regularization = _masked_mean(
         score_residual.float().square(),
