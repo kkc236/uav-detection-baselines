@@ -11,6 +11,7 @@ from src.gcqf_cache import (
     write_evidence_cache,
 )
 from src.gcte_types import QueryEvidence, ViewGeometry
+from src.sr_peg_targets import SRPEGTargets
 
 
 def _evidence(query_count: int) -> QueryEvidence:
@@ -22,7 +23,19 @@ def _evidence(query_count: int) -> QueryEvidence:
     )
 
 
-def _record(image_id: str) -> GCQFEvidenceRecord:
+def _sr_targets() -> SRPEGTargets:
+    return SRPEGTargets(
+        local_tiny_utility=torch.zeros(1, 1200, 1),
+        local_non_tiny_risk=torch.ones(1, 1200, 1),
+        global_retain=torch.ones(1, 300, 1),
+    )
+
+
+def _record(
+    image_id: str,
+    *,
+    sr_peg_targets: SRPEGTargets | None = None,
+) -> GCQFEvidenceRecord:
     local_count = 4 * 300
     return GCQFEvidenceRecord(
         image_id=image_id,
@@ -46,6 +59,7 @@ def _record(image_id: str) -> GCQFEvidenceRecord:
         quality_targets=torch.zeros(1, local_count, 1),
         equivariance_pairs=torch.tensor([[0, 300]], dtype=torch.long),
         fixed_anchor_payload={"predictions": []},
+        sr_peg_targets=sr_peg_targets,
     )
 
 
@@ -95,6 +109,41 @@ def test_verified_cache_round_trips_records(tmp_path):
     assert records[0].global_evidence.boxes.dtype == torch.float32
     assert records[0].geometry.homography.dtype == torch.float32
     assert records[0].equivariance_pairs.tolist() == [[0, 300]]
+    assert records[0].sr_peg_targets is None
+
+
+def test_v2_train_cache_round_trips_sr_peg_targets(tmp_path):
+    manifest_path = write_evidence_cache(
+        output=tmp_path / "cache",
+        records=[
+            _record("train/a.jpg", sr_peg_targets=_sr_targets()),
+        ],
+        baseline_sha256="A" * 64,
+        dataset_signature="B" * 64,
+        split="train10",
+    )
+
+    cache = VerifiedEvidenceCache(manifest_path)
+    loaded = next(cache.iter_records())
+
+    assert cache.manifest["schema_version"] == "gcte-gcqf-evidence/v2"
+    assert loaded.sr_peg_targets is not None
+    assert loaded.sr_peg_targets.global_retain.shape == (1, 300, 1)
+    assert loaded.sr_peg_targets.local_non_tiny_risk.sum() == 1200
+
+
+def test_cache_rejects_mixed_supervised_and_unsupervised_records(tmp_path):
+    with pytest.raises(ValueError, match="mix"):
+        write_evidence_cache(
+            output=tmp_path / "cache",
+            records=[
+                _record("train/a.jpg", sr_peg_targets=_sr_targets()),
+                _record("train/b.jpg"),
+            ],
+            baseline_sha256="A" * 64,
+            dataset_signature="B" * 64,
+            split="train10",
+        )
 
 
 def test_cache_rejects_corrupted_shard_before_loading(tmp_path):

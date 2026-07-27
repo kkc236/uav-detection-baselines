@@ -26,6 +26,7 @@ from src.rtdetr_gcqf import (
     extract_decoder_query_evidence,
     freeze_detector,
 )
+from src.sr_peg_targets import SRPEGTargets, build_sr_peg_targets
 
 
 EXPECTED_BASELINE_SHA256 = (
@@ -34,6 +35,34 @@ EXPECTED_BASELINE_SHA256 = (
 )
 EXPECTED_ULTRALYTICS = "8.4.90"
 VIEW_ORDER = ("global", "TL", "TR", "BL", "BR")
+
+
+def sr_peg_targets_for_split(
+    *,
+    split: str,
+    global_boxes: torch.Tensor,
+    global_logits: torch.Tensor,
+    local_boxes: torch.Tensor,
+    local_logits: torch.Tensor,
+    gt_boxes: torch.Tensor,
+    gt_classes: torch.Tensor,
+    source_shape: tuple[int, int],
+) -> SRPEGTargets | None:
+    """Keep val cache v1-compatible and supervise only train10 records."""
+
+    if split == "val":
+        return None
+    if split != "train":
+        raise ValueError("split must be train or val")
+    return build_sr_peg_targets(
+        global_boxes=global_boxes,
+        global_logits=global_logits,
+        local_boxes=local_boxes,
+        local_logits=local_logits,
+        gt_boxes=gt_boxes,
+        gt_classes=gt_classes,
+        source_shape=source_shape,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,6 +149,7 @@ def _record_stream(
     workers: int,
     image_root: Path,
     amp: bool,
+    split: str,
 ) -> Iterator[GCQFEvidenceRecord]:
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -217,6 +247,16 @@ def _record_stream(
                     five.selected_query_indices.detach().cpu()
                 ),
             },
+            sr_peg_targets=sr_peg_targets_for_split(
+                split=split,
+                global_boxes=five.global_evidence.boxes,
+                global_logits=five.global_evidence.logits,
+                local_boxes=canonical_boxes,
+                local_logits=five.local_evidence.logits,
+                gt_boxes=gt_boxes,
+                gt_classes=gt_classes,
+                source_shape=(source_height, source_width),
+            ),
         )
         yield record
         if index % 25 == 0 or index == len(dataset):
@@ -281,6 +321,7 @@ def cache(args: argparse.Namespace) -> Path:
             workers=args.workers,
             image_root=image_root,
             amp=args.amp,
+            split=args.split,
         ),
         baseline_sha256=args.expected_baseline_sha256,
         dataset_signature=args.dataset_signature,

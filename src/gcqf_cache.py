@@ -11,9 +11,11 @@ from typing import Any, Iterable, Iterator
 import torch
 
 from src.gcte_types import QueryEvidence, ViewGeometry
+from src.sr_peg_targets import SRPEGTargets
 
 
 CACHE_SCHEMA_VERSION = "gcte-gcqf-evidence/v1"
+SRPEG_CACHE_SCHEMA_VERSION = "gcte-gcqf-evidence/v2"
 GLOBAL_QUERIES = 300
 LOCAL_VIEWS = 4
 LOCAL_QUERIES_PER_VIEW = 300
@@ -47,6 +49,7 @@ class GCQFEvidenceRecord:
     quality_targets: torch.Tensor
     equivariance_pairs: torch.Tensor
     fixed_anchor_payload: dict[str, Any]
+    sr_peg_targets: SRPEGTargets | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -108,6 +111,30 @@ class GCQFEvidenceRecord:
             raise ValueError("equivariance pair index is out of range")
         if not isinstance(self.fixed_anchor_payload, dict):
             raise ValueError("fixed_anchor_payload must be a mapping")
+        if self.sr_peg_targets is not None:
+            expected_targets = {
+                "local_tiny_utility": (
+                    self.sr_peg_targets.local_tiny_utility,
+                    expected,
+                ),
+                "local_non_tiny_risk": (
+                    self.sr_peg_targets.local_non_tiny_risk,
+                    expected,
+                ),
+                "global_retain": (
+                    self.sr_peg_targets.global_retain,
+                    (1, GLOBAL_QUERIES, 1),
+                ),
+            }
+            for name, (tensor, shape) in expected_targets.items():
+                if (
+                    not isinstance(tensor, torch.Tensor)
+                    or tensor.shape != shape
+                    or not tensor.is_floating_point()
+                    or not bool(torch.isfinite(tensor).all())
+                    or bool(((tensor < 0.0) | (tensor > 1.0)).any())
+                ):
+                    raise ValueError(f"{name} must be finite [0,1] with shape {shape}")
         for view_index in range(LOCAL_VIEWS):
             count = int(
                 (
@@ -121,7 +148,7 @@ class GCQFEvidenceRecord:
                 )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "image_id": self.image_id,
             "global_evidence": _evidence_payload(self.global_evidence),
             "local_evidence": _evidence_payload(self.local_evidence),
@@ -136,6 +163,19 @@ class GCQFEvidenceRecord:
             "equivariance_pairs": self.equivariance_pairs.detach().cpu(),
             "fixed_anchor_payload": self.fixed_anchor_payload,
         }
+        if self.sr_peg_targets is not None:
+            payload["sr_peg_targets"] = {
+                "local_tiny_utility": (
+                    self.sr_peg_targets.local_tiny_utility.detach().cpu()
+                ),
+                "local_non_tiny_risk": (
+                    self.sr_peg_targets.local_non_tiny_risk.detach().cpu()
+                ),
+                "global_retain": (
+                    self.sr_peg_targets.global_retain.detach().cpu()
+                ),
+            }
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "GCQFEvidenceRecord":
@@ -149,7 +189,10 @@ class GCQFEvidenceRecord:
             "equivariance_pairs",
             "fixed_anchor_payload",
         }
-        if not isinstance(payload, dict) or set(payload) != required:
+        if (
+            not isinstance(payload, dict)
+            or set(payload) not in (required, required | {"sr_peg_targets"})
+        ):
             raise ValueError("evidence record schema drift")
         geometry = payload["geometry"]
         if not isinstance(geometry, dict) or set(geometry) != {
@@ -159,6 +202,17 @@ class GCQFEvidenceRecord:
             "valid_mask",
         }:
             raise ValueError("view geometry schema drift")
+        target_payload = payload.get("sr_peg_targets")
+        if target_payload is not None:
+            if not isinstance(target_payload, dict) or set(target_payload) != {
+                "local_tiny_utility",
+                "local_non_tiny_risk",
+                "global_retain",
+            }:
+                raise ValueError("SR-PEG target schema drift")
+            targets = SRPEGTargets(**target_payload)
+        else:
+            targets = None
         return cls(
             image_id=payload["image_id"],
             global_evidence=_evidence_from_payload(
@@ -172,6 +226,7 @@ class GCQFEvidenceRecord:
             quality_targets=payload["quality_targets"],
             equivariance_pairs=payload["equivariance_pairs"],
             fixed_anchor_payload=payload["fixed_anchor_payload"],
+            sr_peg_targets=targets,
         )
 
 
@@ -225,6 +280,7 @@ def write_evidence_cache(
     shards: list[dict[str, Any]] = []
     batch: list[dict[str, Any]] = []
     record_count = 0
+    supervised: bool | None = None
 
     def flush() -> None:
         nonlocal batch
@@ -245,6 +301,13 @@ def write_evidence_cache(
     for record in records:
         if not isinstance(record, GCQFEvidenceRecord):
             raise TypeError("records must contain GCQFEvidenceRecord values")
+        record_is_supervised = record.sr_peg_targets is not None
+        if supervised is None:
+            supervised = record_is_supervised
+        elif supervised != record_is_supervised:
+            raise ValueError(
+                "cache cannot mix supervised and unsupervised records"
+            )
         batch.append(record.to_payload())
         record_count += 1
         if len(batch) == records_per_shard:
@@ -253,7 +316,9 @@ def write_evidence_cache(
     if record_count == 0:
         raise ValueError("cache requires at least one record")
     manifest = {
-        "schema_version": CACHE_SCHEMA_VERSION,
+        "schema_version": (
+            SRPEG_CACHE_SCHEMA_VERSION if supervised else CACHE_SCHEMA_VERSION
+        ),
         "baseline_sha256": baseline,
         "dataset_signature": dataset,
         "split": split,
@@ -315,7 +380,10 @@ class VerifiedEvidenceCache:
         }
         if not isinstance(manifest, dict) or set(manifest) != required:
             raise ValueError("cache manifest schema drift")
-        if manifest["schema_version"] != CACHE_SCHEMA_VERSION:
+        if manifest["schema_version"] not in {
+            CACHE_SCHEMA_VERSION,
+            SRPEG_CACHE_SCHEMA_VERSION,
+        }:
             raise ValueError("cache schema version mismatch")
         baseline = _validate_digest(
             "baseline_sha256",
@@ -378,7 +446,15 @@ class VerifiedEvidenceCache:
             ):
                 raise ValueError("cache shard record count mismatch")
             for row in rows:
-                GCQFEvidenceRecord.from_payload(row)
+                record = GCQFEvidenceRecord.from_payload(row)
+                supervised = (
+                    self.manifest["schema_version"]
+                    == SRPEG_CACHE_SCHEMA_VERSION
+                )
+                if supervised != (record.sr_peg_targets is not None):
+                    raise ValueError(
+                        "record supervision does not match cache schema"
+                    )
             total += len(rows)
             yield rows
         if total != self.manifest["record_count"]:
@@ -406,6 +482,7 @@ class VerifiedEvidenceCache:
 
 __all__ = [
     "CACHE_SCHEMA_VERSION",
+    "SRPEG_CACHE_SCHEMA_VERSION",
     "GCQFEvidenceRecord",
     "VerifiedEvidenceCache",
     "write_evidence_cache",
