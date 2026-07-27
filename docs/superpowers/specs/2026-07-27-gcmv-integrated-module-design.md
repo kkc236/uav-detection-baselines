@@ -20,12 +20,10 @@ four local P3
   -> one enhanced global P3
 ```
 
-The paper-level innovation is:
-
-> an integrated geometry-canonical tiny-evidence injection module that aligns
-> source-resolution local evidence, exchanges it with global context only
-> around deterministic correspondences, and injects it through a protected
-> residual path.
+The paper-level innovation is an integrated geometry-canonical tiny-evidence
+injection module that aligns source-resolution local evidence, exchanges it
+with global context only around deterministic correspondences, and injects it
+through a protected residual path.
 
 PLEC, GGLF, and PEG remain named internal mechanisms for explanation and
 ablation, but this seed0 experiment validates the complete GCMV-EI module only.
@@ -42,10 +40,12 @@ G3, local P3, exact crop/augmentation geometry
   -> stock RT-DETR decoder
 ```
 
-P4, P5, query count, query selection, decoder, matcher, loss, and detection head
-remain stock. The global backbone and Hybrid Encoder receive gradients only
-through the global image. Four local passes share current weights, terminate at
-P3, preserve BatchNorm buffers, and are detached before GCMV-EI.
+P4, P5, query count, query selection, decoder, matcher, and detection head
+remain stock. The original detection objective is retained and three
+module-internal auxiliary terms supervise tiny demand, evidence opening, and
+non-tiny protection. The global backbone and Hybrid Encoder receive gradients
+only through the global image. Four local passes share current weights,
+terminate at P3, preserve BatchNorm buffers, and are detached before GCMV-EI.
 
 ## 3. Internal stage A: PLEC
 
@@ -76,53 +76,56 @@ valid_count: [B,   1, H, W]
 edge_prior:  [B,   1, H, W]
 ```
 
-The trainable interaction projects global queries and local keys/values to 64
-channels. For each global cell, keys and values are unfolded only from its
-fixed 3-by-3 canonical neighborhood. Attention logits include the local
-query/key similarity and a reliability prior from valid-view coverage and crop
-edge distance. Invalid locations are excluded before softmax.
+The interaction projects global queries and local keys/values to 64 channels
+split across four attention heads. For each global cell, keys and values are
+unfolded only from its fixed 3-by-3 canonical neighborhood. Attention logits
+combine global/local query-key similarity, a learned relative position bias,
+and a reliability prior from valid-view coverage and crop-edge distance.
+Invalid locations are excluded before softmax.
 
 ```text
 Q = Conv1x1(Norm(G3))
 K,V = Conv1x1(Norm(L3c))
-A_p = softmax_p(Q · K_p / 8 + log R_p), p in fixed 3x3 window
-C = sum_p A_p V_p
+A_hp = softmax_p(Q_h dot K_hp / 4 + r_hp + log R_p)
+C = Concat_h(sum_p A_hp V_hp)
 ```
 
-The correction candidate is:
+The attended local evidence is compared explicitly with the projected global
+feature through a difference descriptor:
 
 ```text
-Delta3 = Conv1x1([G3, L3c, C])
+D = [C, Gp, C - Gp, abs(C - Gp)]
+E3 = EvidenceEncoder(D)
+t = sigmoid(TinyHead(E3))
 ```
 
-and correspondence confidence is predicted from query/center-key agreement,
-attention concentration, valid coverage, and edge reliability. Both outputs
-are masked to exact zero where no local evidence is valid.
+Correspondence confidence is the detached product of semantic agreement,
+attention concentration, valid coverage, and PLEC confidence. Evidence,
+tiny-demand, and correspondence maps are masked to exact zero where no local
+evidence is valid.
 
 The 3-by-3 window is fixed for the first screen. It is the smallest window that
-allows a one-cell discretization tolerance while keeping interaction strictly
+allows one-cell discretization tolerance while keeping interaction strictly
 local and memory bounded.
 
 ## 5. Internal stage C: PEG
 
 PEG never replaces or multiplicatively suppresses the global representation.
-It predicts a conservative spatial gate from:
-
-- global/local correction magnitude;
-- a learned local-detail benefit posterior;
-- GGLF correspondence confidence;
-- PLEC edge reliability;
-- normalized valid-view coverage.
+It predicts a spatial evidence gate from reduced global/evidence features,
+their absolute difference, the GGLF tiny-demand and correspondence maps, PLEC
+confidence, and edge reliability:
 
 ```text
-b = sigmoid(BenefitHead([G3, abs(Delta3)]))
-g = sigmoid(GateHead([b, confidence, edge_prior, valid_count/4]))
-M3 = G3 + gamma * g * Delta3
+g_hat = sigmoid(GateHead([Gr, Er, abs(Gr-Er), t, c, p, e]))
+r = coverage * cubert(p * c * e)
+g = g_hat * r
+gamma = tanh(rho)
+M3 = G3 + gamma * g * Project(E3)
 ```
 
-`gamma` is a 256-channel parameter initialized to exact zero. The gate's final
-bias is initialized to `-2`, so the residual opens conservatively after the
-channel guard starts learning. At initialization:
+`rho` is one trainable scalar initialized to exact zero. The gate's final
+weight and bias are also zero initialized, so `g_hat=0.5` before reliability
+masking. At initialization:
 
 ```text
 M3 == G3
@@ -130,19 +133,30 @@ M3 == G3
 
 bit for bit. The global identity path is never gated.
 
-## 6. Gradient and initialization contract
+## 6. Gradient and supervision contract
 
 - Local pixels, local P3 tensors, and the local backbone path own no autograd
   graph.
 - Global detector weights train only through the stock global path plus the
   downstream effect of `M3`.
-- PLEC, GGLF, and PEG are trained by the unchanged detection loss.
 - Geometry owns no gradient.
-- In an audit with `gamma=1`, every enabled PLEC, GGLF, and PEG parameter
+- In an audit with `rho` opened, every enabled PLEC, GGLF, and PEG parameter
   family must receive a finite nonzero gradient.
-- With the frozen zero initialization, only the PEG channel guard is required
-  to receive a nonzero gradient on the first backward pass; upstream module
-  gradients open after the guard's first optimizer update.
+- With zero initialization, detection loss first updates `rho`, while the
+  auxiliary objectives provide direct supervision to the tiny and gate paths.
+  The residual identity remains exact.
+
+The frozen auxiliary objective is:
+
+```text
+L = L_det + 0.25 L_tiny + 0.02 L_gate + 0.01 L_protect
+```
+
+`L_tiny` is focal BCE against a Gaussian heatmap for targets whose effective
+input size is at most 16 pixels. `L_gate` opens evidence only where tiny demand
+and local coverage coexist. `L_protect` penalizes injection over non-tiny
+ground-truth regions. These terms train internal maps; they do not add an
+inference-time prediction branch.
 
 ## 7. Success-first experimental contract
 
@@ -178,8 +192,8 @@ The end-to-end run records:
 
 - total and per-stage trainable parameters;
 - PLEC valid coverage and overlap statistics;
-- GGLF attention entropy and correspondence confidence;
-- PEG benefit posterior, gate, and channel-guard distributions;
+- GGLF attention entropy, tiny demand, and correspondence confidence;
+- PEG raw/final gates and scalar `rho/gamma`;
 - local-path detachment and BatchNorm preservation;
 - stage-wise gradient norms in the audit;
 - peak allocated/reserved CUDA memory;
@@ -195,4 +209,14 @@ GCMV-EI is not:
 - dynamic crop selection;
 - query routing or query enhancement;
 - a decoder modification;
-- a new loss branch.
+- a separate detector loss or inference-time prediction branch.
+
+## 10. First-screen implementation boundary
+
+The supplied freeze also describes a higher-risk PLEC variant with learned
+sampling offsets and FiLM modulation. The first matched screen deliberately
+retains the already verified nine-phase PLEC implementation. This isolates the
+value of the complete geometry-canonical evidence chain without simultaneously
+changing canonicalization, interaction, gating, and supervision. Learned
+offset/FiLM PLEC remains a later internal ablation only if the integrated
+screen advances.

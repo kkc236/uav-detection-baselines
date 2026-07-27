@@ -106,6 +106,7 @@ def _validate_arguments(
     tiles: Sequence[Sequence[Tile]],
     global_transforms: Sequence[LetterboxTransform],
     local_transforms: Sequence[Sequence[LetterboxTransform]],
+    global_to_source: Sequence[torch.Tensor] | None,
     global_feature_shape: tuple[int, int],
     local_feature_shape: tuple[int, int],
     dtype: torch.dtype,
@@ -122,8 +123,10 @@ def _validate_arguments(
         == len(global_transforms)
         == len(local_transforms)
         == batch_size
-    ):
-        raise ValueError("batch metadata lengths must match")
+        ):
+            raise ValueError("batch metadata lengths must match")
+    if global_to_source is not None and len(global_to_source) != batch_size:
+        raise ValueError("global_to_source batch metadata length must match")
 
     for image_index, source_shape in enumerate(source_shapes):
         source_height, source_width = _validate_shape("source", source_shape)
@@ -148,6 +151,31 @@ def _validate_arguments(
                 source_width=tile.width,
                 label=f"local transform {tile.index}",
             )
+        if global_to_source is not None:
+            matrix = global_to_source[image_index]
+            if not isinstance(matrix, torch.Tensor) or matrix.shape != (3, 3):
+                raise TypeError("global_to_source entries must be 3x3 tensors")
+            if not torch.isfinite(matrix).all():
+                raise ValueError("global_to_source matrix must be finite")
+            if matrix.requires_grad:
+                raise ValueError("global_to_source matrix must be detached")
+            matrix_cpu = matrix.detach().to(dtype=torch.float64, device="cpu")
+            if not torch.allclose(
+                matrix_cpu[2],
+                torch.tensor([0.0, 0.0, 1.0], dtype=torch.float64),
+                rtol=0.0,
+                atol=1e-8,
+            ):
+                raise ValueError("global_to_source matrix must be affine")
+            if (
+                abs(float(matrix_cpu[0, 1])) > 1e-8
+                or abs(float(matrix_cpu[1, 0])) > 1e-8
+            ):
+                raise ValueError(
+                    "global_to_source matrix must be axis-aligned"
+                )
+            if abs(float(torch.linalg.det(matrix_cpu))) <= 1e-12:
+                raise ValueError("global_to_source matrix is singular")
     return global_shape, local_shape
 
 
@@ -157,6 +185,7 @@ def build_plec_geometry(
     tiles: Sequence[Sequence[Tile]],
     global_transforms: Sequence[LetterboxTransform],
     local_transforms: Sequence[Sequence[LetterboxTransform]],
+    global_to_source: Sequence[torch.Tensor] | None = None,
     global_feature_shape: tuple[int, int],
     local_feature_shape: tuple[int, int],
     device: torch.device | str | None = None,
@@ -167,6 +196,7 @@ def build_plec_geometry(
         tiles=tiles,
         global_transforms=global_transforms,
         local_transforms=local_transforms,
+        global_to_source=global_to_source,
         global_feature_shape=global_feature_shape,
         local_feature_shape=local_feature_shape,
         dtype=dtype,
@@ -185,9 +215,18 @@ def build_plec_geometry(
     batch_magnification: list[torch.Tensor] = []
     batch_edge_distance: list[torch.Tensor] = []
 
-    for image_tiles, global_transform, image_local_transforms in zip(
-        tiles, global_transforms, local_transforms
-    ):
+    for image_index, (
+        image_tiles,
+        global_transform,
+        image_local_transforms,
+    ) in enumerate(zip(tiles, global_transforms, local_transforms)):
+        inverse_matrix = (
+            None
+            if global_to_source is None
+            else global_to_source[image_index]
+            .detach()
+            .to(device=device, dtype=dtype)
+        )
         view_grids: list[torch.Tensor] = []
         view_sample_valid: list[torch.Tensor] = []
         view_center_valid: list[torch.Tensor] = []
@@ -204,12 +243,30 @@ def build_plec_geometry(
             global_network_y = (
                 (phase_y + 0.5) * global_transform.network_height / global_height
             )
-            source_x = (
-                global_network_x - global_transform.pad_x
-            ) / global_transform.gain_x
-            source_y = (
-                global_network_y - global_transform.pad_y
-            ) / global_transform.gain_y
+            if inverse_matrix is None:
+                source_x = (
+                    global_network_x - global_transform.pad_x
+                ) / global_transform.gain_x
+                source_y = (
+                    global_network_y - global_transform.pad_y
+                ) / global_transform.gain_y
+                global_source_scale_x = 1.0 / global_transform.gain_x
+                global_source_scale_y = 1.0 / global_transform.gain_y
+            else:
+                source_x = (
+                    inverse_matrix[0, 0] * global_network_x
+                    + inverse_matrix[0, 2]
+                )
+                source_y = (
+                    inverse_matrix[1, 1] * global_network_y
+                    + inverse_matrix[1, 2]
+                )
+                global_source_scale_x = abs(
+                    float(inverse_matrix[0, 0])
+                )
+                global_source_scale_y = abs(
+                    float(inverse_matrix[1, 1])
+                )
             local_network_x = (
                 (source_x - tile.left) * local_transform.gain_x
                 + local_transform.pad_x
@@ -245,7 +302,7 @@ def build_plec_geometry(
             mag_x = (
                 global_transform.network_width
                 / global_width
-                / global_transform.gain_x
+                * global_source_scale_x
                 * local_transform.gain_x
                 * local_width
                 / local_transform.network_width
@@ -253,7 +310,7 @@ def build_plec_geometry(
             mag_y = (
                 global_transform.network_height
                 / global_height
-                / global_transform.gain_y
+                * global_source_scale_y
                 * local_transform.gain_y
                 * local_height
                 / local_transform.network_height

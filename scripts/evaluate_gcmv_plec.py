@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired source-frame evaluation for a GCMV PLEC method/control screen."""
+"""Paired source-frame evaluation for a GCMV-EI method/control screen."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ CONFIDENCE_THRESHOLD = 0.001
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate matched GCMV PLEC and stock checkpoints."
+        description="Evaluate matched GCMV-EI and stock checkpoints."
     )
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     parser.add_argument("--control-checkpoint", required=True)
@@ -212,8 +212,15 @@ def _load_model(
         "path": checkpoint.as_posix(),
         "sha256": sha256_file(checkpoint),
         "epoch": int(payload.get("epoch", -1)),
-        "gamma_ref": float(
-            model.reference_adapter.gamma_ref.detach().float().cpu().item()
+        "gcmv_rho": float(
+            model.gcmv_injector.peg.rho.detach().float().cpu().item()
+        ),
+        "gcmv_gamma": float(
+            torch.tanh(model.gcmv_injector.peg.rho)
+            .detach()
+            .float()
+            .cpu()
+            .item()
         ),
     }
     del payload, weights
@@ -296,11 +303,17 @@ def _run_arm(
             ).float() / 255
             local_views = None
             source_shapes = raw_batch["source_shape"]
+            global_to_source = None
             if is_method:
                 local_views = raw_batch["local_views"].to(
                     device, non_blocking=True
                 ).float() / 255
                 source_shapes = source_shapes.to(device, non_blocking=True)
+                global_to_source = raw_batch["global_to_source"].to(
+                    device,
+                    non_blocking=True,
+                    dtype=torch.float32,
+                )
             with torch.autocast(
                 device_type=device.type,
                 dtype=torch.float16,
@@ -310,6 +323,7 @@ def _run_arm(
                     image,
                     local_views=local_views,
                     source_shapes=source_shapes if is_method else None,
+                    global_to_source=global_to_source,
                 )
             predictions = _prediction_tensor(output)
             for index, image_path in enumerate(raw_batch["im_file"]):
@@ -349,7 +363,7 @@ def evaluate(args: argparse.Namespace) -> Path:
     if args.batch <= 0 or args.workers < 0:
         raise ValueError("batch must be positive and workers non-negative")
     if not torch.cuda.is_available():
-        raise RuntimeError("paired GCMV PLEC evaluation requires CUDA")
+        raise RuntimeError("paired GCMV-EI evaluation requires CUDA")
     output = Path(args.output).resolve()
     if output.exists():
         raise FileExistsError(output)

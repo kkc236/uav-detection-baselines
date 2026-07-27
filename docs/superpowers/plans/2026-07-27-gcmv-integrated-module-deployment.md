@@ -10,9 +10,10 @@ module and run one matched seed0 10-epoch end-to-end screen.
 
 **Architecture:** Reuse the verified PLEC core and the exact augmentation
 geometry/stop-gradient local path already implemented in the active worktree.
-Replace the temporary reference adapter with a fixed-window GGLF interaction
-and a zero-guarded PEG residual injector. Keep RT-DETR query selection, decoder,
-loss, P4, and P5 unchanged.
+Replace the temporary reference adapter with a four-head fixed-window GGLF
+interaction and a zero-guarded PEG residual injector. Keep RT-DETR query
+selection, decoder, P4, P5, matcher, and prediction head unchanged. Add only
+the frozen GCMV-internal tiny/gate/protect auxiliary supervision.
 
 **Tech Stack:** Python 3.10, PyTorch 2.5.1, Ultralytics 8.4.90, pytest,
 OpenCV, RTX 4090.
@@ -42,11 +43,12 @@ Expected: import failure because `src.gcmv_fusion` does not exist.
 
 - [ ] **Step 3: Implement fixed-window GGLF**
 
-Use channel normalization, 64-channel 1-by-1 query/key/value projections,
+Use channel normalization, four-head 64-channel 1-by-1 query/key/value
+projections, learned relative position bias,
 `torch.nn.functional.unfold(kernel_size=3, padding=1)`, masked nine-position
-softmax, 1-by-1 correction projection, and a correspondence-confidence head.
-Reject any configured window other than odd positive values; freeze the formal
-configuration to 3.
+softmax, an explicit `[A,G,A-G,abs(A-G)]` difference descriptor, a tiny-demand
+map, and correspondence confidence. Reject any configured window other than
+odd positive values; freeze the formal configuration to 3.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -61,10 +63,10 @@ Run the focused test command and require zero failures.
 
 - [ ] **Step 1: Write failing PEG tests**
 
-Tests require exact stock identity at zero channel guard, spatial gates in
-`[0,1]`, exact zero gates for invalid locations, conservative initial gate
-bias, nonzero channel-guard gradient at frozen initialization, and full-family
-gradients in an audit with guard one.
+Tests require exact stock identity at zero residual scalar, spatial gates in
+`[0,1]`, exact zero gates for invalid locations, raw initial gate 0.5, nonzero
+scalar gradient at frozen initialization, and full-family gradients in an
+audit with the scalar opened.
 
 - [ ] **Step 2: Verify RED**
 
@@ -72,16 +74,17 @@ Run the focused test and observe missing PEG/injector classes.
 
 - [ ] **Step 3: Implement PEG**
 
-Use a benefit head over `[G3, abs(Delta3)]`, a reliability gate over benefit,
-confidence, edge prior, and normalized valid count, and a zero-initialized
-`[1,256,1,1]` channel guard:
+Use reduced global/evidence features and their absolute difference together
+with tiny demand, correspondence, PLEC confidence, and edge reliability.
+Reliability is normalized coverage times the cube root of the remaining three
+priors. Use a zero-initialized scalar `rho`:
 
 ```python
-enhanced = global_p3 + channel_guard * gate * correction
+enhanced = global_p3 + tanh(rho) * gate * evidence_projection
 ```
 
-Return correction, confidence, attention, benefit, gate, and enhanced P3 for
-diagnostics.
+Return evidence, confidence, attention, tiny demand, raw/final gates, scalar
+gamma, and enhanced P3 for diagnostics.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -117,27 +120,30 @@ delete reference-adapter use from prediction and preflight.
 
 Run integration, fusion, and preflight unit tests with zero failures.
 
-### Task 4: Complete the frozen protocol runner
+### Task 4: Add frozen internal supervision and complete the protocol runner
 
 **Files:**
 
 - Create: `src/gcmv_plec_protocol.py`
+- Create: `src/gcmv_loss.py`
+- Create: `tests/test_gcmv_loss.py`
 - Modify: `tests/test_gcmv_plec_training_cli.py`
 - Modify: `scripts/train_rtdetr_gcmv_plec.py`
 - Modify: `src/rtdetr_gcmv_plec.py`
 
 - [ ] **Step 1: Keep the existing formal-settings tests RED**
 
-The active tests already require the authoritative dataset/subset/initial-state
-hashes, 10 epochs, fraction 1, batch/workers 8, fixed augmentations, and 145
-optimizer attempts.
+The active tests already require the frozen loss weights, authoritative
+dataset/subset/initial-state hashes, 10 epochs, fraction 1, batch/workers 8,
+fixed augmentations, and 145 optimizer attempts.
 
 - [ ] **Step 2: Implement protocol validation**
 
-Validate the seed0 scratch artifact, YAML/list hashes, 647-image semantic
-signature, environment, device, fixed AMP scale, loader batch/workers,
-optimizer observation, and source commit. Allow missing scratch-state keys only
-under `plec.` and `gcmv_injector.`.
+Build the tiny Gaussian and non-tiny protection targets and add loss weights
+`0.25/0.02/0.01`. Validate the seed0 scratch artifact, YAML/list hashes,
+647-image semantic signature, environment, device, fixed AMP scale, loader
+batch/workers, optimizer observation, and source commit. Allow missing
+scratch-state keys only under `plec.` and `gcmv_injector.`.
 
 - [ ] **Step 3: Verify protocol tests**
 

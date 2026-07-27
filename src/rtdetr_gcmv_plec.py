@@ -8,18 +8,24 @@ from typing import Sequence
 
 import torch
 from torch import nn
-from torch.utils.checkpoint import checkpoint
 from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
 from ultralytics.utils import RANK, colorstr
 
 from src.ascv_loc import preserve_batchnorm_buffers
+from src.ascv_loc_protocol import state_fingerprint
 from src.gcmv_data import (
     GCMV_GLOBAL_IMAGE_SIZE,
     GCMV_LOCAL_IMAGE_SIZE,
     GCMVRTDETRDataset,
 )
 from src.gcmv_geometry import PLECGeometry, build_plec_geometry
+from src.gcmv_fusion import GCMVEvidenceInjectionModule
+from src.gcmv_loss import (
+    build_gcmv_scale_targets,
+    gcmv_auxiliary_loss,
+)
+from src.gcmv_plec_protocol import validate_plec_initial_state_artifact
 from src.gcmv_plec import (
     PLECOutput,
     PhasePreservingLocalEvidenceCanonicalizer,
@@ -28,7 +34,14 @@ from src.sbr_geometry import LetterboxTransform, overlapping_tiles
 
 
 PLEC_CHANNELS = 256
-PLEC_LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss")
+PLEC_DETECTION_LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss")
+PLEC_LOSS_NAMES = (
+    *PLEC_DETECTION_LOSS_NAMES,
+    "gcmv_tiny_loss",
+    "gcmv_gate_loss",
+    "gcmv_protect_loss",
+)
+PLEC_EXTRA_PREFIXES = ("plec.", "gcmv_injector.")
 
 
 def batchnorm_buffer_fingerprint(module: nn.Module) -> str:
@@ -48,43 +61,63 @@ def batchnorm_buffer_fingerprint(module: nn.Module) -> str:
     return digest.hexdigest()
 
 
-class PLECReferenceAdapter(nn.Module):
-    """Common non-contribution adapter used before the full PEG exists."""
+def load_plec_initial_state(
+    model: nn.Module,
+    artifact: dict,
+    *,
+    seed: int,
+) -> None:
+    """Load the sealed stock state while preserving new PLEC parameters."""
 
-    def __init__(self, channels: int = PLEC_CHANNELS) -> None:
-        super().__init__()
-        if channels <= 0:
-            raise ValueError("channels must be positive")
-        self.project = nn.Conv2d(
-            channels, channels, kernel_size=1, bias=False
+    if artifact.get("metadata", {}).get("seed") != seed:
+        raise ValueError("PLEC_INITIAL_STATE_SEED_MISMATCH")
+    common = artifact.get("common_state")
+    expected = artifact.get("fingerprints", {}).get("common")
+    if not isinstance(common, dict) or state_fingerprint(common) != expected:
+        raise ValueError("PLEC_INITIAL_STATE_FINGERPRINT_MISMATCH")
+    model_names = set(model.state_dict())
+    extra_names = {
+        name
+        for name in model_names
+        if name.startswith(PLEC_EXTRA_PREFIXES)
+    }
+    stock_names = model_names - extra_names
+    common_names = set(common)
+    if common_names != stock_names:
+        raise ValueError(
+            "PLEC_INITIAL_STATE_KEYS_MISMATCH: "
+            f"missing={sorted(stock_names - common_names)}, "
+            f"unexpected={sorted(common_names - stock_names)}"
         )
-        self.gamma_ref = nn.Parameter(torch.zeros(()))
-
-    def forward(
-        self, global_p3: torch.Tensor, local_canonical: torch.Tensor
-    ) -> torch.Tensor:
-        if global_p3.shape != local_canonical.shape:
-            raise ValueError("global and canonical P3 tensors must share shape")
-        return global_p3 + self.gamma_ref * self.project(local_canonical)
+    incompatible = model.load_state_dict(common, strict=False)
+    if set(incompatible.missing_keys) != extra_names:
+        raise RuntimeError("PLEC extra-parameter initialization drift")
+    if incompatible.unexpected_keys:
+        raise RuntimeError("PLEC initial state has unexpected keys")
 
 
 def _require_gcmv_config(payload: object) -> dict:
     expected = {
         "enabled": True,
-        "module": "PLEC",
+        "module": "GCMV-EI",
         "semantic_p3_index": 21,
         "decoder_feature_indices": [21, 24, 27],
         "global_imgsz": 640,
         "local_imgsz": 1088,
         "tile_ratio": 0.6,
         "views": ["TL", "TR", "BL", "BR"],
-        "reference_adapter": {
-            "projection": "Conv2d-1x1",
-            "gamma_init": 0.0,
+        "gglf": {
+            "interaction_channels": 64,
+            "num_heads": 4,
+            "window_size": 3,
+        },
+        "peg": {
+            "residual_scalar_init": 0.0,
+            "gate_logit_init": 0.0,
         },
     }
     if payload != expected:
-        raise ValueError(f"GCMV PLEC configuration drift: {payload}")
+        raise ValueError(f"GCMV-EI configuration drift: {payload}")
     return expected
 
 
@@ -110,11 +143,19 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
         self.plec = PhasePreservingLocalEvidenceCanonicalizer(
             channels=PLEC_CHANNELS
         )
-        self.reference_adapter = PLECReferenceAdapter(PLEC_CHANNELS)
+        self.gcmv_injector = GCMVEvidenceInjectionModule(
+            channels=PLEC_CHANNELS,
+            interaction_channels=int(
+                config["gglf"]["interaction_channels"]
+            ),
+            num_heads=int(config["gglf"]["num_heads"]),
+            window_size=int(config["gglf"]["window_size"]),
+        )
         self.audit_local_batchnorm = False
         self.capture_local_feature_gradients = False
         self.last_local_p3: list[torch.Tensor] | None = None
         self.last_plec_diagnostics: dict[str, torch.Tensor | bool] = {}
+        self.last_gcmv_aux: dict[str, torch.Tensor] = {}
         self.last_local_bn_preserved = True
         self.nc = self.yaml["nc"]
         self.loss_names = PLEC_LOSS_NAMES
@@ -151,6 +192,7 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
         self,
         *,
         source_shapes: torch.Tensor,
+        global_to_source: torch.Tensor | None = None,
         global_p3: torch.Tensor,
         local_p3: Sequence[torch.Tensor],
     ) -> PLECGeometry:
@@ -193,21 +235,28 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
             tiles=tiles,
             global_transforms=global_transforms,
             local_transforms=local_transforms,
+            global_to_source=(
+                None
+                if global_to_source is None
+                else list(global_to_source)
+            ),
             global_feature_shape=tuple(global_p3.shape[-2:]),
             local_feature_shape=tuple(local_p3[0].shape[-2:]),
             device=global_p3.device,
             dtype=torch.float32,
         )
 
-    def inject_local_p3(
+    def inject_gcmv_evidence(
         self,
         *,
         global_p3: torch.Tensor,
         local_p3: Sequence[torch.Tensor],
         source_shapes: torch.Tensor,
+        global_to_source: torch.Tensor | None = None,
     ) -> torch.Tensor:
         geometry = self._build_plec_geometry(
             source_shapes=source_shapes,
+            global_to_source=global_to_source,
             global_p3=global_p3,
             local_p3=local_p3,
         )
@@ -217,7 +266,28 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
             "edge_prior": plec_output.edge_prior.detach(),
             "overlap_weights": plec_output.overlap_weights.detach(),
         }
-        return self.reference_adapter(global_p3, plec_output.canonical)
+        injection = self.gcmv_injector(global_p3, plec_output)
+        self.last_plec_diagnostics.update(
+            {
+                "gglf_confidence": injection.confidence.detach(),
+                "gglf_attention_entropy": (
+                    injection.attention_entropy.detach()
+                ),
+                "gglf_tiny_map": injection.tiny_map.detach(),
+                "peg_gate_hat": injection.gate_hat.detach(),
+                "peg_gate": injection.gate.detach(),
+                "peg_gamma": injection.gamma.detach(),
+            }
+        )
+        self.last_gcmv_aux = {
+            "tiny_map": injection.tiny_map,
+            "gate_hat": injection.gate_hat,
+            "gate": injection.gate,
+            "coverage": (plec_output.valid_count > 0).to(
+                injection.tiny_map.dtype
+            ),
+        }
+        return injection.enhanced
 
     def _local_feature_passes(
         self, local_views: torch.Tensor
@@ -243,21 +313,8 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
         features: list[torch.Tensor] = []
         for view_index in range(4):
             local_view = local_views[:, view_index]
-            if self.training and torch.is_grad_enabled():
-                feature = checkpoint(
-                    self._extract_local_p3,
-                    local_view,
-                    use_reentrant=False,
-                    context_fn=lambda: (
-                        preserve_batchnorm_buffers(self),
-                        preserve_batchnorm_buffers(self),
-                    ),
-                )
-            else:
-                with preserve_batchnorm_buffers(self):
-                    feature = self._extract_local_p3(local_view)
-            if self.capture_local_feature_gradients and feature.requires_grad:
-                feature.retain_grad()
+            with torch.no_grad(), preserve_batchnorm_buffers(self):
+                feature = self._extract_local_p3(local_view).detach()
             features.append(feature)
         after = (
             batchnorm_buffer_fingerprint(self)
@@ -283,11 +340,13 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
         *,
         local_views: torch.Tensor | None = None,
         source_shapes: torch.Tensor | None = None,
+        global_to_source: torch.Tensor | None = None,
     ):
         if (
             not self.gcmv_enabled
             or local_views is None
             or source_shapes is None
+            or global_to_source is None
         ):
             return super().predict(
                 x,
@@ -308,10 +367,11 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
         global_p3 = saved[self.decoder_feature_indices[0]]
         if not isinstance(global_p3, torch.Tensor):
             raise RuntimeError("global P3 was not retained")
-        fused_p3 = self.inject_local_p3(
+        fused_p3 = self.inject_gcmv_evidence(
             global_p3=global_p3,
             local_p3=local_p3,
             source_shapes=source_shapes,
+            global_to_source=global_to_source,
         )
         decoder_features = [
             fused_p3,
@@ -350,21 +410,87 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
             batch=targets,
             local_views=batch["local_views"],
             source_shapes=batch["source_shape"],
+            global_to_source=batch["global_to_source"],
         )
-        return super().loss(batch, preds=predictions)
+        detection_loss, detection_items = super().loss(
+            batch,
+            preds=predictions,
+        )
+        required_aux = {"tiny_map", "gate_hat", "gate", "coverage"}
+        if set(self.last_gcmv_aux) != required_aux:
+            raise RuntimeError("GCMV auxiliary forward state is incomplete")
+        tiny_target, non_tiny_mask = build_gcmv_scale_targets(
+            bboxes=batch["bboxes"].to(
+                image.device,
+                dtype=torch.float32,
+            ),
+            batch_idx=batch_indices,
+            batch_size=int(image.shape[0]),
+            feature_shape=tuple(
+                int(value)
+                for value in self.last_gcmv_aux["tiny_map"].shape[-2:]
+            ),
+            image_shape=tuple(int(value) for value in image.shape[-2:]),
+            tiny_max_size=16.0,
+        )
+        auxiliary = gcmv_auxiliary_loss(
+            tiny_map=self.last_gcmv_aux["tiny_map"],
+            gate_hat=self.last_gcmv_aux["gate_hat"],
+            gate=self.last_gcmv_aux["gate"],
+            coverage=self.last_gcmv_aux["coverage"],
+            tiny_target=tiny_target,
+            non_tiny_mask=non_tiny_mask,
+        )
+        auxiliary_items = torch.stack(
+            (
+                auxiliary.tiny.detach(),
+                auxiliary.gate.detach(),
+                auxiliary.protect.detach(),
+            )
+        )
+        return (
+            detection_loss + auxiliary.total,
+            torch.cat((detection_items, auxiliary_items)),
+        )
 
 
 class GCMVPLECTrainer(RTDETRTrainer):
-    """Bounded train-only trainer for the first PLEC screen."""
+    """Bounded train-only trainer for the first GCMV-EI screen."""
+
+    def __init__(
+        self,
+        *args,
+        initial_state_path: str | Path,
+        **kwargs,
+    ) -> None:
+        overrides = kwargs.get("overrides")
+        if not isinstance(overrides, dict):
+            raise ValueError("GCMV-EI overrides must be a dict")
+        if int(overrides.get("batch", 0)) != 8:
+            raise ValueError("GCMV-EI requires frozen batch=8")
+        if int(overrides.get("seed", -1)) != 0:
+            raise ValueError("GCMV-EI first screen requires seed=0")
+        self.initial_state_path = Path(initial_state_path).resolve()
+        self.initial_state = torch.load(
+            self.initial_state_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        validate_plec_initial_state_artifact(self.initial_state, seed=0)
+        self.plec_optimizer_attempts = 0
+        self.plec_amp_scale_min = 128.0
+        self.plec_amp_scale_max = 128.0
+        super().__init__(*args, **kwargs)
 
     def _setup_train(self) -> None:
         requested_amp = bool(self.args.amp)
         self.args.amp = False
         super()._setup_train()
+        self.loss_names = PLEC_LOSS_NAMES
         if not requested_amp:
             return
         if not torch.cuda.is_available() or self.device.type != "cuda":
-            raise RuntimeError("GCMV PLEC AMP requires CUDA")
+            raise RuntimeError("GCMV-EI AMP requires CUDA")
         self.args.amp = True
         self.amp = True
         self.scaler = torch.amp.GradScaler(
@@ -380,14 +506,15 @@ class GCMVPLECTrainer(RTDETRTrainer):
         weights=None,
         verbose: bool = True,
     ):
+        if weights is not None:
+            raise ValueError("GCMV-EI pretrained weights are forbidden")
         model = GCMVPLECDetectionModel(
             cfg or "configs/rtdetr-l-gcmv-plec.yaml",
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,
         )
-        if weights is not None:
-            model.load(weights)
+        load_plec_initial_state(model, self.initial_state, seed=0)
         return model
 
     def build_dataset(
@@ -398,7 +525,7 @@ class GCMVPLECTrainer(RTDETRTrainer):
             imgsz=self.args.imgsz,
             local_imgsz=GCMV_LOCAL_IMAGE_SIZE,
             batch_size=batch,
-            augment=False,
+            augment=mode == "train",
             hyp=self.args,
             rect=False,
             cache=self.args.cache or None,
@@ -420,6 +547,12 @@ class GCMVPLECTrainer(RTDETRTrainer):
         processed["source_shape"] = processed["source_shape"].to(
             self.device, non_blocking=self.device.type == "cuda"
         )
+        for key in ("source_to_global", "global_to_source"):
+            processed[key] = processed[key].to(
+                self.device,
+                non_blocking=self.device.type == "cuda",
+                dtype=torch.float32,
+            )
         return processed
 
     def validate(self):
@@ -427,6 +560,34 @@ class GCMVPLECTrainer(RTDETRTrainer):
 
     def final_eval(self):
         return None
+
+    def _build_train_pipeline(self) -> None:
+        if int(self.batch_size) != 8:
+            raise RuntimeError(
+                f"PLEC_BATCH_DRIFT: frozen=8 runtime={self.batch_size}"
+            )
+        super()._build_train_pipeline()
+        if (
+            int(getattr(self.train_loader, "batch_size", -1)) != 8
+            or int(getattr(self.train_loader, "num_workers", -1)) != 8
+        ):
+            raise RuntimeError("PLEC train-loader contract drift")
+
+    def optimizer_step(self) -> None:
+        before = float(self.scaler.get_scale())
+        if before != 128.0:
+            raise FloatingPointError(
+                f"PLEC AMP scale drift before optimizer step: {before}"
+            )
+        super().optimizer_step()
+        after = float(self.scaler.get_scale())
+        self.plec_optimizer_attempts += 1
+        self.plec_amp_scale_min = min(self.plec_amp_scale_min, before, after)
+        self.plec_amp_scale_max = max(self.plec_amp_scale_max, before, after)
+        if after != 128.0:
+            raise FloatingPointError(
+                f"PLEC AMP scale drift after optimizer step: {after}"
+            )
 
 
 class GCMVPLECControlTrainer(GCMVPLECTrainer):
@@ -440,12 +601,23 @@ class GCMVPLECControlTrainer(GCMVPLECTrainer):
     ):
         model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
         model.gcmv_enabled = False
+        model.loss_names = PLEC_DETECTION_LOSS_NAMES
         return model
+
+    def _setup_train(self) -> None:
+        super()._setup_train()
+        self.loss_names = PLEC_DETECTION_LOSS_NAMES
 
     def preprocess_batch(self, batch: dict) -> dict:
         global_batch = {
             key: value
             for key, value in batch.items()
-            if key not in {"local_views", "source_shape"}
+            if key
+            not in {
+                "local_views",
+                "source_shape",
+                "source_to_global",
+                "global_to_source",
+            }
         }
         return RTDETRTrainer.preprocess_batch(self, global_batch)

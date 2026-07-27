@@ -263,3 +263,80 @@ def test_geometry_tensors_are_finite_and_non_trainable():
     ):
         assert torch.isfinite(value).all()
         assert not value.requires_grad
+
+
+def matrix_geometry(matrix: torch.Tensor) -> PLECGeometry:
+    arguments = valid_geometry_arguments()
+    arguments["global_to_source"] = [matrix]
+    return build_plec_geometry(**arguments)
+
+
+def test_recorded_identity_affine_matches_letterbox_identity():
+    baseline = build_plec_geometry(**valid_geometry_arguments())
+    recorded = matrix_geometry(torch.eye(3))
+
+    torch.testing.assert_close(recorded.sample_grid, baseline.sample_grid)
+    torch.testing.assert_close(
+        recorded.magnification,
+        baseline.magnification,
+    )
+
+
+def test_recorded_scale_translation_maps_global_centers_to_source():
+    matrix = torch.tensor(
+        [[0.5, 0.0, 1.0], [0.0, 0.5, 2.0], [0.0, 0.0, 1.0]]
+    )
+    geometry = matrix_geometry(matrix)
+    center = geometry.sample_grid[0, 0, 4]
+    # Global feature (3x5) is sampled on a 12x20 network frame.
+    global_x = (0.5 * 20 / 5)
+    global_y = (0.5 * 12 / 3)
+    source_x = 0.5 * global_x + 1.0
+    source_y = 0.5 * global_y + 2.0
+    expected_x = 2.0 * source_x / 20 - 1.0
+    expected_y = 2.0 * source_y / 12 - 1.0
+
+    torch.testing.assert_close(center[0, 0, 0], torch.tensor(expected_x))
+    torch.testing.assert_close(center[0, 0, 1], torch.tensor(expected_y))
+
+
+def test_recorded_horizontal_flip_reverses_source_lattice():
+    matrix = torch.tensor(
+        [[-1.0, 0.0, 20.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    geometry = matrix_geometry(matrix)
+    center = geometry.sample_grid[0, 0, 4]
+
+    assert center[0, 0, 0] > center[0, -1, 0]
+    torch.testing.assert_close(
+        geometry.magnification[0, 0, :, 0, 0],
+        torch.ones(2),
+    )
+
+
+@pytest.mark.parametrize(
+    ("matrix", "message"),
+    [
+        (
+            torch.tensor(
+                [[1.0, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
+            "axis-aligned",
+        ),
+        (
+            torch.tensor(
+                [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
+            "singular",
+        ),
+        (
+            torch.tensor(
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.01, 0.0, 1.0]]
+            ),
+            "affine",
+        ),
+    ],
+)
+def test_recorded_global_transform_fails_closed(matrix, message):
+    with pytest.raises(ValueError, match=message):
+        matrix_geometry(matrix)

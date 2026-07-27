@@ -5,6 +5,7 @@ import torch
 
 from scripts.preflight_gcmv_plec import (
     build_parser,
+    require_detached_tensors,
     require_nonzero_gradient_families,
     tensor_tree_equal,
 )
@@ -13,8 +14,8 @@ from scripts.preflight_gcmv_plec import (
 def test_preflight_parser_requires_real_artifact_paths(tmp_path):
     args = build_parser().parse_args(
         [
-            "--pretrained-weights",
-            "baseline.pt",
+            "--initial-state",
+            "initial-state-seed0.pt",
             "--data",
             "visdrone.yaml",
             "--output",
@@ -22,9 +23,10 @@ def test_preflight_parser_requires_real_artifact_paths(tmp_path):
         ]
     )
 
-    assert args.batch == 1
+    assert args.batch == 8
+    assert args.workers == 8
     assert args.device == "0"
-    assert args.pretrained_weights == "baseline.pt"
+    assert args.initial_state == "initial-state-seed0.pt"
 
 
 def test_tensor_tree_equal_requires_bitwise_tensor_identity():
@@ -47,3 +49,12 @@ def test_gradient_family_gate_rejects_zero_or_missing_gradients():
     with pytest.raises(RuntimeError, match="family=1"):
         require_nonzero_gradient_families(module, prefixes=("0", "1"))
 
+
+def test_detached_tensor_gate_rejects_local_autograd_paths():
+    require_detached_tensors([torch.ones(1)], label="local P3")
+
+    with pytest.raises(RuntimeError, match="local P3"):
+        require_detached_tensors(
+            [torch.ones(1, requires_grad=True)],
+            label="local P3",
+        )
