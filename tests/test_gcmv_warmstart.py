@@ -33,6 +33,12 @@ class FakeGCMV(torch.nn.Module):
         self.gcmv_injector.peg.rho = torch.nn.Parameter(torch.zeros(()))
 
 
+class FakeGCMVWithBatchNorm(FakeGCMV):
+    def __init__(self):
+        super().__init__()
+        self.stock_bn = torch.nn.BatchNorm1d(2)
+
+
 def test_expected_baseline_hash_is_the_published_rtx4090_artifact():
     assert EXPECTED_BASELINE_SHA256 == (
         "54CE60289DD34C6750B8BA5F7516EEF"
@@ -92,6 +98,15 @@ def test_module_artifact_rejects_detector_keys():
 
     with pytest.raises(ValueError, match="module-only"):
         load_module_artifact(model, artifact)
+
+
+def test_module_artifact_load_accepts_batchnorm_tracking_buffers():
+    source = FakeGCMVWithBatchNorm()
+    target = FakeGCMVWithBatchNorm()
+
+    load_module_artifact(target, build_module_artifact(source))
+
+    assert target.stock_bn.num_batches_tracked.item() == 0
 
 
 def test_optimizer_groups_separate_detector_module_and_rho_lrs():

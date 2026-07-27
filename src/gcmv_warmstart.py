@@ -137,16 +137,25 @@ def load_module_artifact(
             f"missing={sorted(expected - set(state))}, "
             f"unexpected={sorted(set(state) - expected)}"
         )
-    incompatible = model.load_state_dict(state, strict=False)
     detector_names = {
         name
         for name in model.state_dict()
         if not name.startswith(PLEC_EXTRA_PREFIXES)
     }
-    if set(incompatible.missing_keys) != detector_names:
-        raise RuntimeError("detector state changed during module-only load")
+    detector_before = {
+        name: model.state_dict()[name].detach().clone()
+        for name in detector_names
+    }
+    incompatible = model.load_state_dict(state, strict=False)
+    if not set(incompatible.missing_keys).issubset(detector_names):
+        raise RuntimeError("module state was not completely loaded")
     if incompatible.unexpected_keys:
         raise RuntimeError("module artifact produced unexpected keys")
+    if any(
+        not torch.equal(model.state_dict()[name], value)
+        for name, value in detector_before.items()
+    ):
+        raise RuntimeError("detector state changed during module-only load")
 
 
 def open_residual_scalar(model: nn.Module, *, gamma: float) -> None:
