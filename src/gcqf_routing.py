@@ -194,27 +194,13 @@ def route_gcqf_record(
 ) -> GCQFRouteResult:
     """Route one cached image through Control, raw union, and SADED anchor."""
 
-    postprocessed = rescore_postprocessed(
+    full, raw_union = decode_gcqf_record(
         record,
         score_residual=score_residual,
     )
-    raw, manifest = _raw_records(record, postprocessed)
     height, width = (
         int(value)
         for value in record.fixed_anchor_payload["source_shape"]
-    )
-    full = tuple(
-        _raw_detection(value)
-        for value in raw
-        if value.source_order == 0
-    )
-    raw_union = tuple(
-        assemble_paired_arms(
-            raw,
-            width=width,
-            height=height,
-            view_manifest=manifest,
-        )["C"]["predictions"]
     )
     routed = route_saded_image(
         image_id=record.image_id,
@@ -246,8 +232,41 @@ def route_gcqf_record(
     )
 
 
+def decode_gcqf_record(
+    record: GCQFEvidenceRecord,
+    *,
+    score_residual: torch.Tensor | None,
+) -> tuple[tuple[Detection, ...], tuple[Detection, ...]]:
+    """Decode sealed five-view evidence without applying a routing policy."""
+
+    postprocessed = rescore_postprocessed(
+        record,
+        score_residual=score_residual,
+    )
+    raw, manifest = _raw_records(record, postprocessed)
+    height, width = (
+        int(value)
+        for value in record.fixed_anchor_payload["source_shape"]
+    )
+    full = tuple(
+        _raw_detection(value)
+        for value in raw
+        if value.source_order == 0
+    )
+    raw_union = tuple(
+        assemble_paired_arms(
+            raw,
+            width=width,
+            height=height,
+            view_manifest=manifest,
+        )["C"]["predictions"]
+    )
+    return full, raw_union
+
+
 __all__ = [
     "GCQFRouteResult",
+    "decode_gcqf_record",
     "rescore_postprocessed",
     "route_gcqf_record",
 ]
