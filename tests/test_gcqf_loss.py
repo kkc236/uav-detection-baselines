@@ -176,6 +176,7 @@ def test_quality_loss_is_safe_inside_cuda_autocast():
         name: value.cuda() if isinstance(value, torch.Tensor) else value
         for name, value in _inputs().items()
     }
+    inputs["adjusted_scores"].retain_grad()
 
     with torch.autocast(
         device_type="cuda",
