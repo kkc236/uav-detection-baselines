@@ -177,7 +177,13 @@ class GCQFEvidenceRecord:
 
 def _evidence_payload(evidence: QueryEvidence) -> dict[str, torch.Tensor]:
     return {
-        "queries": evidence.queries.detach().cpu(),
+        # GCQF G0 always consumes decoder queries under CUDA autocast.  Seal
+        # them in the exact compute dtype to avoid duplicating almost 1 GiB of
+        # inactive FP32 mantissa across the train10 and validation caches.
+        "queries": evidence.queries.detach().to(
+            device="cpu",
+            dtype=torch.float16,
+        ),
         "logits": evidence.logits.detach().cpu(),
         "boxes": evidence.boxes.detach().cpu(),
         "quality": evidence.quality.detach().cpu(),

@@ -90,6 +90,10 @@ def test_verified_cache_round_trips_records(tmp_path):
 
     assert [record.image_id for record in records] == ["a.jpg", "b.jpg"]
     assert records[0].local_evidence.query_count == 1200
+    assert records[0].global_evidence.queries.dtype == torch.float16
+    assert records[0].local_evidence.queries.dtype == torch.float16
+    assert records[0].global_evidence.boxes.dtype == torch.float32
+    assert records[0].geometry.homography.dtype == torch.float32
     assert records[0].equivariance_pairs.tolist() == [[0, 300]]
 
 
