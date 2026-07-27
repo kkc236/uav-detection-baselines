@@ -31,6 +31,9 @@ class GCQFBatch:
     anchor_mask: torch.Tensor
     quality_targets: torch.Tensor
     equivariance_pairs: torch.Tensor
+    local_tiny_utility_targets: torch.Tensor | None
+    local_non_tiny_risk_targets: torch.Tensor | None
+    global_retain_targets: torch.Tensor | None
     image_ids: tuple[str, ...]
 
     def to(self, device: torch.device | str) -> "GCQFBatch":
@@ -72,6 +75,30 @@ class GCQFBatch:
                 device,
                 non_blocking=True,
             ),
+            local_tiny_utility_targets=(
+                None
+                if self.local_tiny_utility_targets is None
+                else self.local_tiny_utility_targets.to(
+                    device,
+                    non_blocking=True,
+                )
+            ),
+            local_non_tiny_risk_targets=(
+                None
+                if self.local_non_tiny_risk_targets is None
+                else self.local_non_tiny_risk_targets.to(
+                    device,
+                    non_blocking=True,
+                )
+            ),
+            global_retain_targets=(
+                None
+                if self.global_retain_targets is None
+                else self.global_retain_targets.to(
+                    device,
+                    non_blocking=True,
+                )
+            ),
             image_ids=self.image_ids,
         )
 
@@ -87,6 +114,8 @@ def _cat_evidence(values: Sequence[QueryEvidence]) -> QueryEvidence:
 
 def collate_evidence_records(
     records: Sequence[GCQFEvidenceRecord],
+    *,
+    require_sr_peg_targets: bool = False,
 ) -> GCQFBatch:
     if not records:
         raise ValueError("GCQF batch must be nonempty")
@@ -109,6 +138,43 @@ def collate_evidence_records(
         if pairs
         else torch.empty((0, 3), dtype=torch.long)
     )
+    target_presence = [
+        record.sr_peg_targets is not None for record in records
+    ]
+    if any(target_presence) and not all(target_presence):
+        raise ValueError("cannot mix SR-PEG supervised and unsupervised records")
+    if require_sr_peg_targets and not all(target_presence):
+        raise ValueError("SR-PEG targets are required for this batch")
+    if all(target_presence):
+        targets = [record.sr_peg_targets for record in records]
+        local_tiny_targets = torch.cat(
+            [
+                target.local_tiny_utility
+                for target in targets
+                if target is not None
+            ],
+            dim=0,
+        )
+        local_risk_targets = torch.cat(
+            [
+                target.local_non_tiny_risk
+                for target in targets
+                if target is not None
+            ],
+            dim=0,
+        )
+        global_retain_targets = torch.cat(
+            [
+                target.global_retain
+                for target in targets
+                if target is not None
+            ],
+            dim=0,
+        )
+    else:
+        local_tiny_targets = None
+        local_risk_targets = None
+        global_retain_targets = None
     return GCQFBatch(
         global_evidence=_cat_evidence(
             [record.global_evidence for record in records]
@@ -143,8 +209,38 @@ def collate_evidence_records(
             dim=0,
         ),
         equivariance_pairs=equivariance_pairs,
+        local_tiny_utility_targets=local_tiny_targets,
+        local_non_tiny_risk_targets=local_risk_targets,
+        global_retain_targets=global_retain_targets,
         image_ids=tuple(record.image_id for record in records),
     )
+
+
+def compute_positive_weights(
+    records: Sequence[GCQFEvidenceRecord],
+) -> dict[str, float]:
+    """Compute sealed per-head Nneg/Npos weights, clipped to [1,20]."""
+
+    if not records:
+        raise ValueError("positive-weight computation requires records")
+    fields = {
+        "tiny": "local_tiny_utility",
+        "risk": "local_non_tiny_risk",
+        "retain": "global_retain",
+    }
+    weights: dict[str, float] = {}
+    for key, field in fields.items():
+        tensors: list[torch.Tensor] = []
+        for record in records:
+            if record.sr_peg_targets is None:
+                raise ValueError("positive weights require SR-PEG targets")
+            tensors.append(getattr(record.sr_peg_targets, field))
+        values = torch.cat([tensor.reshape(-1) for tensor in tensors])
+        positive = int((values > 0).sum())
+        negative = int(values.numel()) - positive
+        ratio = negative / max(positive, 1)
+        weights[key] = float(min(20.0, max(1.0, ratio)))
+    return weights
 
 
 def build_module_optimizer(
@@ -230,4 +326,5 @@ __all__ = [
     "GCQFBatch",
     "build_module_optimizer",
     "collate_evidence_records",
+    "compute_positive_weights",
 ]

@@ -8,8 +8,10 @@ from src.gcqf_training import (
     GCQF_FIXED_AMP_SCALE,
     build_module_optimizer,
     collate_evidence_records,
+    compute_positive_weights,
 )
 from src.gcte_types import QueryEvidence, ViewGeometry
+from src.sr_peg_targets import SRPEGTargets
 
 
 def _evidence(query_count: int) -> QueryEvidence:
@@ -21,7 +23,7 @@ def _evidence(query_count: int) -> QueryEvidence:
     )
 
 
-def _record(name: str, pair) -> GCQFEvidenceRecord:
+def _record(name: str, pair, *, supervised: bool = False) -> GCQFEvidenceRecord:
     local_count = 1200
     return GCQFEvidenceRecord(
         image_id=name,
@@ -45,6 +47,33 @@ def _record(name: str, pair) -> GCQFEvidenceRecord:
         quality_targets=torch.zeros(1, local_count, 1),
         equivariance_pairs=torch.tensor([pair], dtype=torch.long),
         fixed_anchor_payload={},
+        sr_peg_targets=(
+            SRPEGTargets(
+                local_tiny_utility=torch.cat(
+                    (
+                        torch.ones(1, 1, 1),
+                        torch.zeros(1, local_count - 1, 1),
+                    ),
+                    dim=1,
+                ),
+                local_non_tiny_risk=torch.cat(
+                    (
+                        torch.ones(1, 2, 1),
+                        torch.zeros(1, local_count - 2, 1),
+                    ),
+                    dim=1,
+                ),
+                global_retain=torch.cat(
+                    (
+                        torch.ones(1, 3, 1),
+                        torch.zeros(1, 297, 1),
+                    ),
+                    dim=1,
+                ),
+            )
+            if supervised
+            else None
+        ),
     )
 
 
@@ -66,6 +95,44 @@ def test_collate_adds_batch_indices_to_equivariance_pairs():
         [1, 1, 301],
     ]
     assert batch.image_ids == ("a.jpg", "b.jpg")
+
+
+def test_collate_requires_and_stacks_sr_peg_targets_when_requested():
+    batch = collate_evidence_records(
+        [
+            _record("a.jpg", (0, 300), supervised=True),
+            _record("b.jpg", (1, 301), supervised=True),
+        ],
+        require_sr_peg_targets=True,
+    )
+
+    assert batch.local_tiny_utility_targets is not None
+    assert batch.local_tiny_utility_targets.shape == (2, 1200, 1)
+    assert batch.local_non_tiny_risk_targets is not None
+    assert batch.global_retain_targets is not None
+    assert batch.global_retain_targets.shape == (2, 300, 1)
+
+
+def test_collate_rejects_unsupervised_record_when_targets_required():
+    try:
+        collate_evidence_records(
+            [_record("a.jpg", (0, 300))],
+            require_sr_peg_targets=True,
+        )
+    except ValueError as error:
+        assert "SR-PEG" in str(error)
+    else:
+        raise AssertionError("unsupervised records must fail closed")
+
+
+def test_positive_weights_are_independent_and_clipped():
+    records = [_record("a.jpg", (0, 300), supervised=True)]
+
+    assert compute_positive_weights(records) == {
+        "tiny": 20.0,
+        "risk": 20.0,
+        "retain": 20.0,
+    }
 
 
 class _RecordingOptimizer:
