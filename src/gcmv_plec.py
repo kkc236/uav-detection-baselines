@@ -113,6 +113,97 @@ class PhasePreservingLocalEvidenceCanonicalizer(nn.Module):
         )
         self.output_norm = ChannelLayerNorm(self.channels)
 
+    def forward(
+        self,
+        local_features: Sequence[torch.Tensor],
+        geometry: PLECGeometry,
+    ) -> PLECOutput:
+        sampled = sample_local_phases(local_features, geometry)
+        if sampled.shape[3] != self.channels:
+            raise ValueError(
+                f"PLEC was configured for {self.channels} channels, "
+                f"received {sampled.shape[3]}"
+            )
+
+        batch_size, _, _, _, global_height, global_width = sampled.shape
+        numeric_geometry = geometry.to(
+            device=sampled.device, dtype=sampled.dtype
+        )
+        sample_mask = numeric_geometry.sample_valid.unsqueeze(3).to(
+            sampled.dtype
+        )
+        enriched = sampled
+
+        if self.view_embedding is not None:
+            view_ids = torch.arange(4, device=sampled.device)
+            view = self.view_embedding(view_ids).view(
+                1, 4, 1, self.channels, 1, 1
+            )
+            enriched = enriched + view
+
+        if self.phase_mlp is not None:
+            phase = numeric_geometry.subcell_offset.permute(
+                0, 1, 2, 4, 5, 3
+            )
+            phase = self.phase_mlp(phase).permute(0, 1, 2, 5, 3, 4)
+            enriched = enriched + phase
+
+        if self.metadata_mlp is not None:
+            eps = torch.finfo(numeric_geometry.magnification.dtype).eps
+            metadata = torch.cat(
+                (
+                    torch.log2(
+                        numeric_geometry.magnification.clamp_min(eps)
+                    ),
+                    numeric_geometry.edge_distance,
+                ),
+                dim=2,
+            ).permute(0, 1, 3, 4, 2)
+            metadata = self.metadata_mlp(metadata).permute(0, 1, 4, 2, 3)
+            enriched = enriched + metadata.unsqueeze(2)
+
+        enriched = enriched * sample_mask
+        phase_input = enriched.permute(0, 1, 3, 2, 4, 5).reshape(
+            batch_size * 4,
+            self.channels * 9,
+            global_height,
+            global_width,
+        )
+        center_mask = numeric_geometry.center_valid.reshape(
+            batch_size * 4, 1, global_height, global_width
+        ).to(phase_input.dtype)
+        encoded = F.silu(self.phase_reducer(phase_input)) * center_mask
+        encoded = F.silu(self.spatial_mixer(encoded)) * center_mask
+        encoded = self.pointwise(encoded) * center_mask
+        encoded = encoded.reshape(
+            batch_size,
+            4,
+            self.channels,
+            global_height,
+            global_width,
+        )
+
+        if self.overlap_head is not None:
+            raise NotImplementedError("learned PLEC overlap fusion is not implemented")
+        valid = numeric_geometry.center_valid
+        numeric_valid = valid.to(encoded.dtype)
+        weights = numeric_valid / numeric_valid.sum(
+            dim=1, keepdim=True
+        ).clamp_min(1.0)
+        valid_count = numeric_valid.sum(dim=1)
+        any_valid = (valid_count > 0).to(encoded.dtype)
+        canonical = (weights * encoded).sum(dim=1)
+        canonical = self.output_norm(canonical) * any_valid
+        edge_prior = (
+            weights * numeric_geometry.edge_distance
+        ).sum(dim=1) * any_valid
+        return PLECOutput(
+            canonical=canonical,
+            valid_count=valid_count,
+            edge_prior=edge_prior,
+            overlap_weights=weights,
+        )
+
 
 def _validate_local_features(
     local_features: Sequence[torch.Tensor],

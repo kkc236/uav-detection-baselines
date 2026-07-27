@@ -174,3 +174,100 @@ def test_full_plec_constructs_the_frozen_trainable_layers():
     assert module.pointwise.kernel_size == (1, 1)
     assert isinstance(module.overlap_head, nn.Sequential)
     assert isinstance(module.output_norm, ChannelLayerNorm)
+
+
+def test_channel_major_phase_groups_do_not_mix_channels():
+    geometry = identity_geometry(height=4, width=5)
+    features = ramp_features(height=4, width=5, channels=2)
+    features = [
+        torch.cat((feature[:, :1], feature[:, :1] + 1_000.0), dim=1)
+        for feature in features
+    ]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=2,
+        embedding_hidden=4,
+        overlap_hidden=4,
+        use_phase_embedding=False,
+        use_view_embedding=False,
+        use_metadata_embedding=False,
+        learned_overlap=False,
+    )
+    captured: list[torch.Tensor] = []
+
+    def capture_phase_input(_module, args):
+        captured.append(args[0].detach().clone())
+
+    handle = module.phase_reducer.register_forward_pre_hook(capture_phase_input)
+    module(features, geometry)
+    handle.remove()
+
+    sampled = sample_local_phases(features, geometry)
+    expected = sampled.permute(0, 1, 3, 2, 4, 5).reshape(
+        4, 2 * 9, 4, 5
+    )
+    assert len(captured) == 1
+    torch.testing.assert_close(captured[0], expected)
+
+
+def test_phase_view_and_metadata_embeddings_are_added_before_reduction():
+    geometry = identity_geometry(height=4, width=5)
+    features = [torch.zeros(1, 2, 4, 5) for _ in range(4)]
+    module = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=2,
+        embedding_hidden=2,
+        overlap_hidden=2,
+        learned_overlap=False,
+    )
+    module.phase_mlp = nn.Linear(2, 2, bias=False)
+    module.metadata_mlp = nn.Linear(3, 2, bias=False)
+    with torch.no_grad():
+        module.view_embedding.weight.copy_(
+            torch.tensor([[0.0, 0.0], [1.0, 2.0], [2.0, 4.0], [3.0, 6.0]])
+        )
+        module.phase_mlp.weight.copy_(torch.eye(2))
+        module.metadata_mlp.weight.copy_(
+            torch.tensor([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]])
+        )
+    captured: list[torch.Tensor] = []
+    handle = module.phase_reducer.register_forward_pre_hook(
+        lambda _module, args: captured.append(args[0].detach().clone())
+    )
+
+    module(features, geometry)
+    handle.remove()
+
+    enriched = captured[0].reshape(1, 4, 2, 9, 4, 5).permute(
+        0, 1, 3, 2, 4, 5
+    )
+    view, phase, row, column = 2, 0, 1, 2
+    edge = geometry.edge_distance[0, view, 0, row, column]
+    offset = geometry.subcell_offset[0, view, phase, :, row, column]
+    expected = torch.tensor([2.0, 4.0]) + offset + edge
+    torch.testing.assert_close(
+        enriched[0, view, phase, :, row, column],
+        expected,
+    )
+
+
+def test_ablation_flags_disable_only_requested_families():
+    no_phase = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4, use_phase_embedding=False
+    )
+    no_view = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4, use_view_embedding=False
+    )
+    no_metadata = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4, use_metadata_embedding=False
+    )
+    uniform_overlap = PhasePreservingLocalEvidenceCanonicalizer(
+        channels=4, learned_overlap=False
+    )
+
+    assert no_phase.phase_mlp is None
+    assert no_phase.view_embedding is not None
+    assert no_view.view_embedding is None
+    assert no_view.phase_mlp is not None
+    assert no_metadata.metadata_mlp is None
+    assert no_metadata.phase_mlp is not None
+    assert uniform_overlap.overlap_head is None
+    assert uniform_overlap.phase_reducer is not None
