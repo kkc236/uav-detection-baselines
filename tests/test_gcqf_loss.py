@@ -165,3 +165,25 @@ def test_loss_rejects_pairs_outside_query_range():
                 ),
             }
         )
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA autocast regression requires the production device",
+)
+def test_quality_loss_is_safe_inside_cuda_autocast():
+    inputs = {
+        name: value.cuda() if isinstance(value, torch.Tensor) else value
+        for name, value in _inputs().items()
+    }
+
+    with torch.autocast(
+        device_type="cuda",
+        dtype=torch.float16,
+        enabled=True,
+    ):
+        result = compute_gcqf_loss(**inputs)
+
+    assert torch.isfinite(result.total)
+    result.total.backward()
+    assert inputs["adjusted_scores"].grad is not None
