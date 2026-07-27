@@ -16,13 +16,79 @@
 
 **几何规范化局部微小目标专家 RT-DETR**
 
-它包含三个参与前向传播和训练更新的网络模块：
+论文和模型配置中只暴露一个顶层网络模块：
+
+**GCTENetworkModule**
+
+该模块内部包含三个参与前向传播和训练更新的可消融阶段：
 
 1. DSTE：Detection-Supervised Tiny Expert；
 2. GCQL：Geometry-Canonical Query Lifter；
 3. APFG：Anchored Protected Fusion Gate。
 
-三个模块组成一个完整的创新点 1，不改变全局 RT-DETR-L 的检测能力，局部路径只负责增加可靠的 tiny 检测证据。
+三个内部阶段共同组成一个完整的创新点 1，不作为三个平行创新点拆写。GCTENetworkModule 不改变全局 RT-DETR-L 的检测能力，局部路径只负责增加可靠的 tiny 检测证据。
+
+顶层代码接口冻结为：
+
+```python
+class GCTENetworkModule(nn.Module):
+    def __init__(
+        self,
+        query_dim: int = 256,
+        num_classes: int = 10,
+        num_views: int = 4,
+        max_local_queries_per_view: int = 64,
+        adapter_ratio: float = 0.5,
+        residual_cap: float = 0.2,
+    ) -> None:
+        super().__init__()
+        self.dste = DetectionSupervisedTinyExpert(...)
+        self.gcql = GeometryCanonicalQueryLifter(...)
+        self.apfg = AnchoredProtectedFusionGate(...)
+
+    def forward(
+        self,
+        global_queries,
+        global_logits,
+        global_boxes,
+        local_queries,
+        local_logits,
+        local_boxes,
+        crop_geometry,
+        *,
+        targets=None,
+        learned_residual_enabled: bool = True,
+    ):
+        ...
+```
+
+顶层输出冻结为：
+
+- `unified_predictions`：送入统一评估器的最终预测；
+- `local_predictions`：DSTE 的局部检测结果；
+- `canonical_queries`：GCQL 的全局坐标查询；
+- `gate_outputs`：APFG 的锚点、残差和最终准入；
+- `losses`：DSTE、GCQL 和 APFG 的分项训练损失；
+- `diagnostics`：保护不变量、候选数量、延迟和门控统计。
+
+配置文件只声明一个整体：
+
+```yaml
+gcte:
+  module: GCTENetworkModule
+  query_dim: 256
+  num_classes: 10
+  num_views: 4
+  max_local_queries_per_view: 64
+  adapter_ratio: 0.5
+  residual_cap: 0.2
+  internal_stages:
+    dste: true
+    gcql: true
+    apfg: true
+```
+
+普通 Ultralytics YAML 不能独立表达 query、crop geometry 和候选集合接口，因此由 RT-DETR wrapper 在 decoder 输出边界显式调用这个顶层模块；YAML 负责冻结结构配置和消融开关。
 
 ## 2. 设计依据
 
@@ -97,6 +163,22 @@
 - 校准局部候选分数；
 - 替换全局路径中低质量的 tiny 候选；
 - 不能删除受保护的 global non-tiny 候选。
+
+从模型结构图角度，创新点 1 只画成一个大模块：
+
+```text
+Global decoder state ───────────────┐
+                                    │
+Local decoder states ───────┐       │
+Crop geometry ──────────────┼───────┼──> GCTENetworkModule
+                            │       │       ├── DSTE
+                            │       │       ├── GCQL
+                            │       │       └── APFG
+                            │       │
+                            └───────┘       └──> Unified predictions
+```
+
+模块必须能够通过一个顶层 `enabled` 开关整体关闭，并通过三个内部开关完成消融。整体关闭时，输出必须逐预测恢复 global baseline。
 
 ## 4. M1：DSTE
 
@@ -498,4 +580,3 @@ G0 阶段冻结：
 5. 第二数据集或第二 detector 至少完成一个；
 6. 完整复杂度、延迟和显存报告已生成；
 7. 失败案例与适用边界如实记录。
-
