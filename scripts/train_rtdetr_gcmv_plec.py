@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.rtdetr_gcmv_plec import GCMVPLECTrainer
+from src.rtdetr_gcmv_plec import (
+    GCMVPLECControlTrainer,
+    GCMVPLECTrainer,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="0")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--control",
+        action="store_true",
+        help="Train the matched stock arm without local-view PLEC fusion.",
+    )
     return parser
 
 
@@ -87,12 +95,17 @@ def build_settings(args: argparse.Namespace) -> dict:
     }
 
 
+def trainer_class(
+    args: argparse.Namespace,
+) -> type[GCMVPLECTrainer]:
+    return GCMVPLECControlTrainer if args.control else GCMVPLECTrainer
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    trainer = GCMVPLECTrainer(overrides=build_settings(args))
+    trainer = trainer_class(args)(overrides=build_settings(args))
     trainer.train()
 
 
 if __name__ == "__main__":
     main()
-

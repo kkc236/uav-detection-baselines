@@ -427,3 +427,25 @@ class GCMVPLECTrainer(RTDETRTrainer):
 
     def final_eval(self):
         return None
+
+
+class GCMVPLECControlTrainer(GCMVPLECTrainer):
+    """Matched stock arm using the same global data path and optimizer setup."""
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights=None,
+        verbose: bool = True,
+    ):
+        model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
+        model.gcmv_enabled = False
+        return model
+
+    def preprocess_batch(self, batch: dict) -> dict:
+        global_batch = {
+            key: value
+            for key, value in batch.items()
+            if key not in {"local_views", "source_shape"}
+        }
+        return RTDETRTrainer.preprocess_batch(self, global_batch)
