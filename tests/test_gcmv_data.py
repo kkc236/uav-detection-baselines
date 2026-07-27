@@ -259,6 +259,35 @@ def test_finalize_provenance_inverts_source_to_global_matrix():
     )
 
 
+def test_finalize_provenance_preserves_axis_alignment_in_inverse():
+    transformed = {
+        "_gcmv_affine_matrix": np.array(
+            [
+                [0.4690702557564, 0.0, -23.74444580078],
+                [0.0, 0.4690702557564, 102.0797729492],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+        "_gcmv_pre_affine_shape": (640, 640),
+        "_gcmv_flip_vertical": False,
+        "_gcmv_flip_horizontal": False,
+        "img": torch.zeros(3, 640, 640, dtype=torch.uint8),
+    }
+
+    _, global_to_source = gcmv_data.finalize_gcmv_provenance(
+        transformed,
+        source_shape=(640, 640),
+    )
+
+    assert global_to_source[0, 1].item() == 0.0
+    assert global_to_source[1, 0].item() == 0.0
+    assert torch.equal(
+        global_to_source[2],
+        torch.tensor([0.0, 0.0, 1.0]),
+    )
+
+
 def test_finalize_provenance_rejects_missing_affine_metadata():
     with pytest.raises(ValueError, match="affine provenance"):
         gcmv_data.finalize_gcmv_provenance(

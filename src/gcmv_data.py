@@ -241,7 +241,9 @@ def finalize_gcmv_provenance(
     )
     source_to_global = torch.from_numpy(matrix.copy())
     try:
-        global_to_source = torch.linalg.inv(source_to_global)
+        global_to_source = torch.linalg.inv(
+            source_to_global.to(dtype=torch.float64)
+        ).to(dtype=source_to_global.dtype)
     except RuntimeError as error:
         raise ValueError("GCMV affine provenance is singular") from error
     if not torch.isfinite(global_to_source).all():
