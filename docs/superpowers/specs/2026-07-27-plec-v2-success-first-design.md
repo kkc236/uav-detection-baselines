@@ -1,7 +1,9 @@
 # PLEC-v2 Success-First Design
 
-**Status:** Frozen for implementation and the first formal screen  
-**Scope:** PLEC only; GGLF and PEG are excluded  
+**Status:** Frozen for implementation and the first formal screen
+
+**Scope:** PLEC only; GGLF and PEG are excluded
+
 **Decision:** Reuse the verified PLEC geometry/network core and repair its
 training, data, and experimental boundaries
 
