@@ -172,6 +172,7 @@ def test_integrated_zero_guard_is_exact_stock_p3_identity():
 def test_integrated_model_exposes_detection_and_auxiliary_loss_names():
     model = GCMVPLECDetectionModel(CONFIG, nc=10, verbose=False)
 
+    assert model.calibration_only is False
     assert model.loss_names == (
         "giou_loss",
         "cls_loss",

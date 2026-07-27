@@ -151,6 +151,7 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
             num_heads=int(config["gglf"]["num_heads"]),
             window_size=int(config["gglf"]["window_size"]),
         )
+        self.calibration_only = False
         self.audit_local_batchnorm = False
         self.capture_local_feature_gradients = False
         self.last_local_p3: list[torch.Tensor] | None = None
@@ -448,10 +449,12 @@ class GCMVPLECDetectionModel(RTDETRDetectionModel):
                 auxiliary.protect.detach(),
             )
         )
-        return (
-            detection_loss + auxiliary.total,
-            torch.cat((detection_items, auxiliary_items)),
+        total_loss = (
+            auxiliary.total
+            if self.calibration_only
+            else detection_loss + auxiliary.total
         )
+        return total_loss, torch.cat((detection_items, auxiliary_items))
 
 
 class GCMVPLECTrainer(RTDETRTrainer):

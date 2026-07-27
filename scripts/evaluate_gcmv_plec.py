@@ -150,6 +150,46 @@ def jsonable(value: Any) -> Any:
     return value
 
 
+def update_tensor_moments(
+    moments: dict[str, float],
+    value: torch.Tensor,
+) -> None:
+    finite = value.detach().float()
+    finite = finite[torch.isfinite(finite)]
+    if not finite.numel():
+        return
+    moments["count"] = moments.get("count", 0.0) + float(finite.numel())
+    moments["sum"] = moments.get("sum", 0.0) + float(finite.sum().item())
+    moments["sum_sq"] = moments.get("sum_sq", 0.0) + float(
+        finite.square().sum().item()
+    )
+    moments["min"] = min(
+        moments.get("min", float("inf")),
+        float(finite.min().item()),
+    )
+    moments["max"] = max(
+        moments.get("max", float("-inf")),
+        float(finite.max().item()),
+    )
+
+
+def finish_tensor_moments(
+    moments: Mapping[str, float],
+) -> dict[str, float]:
+    count = float(moments.get("count", 0.0))
+    if count <= 0:
+        return {"count": 0.0}
+    mean = float(moments["sum"]) / count
+    variance = max(float(moments["sum_sq"]) / count - mean**2, 0.0)
+    return {
+        "count": count,
+        "mean": mean,
+        "std": math.sqrt(variance),
+        "min": float(moments["min"]),
+        "max": float(moments["max"]),
+    }
+
+
 def _build_dataset(
     data: dict,
     *,
@@ -291,6 +331,7 @@ def _run_arm(
         for image in authority["images"]
     }
     rows: list[dict[str, Any]] = []
+    diagnostic_moments: dict[str, dict[str, float]] = {}
     if device.type == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
@@ -325,6 +366,27 @@ def _run_arm(
                     source_shapes=source_shapes if is_method else None,
                     global_to_source=global_to_source,
                 )
+            if is_method:
+                for diagnostic_name in (
+                    "gglf_confidence",
+                    "gglf_tiny_map",
+                    "peg_gate_hat",
+                    "peg_gate",
+                ):
+                    diagnostic = model.last_plec_diagnostics.get(
+                        diagnostic_name
+                    )
+                    if not isinstance(diagnostic, torch.Tensor):
+                        raise RuntimeError(
+                            "missing GCMV diagnostic tensor: "
+                            f"{diagnostic_name}"
+                        )
+                    update_tensor_moments(
+                        diagnostic_moments.setdefault(
+                            diagnostic_name, {}
+                        ),
+                        diagnostic,
+                    )
             predictions = _prediction_tensor(output)
             for index, image_path in enumerate(raw_batch["im_file"]):
                 source_height, source_width = (
@@ -352,6 +414,10 @@ def _run_arm(
             else 0.0
         ),
         "checkpoint": checkpoint_summary,
+        "gcmv_diagnostics": {
+            name: finish_tensor_moments(values)
+            for name, values in diagnostic_moments.items()
+        },
     }
     del model, loader
     if device.type == "cuda":
