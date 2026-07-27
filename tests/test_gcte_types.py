@@ -4,10 +4,10 @@ import pytest
 import torch
 
 from src.gcte_types import (
-    CropGeometry,
     GCTENetworkOutput,
     GCTEStageOutput,
     QueryEvidence,
+    ViewGeometry,
 )
 
 
@@ -74,12 +74,12 @@ def test_query_evidence_requires_one_device_and_floating_dtype():
         )
 
 
-def test_crop_geometry_validates_per_query_contract():
-    geometry = CropGeometry(
-        crop_xyxy=torch.tensor(
-            [[[0.0, 0.0, 320.0, 320.0], [320.0, 0.0, 640.0, 320.0]]]
+def test_view_geometry_validates_per_query_contract():
+    geometry = ViewGeometry(
+        homography=torch.eye(3).reshape(1, 1, 3, 3).repeat(1, 2, 1, 1),
+        crop_metadata=torch.tensor(
+            [[[0.0, 0.0, 0.6, 0.6, 1.0, 1.0], [0.4, 0.0, 0.6, 0.6, 1.0, 1.0]]]
         ),
-        source_size=torch.tensor([[640.0, 480.0]]),
         view_index=torch.tensor([[0, 1]], dtype=torch.long),
         valid_mask=torch.tensor([[True, True]]),
     )
@@ -88,11 +88,13 @@ def test_crop_geometry_validates_per_query_contract():
     assert geometry.query_count == 2
 
 
-def test_crop_geometry_rejects_out_of_bounds_crop():
-    with pytest.raises(ValueError, match="source bounds"):
-        CropGeometry(
-            crop_xyxy=torch.tensor([[[0.0, 0.0, 641.0, 320.0]]]),
-            source_size=torch.tensor([[640.0, 480.0]]),
+def test_view_geometry_rejects_singular_transform():
+    with pytest.raises(ValueError, match="invertible"):
+        ViewGeometry(
+            homography=torch.zeros(1, 1, 3, 3),
+            crop_metadata=torch.tensor(
+                [[[0.0, 0.0, 0.6, 0.6, 1.0, 1.0]]]
+            ),
             view_index=torch.tensor([[0]], dtype=torch.long),
             valid_mask=torch.tensor([[True]]),
         )

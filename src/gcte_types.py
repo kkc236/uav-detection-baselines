@@ -72,22 +72,22 @@ class QueryEvidence:
 
 
 @dataclass(frozen=True)
-class CropGeometry:
-    """Per-query crop metadata in the original image pixel frame."""
+class ViewGeometry:
+    """Per-query local-to-global homographies and normalized crop metadata."""
 
-    crop_xyxy: torch.Tensor
-    source_size: torch.Tensor
+    homography: torch.Tensor
+    crop_metadata: torch.Tensor
     view_index: torch.Tensor
     valid_mask: torch.Tensor
 
     def __post_init__(self) -> None:
-        _require_finite_floating("crop_xyxy", self.crop_xyxy)
-        _require_finite_floating("source_size", self.source_size)
-        if self.crop_xyxy.ndim != 3 or self.crop_xyxy.shape[-1] != 4:
-            raise ValueError("crop_xyxy must be [B,Q,4]")
-        batch, count, _ = self.crop_xyxy.shape
-        if self.source_size.shape != (batch, 2):
-            raise ValueError("source_size must be [B,2] as width,height")
+        _require_finite_floating("homography", self.homography)
+        _require_finite_floating("crop_metadata", self.crop_metadata)
+        if self.homography.ndim != 4 or self.homography.shape[-2:] != (3, 3):
+            raise ValueError("homography must be [B,Q,3,3]")
+        batch, count = self.homography.shape[:2]
+        if self.crop_metadata.shape != (batch, count, 6):
+            raise ValueError("crop_metadata must be [B,Q,6]")
         if not isinstance(self.view_index, torch.Tensor) or self.view_index.shape != (batch, count):
             raise ValueError("view_index must be [B,Q]")
         if self.view_index.dtype != torch.long:
@@ -97,39 +97,32 @@ class CropGeometry:
         if self.valid_mask.dtype != torch.bool:
             raise ValueError("valid_mask must use torch.bool")
         devices = {
-            self.crop_xyxy.device,
-            self.source_size.device,
+            self.homography.device,
+            self.crop_metadata.device,
             self.view_index.device,
             self.valid_mask.device,
         }
         if len(devices) != 1:
-            raise ValueError("crop geometry tensors must share one device")
-        if bool((self.source_size <= 0).any()):
-            raise ValueError("source_size must be positive")
-
-        left, top, right, bottom = self.crop_xyxy.unbind(dim=-1)
-        source_width = self.source_size[:, 0].unsqueeze(1)
-        source_height = self.source_size[:, 1].unsqueeze(1)
-        valid_rectangles = (
-            (left >= 0)
-            & (top >= 0)
-            & (right > left)
-            & (bottom > top)
-            & (right <= source_width)
-            & (bottom <= source_height)
-        )
-        if not bool(valid_rectangles.all()):
-            raise ValueError("crop_xyxy must be non-empty and within source bounds")
+            raise ValueError("view geometry tensors must share one device")
+        determinant = torch.linalg.det(self.homography.detach())
+        if bool((determinant[self.valid_mask].abs() <= 1e-12).any()):
+            raise ValueError("valid homography entries must be invertible")
+        crop_width_height = self.crop_metadata[..., 2:4]
+        resize_factors = self.crop_metadata[..., 4:6]
+        if bool((crop_width_height[self.valid_mask] <= 0).any()):
+            raise ValueError("valid crop width and height must be positive")
+        if bool((resize_factors[self.valid_mask] <= 0).any()):
+            raise ValueError("valid crop resize factors must be positive")
         if bool((self.view_index[self.valid_mask] < 0).any()):
             raise ValueError("valid view_index entries must be nonnegative")
 
     @property
     def batch_size(self) -> int:
-        return int(self.crop_xyxy.shape[0])
+        return int(self.homography.shape[0])
 
     @property
     def query_count(self) -> int:
-        return int(self.crop_xyxy.shape[1])
+        return int(self.homography.shape[1])
 
 
 @dataclass(frozen=True)
