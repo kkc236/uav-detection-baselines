@@ -54,6 +54,19 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+def _stringify_mapping_keys(value: Any) -> Any:
+    """Make evaluator mappings legal for strict canonical JSON."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stringify_mapping_keys(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stringify_mapping_keys(item) for item in value]
+    return value
+
+
 def metric_deltas(
     reference: Mapping[str, Any],
     method: Mapping[str, Any],
@@ -407,7 +420,7 @@ def evaluate(args: argparse.Namespace) -> Path:
         "coverage": coverage,
         "per_seed_gate": gate,
     }
-    atomic_write_json(output, result)
+    atomic_write_json(output, _stringify_mapping_keys(result))
     print(
         f"GCQF_EVALUATION_COMPLETE advance={gate['advance_seed']} "
         f"anchor_exact={anchor_exact} output={output}",

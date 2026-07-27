@@ -10,6 +10,7 @@ from scripts.evaluate_gcqf_g0 import (
     _dataset_key,
     _metric_row,
     _prediction_json,
+    _stringify_mapping_keys,
     metric_deltas,
 )
 from src.gcqf_cache import VerifiedEvidenceCache
@@ -124,7 +125,7 @@ def validate(args: argparse.Namespace) -> tuple[Path, bool]:
     )
     result_path = atomic_write_json(
         output / "anchor-evaluation.json",
-        {
+        _stringify_mapping_keys({
             "schema_version": "gcte-fixed-saded-anchor-evaluation/v1",
             "cache_manifest_sha256": sha256_file(args.cache),
             "anchor_reference_sha256": sha256_file(reference_path),
@@ -138,7 +139,7 @@ def validate(args: argparse.Namespace) -> tuple[Path, bool]:
                 metrics["Raw-Union"],
             ),
             "gate": gate,
-        },
+        }),
     )
     print(
         f"GCQF_ANCHOR_COMPLETE advance={gate['advance_to_training']} "

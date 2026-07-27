@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from scripts.evaluate_gcqf_g0 import (
+    _stringify_mapping_keys,
     per_seed_gate,
     build_parser,
     load_gcqf_module,
@@ -58,6 +59,24 @@ def test_metric_deltas_are_method_minus_reference():
 
     assert delta["mAP50-95"] == pytest.approx(0.005)
     assert delta["AP-tiny-SBR"] == pytest.approx(0.01)
+
+
+def test_evaluation_stringifies_nested_metric_threshold_keys():
+    converted = _stringify_mapping_keys(
+        {
+            "per_threshold": {
+                "tiny": {
+                    0.5: {"tp": 3},
+                    0.75: {"tp": 2},
+                }
+            }
+        }
+    )
+
+    assert converted["per_threshold"]["tiny"] == {
+        "0.5": {"tp": 3},
+        "0.75": {"tp": 2},
+    }
 
 
 def test_per_seed_gate_is_relative_to_fixed_saded_not_only_global():
