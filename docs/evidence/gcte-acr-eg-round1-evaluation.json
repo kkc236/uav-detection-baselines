@@ -1,0 +1,103 @@
+{
+  "round": "acr-eg-seed0-round1",
+  "source_commit": "ada41f512945727d4ae60ba85ddada2eb495c5cb",
+  "source_archive_sha256": "db74239a2519676e6357b3684368308f83fe86fa67f3e4830cfbc0d928f363d0",
+  "calibration_sha256": "212a9c969808d7f3cdc76dccb3c3b2158b0c0d709bc8b2b5509d061d0fdefd35",
+  "evaluation_sha256": "7606275a6196cc3f5af602dae36dea6ecdbd9d4d4f9c1cc68a26da4ea0171bd7",
+  "cache": {
+    "train_manifest_sha256": "bb629f7ae85dcad1b432b8f529cd423ed6c6e685f7c5f11e8af0ff1da60f0286",
+    "val_manifest_sha256": "9e7f3a6361b8734cfab6667972e824c6f4c6ae2cedc0741006f8d2d0037bef86",
+    "train_dataset_signature": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",
+    "val_dataset_signature": "A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A",
+    "baseline_sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
+  },
+  "thresholds": {
+    "tiny_utility": 0.5,
+    "non_tiny_risk": 0.5,
+    "global_retain": 0.6
+  },
+  "metrics": {
+    "Global": {
+      "mAP50-95": 0.1986988715697404,
+      "AP50": 0.36180752426259855,
+      "AP75": 0.18530323588872988,
+      "AP-tiny-SBR": 0.08078922816568755,
+      "tiny_recall": 0.5820790910432345,
+      "AP-medium-SBR": 0.2578054945424131,
+      "AP-large-SBR": 0.15464285664871052
+    },
+    "Full-GCQF": {
+      "mAP50-95": 0.20889331153501275,
+      "AP50": 0.3899775900460969,
+      "AP75": 0.1898412906298796,
+      "AP-tiny-SBR": 0.09400049413346953,
+      "tiny_recall": 0.6402906890954699,
+      "AP-medium-SBR": 0.2562810437483341,
+      "AP-large-SBR": 0.15455318483484717
+    },
+    "Fixed-SADED": {
+      "mAP50-95": 0.22587215350207895,
+      "AP50": 0.4165092745051234,
+      "AP75": 0.2078483286439144,
+      "AP-tiny-SBR": 0.12483127027307224,
+      "tiny_recall": 0.6818282425852147,
+      "AP-medium-SBR": 0.24690078631299608,
+      "AP-large-SBR": 0.15251082074824787
+    }
+  },
+  "deltas": {
+    "full_minus_global": {
+      "mAP50-95": 0.010194439965272362,
+      "AP-tiny-SBR": 0.01321126596778198,
+      "tiny_recall": 0.058211598052235414,
+      "AP-medium-SBR": -0.0015244507940789798,
+      "AP-large-SBR": -8.967181386335121e-05
+    },
+    "full_minus_fixed_internal": {
+      "mAP50-95": -0.0169788419670662,
+      "AP-tiny-SBR": -0.03083077613960271,
+      "tiny_recall": -0.04153755348974475,
+      "AP-medium-SBR": 0.009380257435338019,
+      "AP-large-SBR": 0.002042364086599302
+    }
+  },
+  "gates": {
+    "passed": true,
+    "map_gain_vs_global": true,
+    "tiny_gain_vs_global": true,
+    "tiny_recall_gain_vs_global": true,
+    "medium_budget_vs_global": true,
+    "large_budget_vs_global": true,
+    "anchor_reference_exact": true,
+    "protected_global_exact": true,
+    "max_det_respected": true,
+    "residual_is_active": true,
+    "residual_not_saturated": true,
+    "map_nonnegative_vs_fixed": false,
+    "medium_recovery_vs_fixed": true
+  },
+  "coverage": {
+    "anchor": {
+      "accepted_local": 120326,
+      "final_predictions": 164384,
+      "capacity_rejected": 50925
+    },
+    "method": {
+      "accepted_local": 26678,
+      "final_predictions": 164177,
+      "capacity_rejected": 19110,
+      "duplicate_rejected": 34816,
+      "protected_global": 63355
+    },
+    "residual_off": {
+      "accepted_local": 32438,
+      "final_predictions": 164250,
+      "capacity_rejected": 23869
+    }
+  },
+  "formal_interpretation": {
+    "fixed_saded_is_external_baseline": false,
+    "full_minus_fixed_is_blocking": false,
+    "formal_primary_comparison": "Full-GCQF vs Global RT-DETR-L"
+  }
+}

@@ -102,6 +102,25 @@ The 548-image five-state evaluation is now running:
 - log: `/home/ubuntu/gcte-acr-eg-output-c966512f/evaluation.log`
 - output: `/home/ubuntu/gcte-acr-eg-output-c966512f/seed0-evaluation.json`
 
+The evaluation completed successfully under the Global-relative formal policy:
+
+- evaluation SHA256:
+  `7606275a6196cc3f5af602dae36dea6ecdbd9d4d4f9c1cc68a26da4ea0171bd7`
+- Full-GCQF mAP50-95 vs Global: `+0.010194439965272362`
+- Full-GCQF AP-tiny-SBR vs Global: `+0.01321126596778198`
+- Full-GCQF tiny recall vs Global: `+0.058211598052235414`
+- Full-GCQF AP-medium-SBR vs Global: `-0.0015244507940789798`
+- Full-GCQF AP-large-SBR vs Global: `-0.00008967181386335121`
+- all formal gates: `passed=true`
+
+The internal Full-GCQF minus Fixed-SADED mAP delta is
+`-0.0169788419670662`. It is reported for evidence retention only and does not
+block the formal comparison, because Fixed-SADED is unpublished internal
+development evidence rather than an external baseline.
+
+The complete metric, gate, coverage, and checksum record is tracked at
+`docs/evidence/gcte-acr-eg-round1-evaluation.json`.
+
 ## Reproducibility anchors
 
 - train10 cache manifest SHA256:
