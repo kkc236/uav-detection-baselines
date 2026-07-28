@@ -121,6 +121,30 @@ development evidence rather than an external baseline.
 The complete metric, gate, coverage, and checksum record is tracked at
 `docs/evidence/gcte-acr-eg-round1-evaluation.json`.
 
+## Formal 100-epoch launch
+
+The formal detector stage is now running from the verified new source:
+
+- source commit: `098da04c7ef6f460ecf8298ab563ed70392bf97c`
+- source archive SHA256:
+  `8ec90544d0aeb6cad6b285fcf285aa817c5f10fe619623a99cb203e33c515d73`
+- source directory: `/home/ubuntu/gcte-acr-eg-formal-098da04c`
+- output directory:
+  `/home/ubuntu/gcte-acr-eg-formal-output-098da04c/full-rtdetr-100`
+- runner PID: `14324`
+- training PID: `14325`
+- log: `/home/ubuntu/gcte-acr-eg-formal-output-098da04c/formal.log`
+
+The process has entered epoch 1 and reached batch `412/809` while using about
+13.6 GiB on the RTX 4090. The log confirms 6,471 train images and 548
+validation images, MuSGD, batch 8, workers 8, 640-pixel inputs, and
+`pretrained=False`. The protocol manifest was corrected to the exact full
+source commit and has SHA256
+`2c73f2be0acaf3015d45a19c3a9e8192bc0b6230679edb62c17decd45e585e31`.
+
+The structured launch record is tracked at
+`docs/evidence/gcte-acr-eg-formal-launch.json`.
+
 ## Reproducibility anchors
 
 - train10 cache manifest SHA256:

@@ -1,0 +1,59 @@
+{
+  "status": "running",
+  "source_commit": "098da04c7ef6f460ecf8298ab563ed70392bf97c",
+  "source_archive_sha256": "8ec90544d0aeb6cad6b285fcf285aa817c5f10fe619623a99cb203e33c515d73",
+  "server": {
+    "host": "36.103.199.151",
+    "user": "ubuntu",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "550.142",
+    "python": "3.10.12",
+    "torch": "2.5.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "pid": 14325,
+  "runner_pid": 14324,
+  "source_dir": "/home/ubuntu/gcte-acr-eg-formal-098da04c",
+  "output_dir": "/home/ubuntu/gcte-acr-eg-formal-output-098da04c/full-rtdetr-100",
+  "log": "/home/ubuntu/gcte-acr-eg-formal-output-098da04c/formal.log",
+  "protocol_manifest": "/home/ubuntu/gcte-acr-eg-formal-output-098da04c/full-rtdetr-100.protocol.json",
+  "protocol_manifest_sha256": "2c73f2be0acaf3015d45a19c3a9e8192bc0b6230679edb62c17decd45e585e31",
+  "module_path": "/home/ubuntu/gcte-acr-eg-output-c966512f/train-seed0/best-module.pt",
+  "module_sha256": "427a7062a95f6ea44bf9f4fe67c88d1fd7dd0e64e2d7bcd2397016e0782a8a86",
+  "protocol": {
+    "epochs": 100,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "device": "0",
+    "seed": 0,
+    "deterministic": true,
+    "pretrained": false,
+    "optimizer": "MuSGD",
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "momentum": 0.937,
+    "weight_decay": 0.0005,
+    "warmup_epochs": 3.0,
+    "nbs": 64,
+    "amp": true,
+    "amp_scale": 128.0,
+    "query": 300,
+    "max_det": 300,
+    "nms": false
+  },
+  "observed_start": {
+    "epoch": 1,
+    "batch_progress": "412/809",
+    "gpu_memory_mib": 13592,
+    "gpu_utilization_percent": 46,
+    "train_images_scanned": 6471,
+    "val_images_scanned": 548,
+    "train_cache": "false"
+  },
+  "notes": [
+    "ACR-EG seed0 passed the Global-relative formal gates before launch.",
+    "The dataset label-cache write reported ENOSPC; cache=false is part of the frozen protocol, and training continued by direct reads.",
+    "Fixed-SADED-relative deltas remain internal diagnostics and are not the formal blocking criterion."
+  ]
+}
