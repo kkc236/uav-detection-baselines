@@ -1,0 +1,34 @@
+{
+  "source_commit": "098da04c7ef6f460ecf8298ab563ed70392bf97c",
+  "output_dir": "/home/ubuntu/gcte-acr-eg-formal-output-098da04c/full-rtdetr-100",
+  "epoch": 1,
+  "status": "completed_and_continued",
+  "metrics": {
+    "time_seconds": 490.196,
+    "train_giou_loss": 2.36849,
+    "train_cls_loss": 0.4556,
+    "train_l1_loss": 0.94033,
+    "precision": 0.0,
+    "recall": 0.0,
+    "mAP50": 0.0,
+    "mAP50-95": 0.0
+  },
+  "checkpoint": {
+    "remote_path": "/home/ubuntu/gcte-acr-eg-formal-output-098da04c/full-rtdetr-100/weights/epoch0.pt",
+    "local_path": "artifacts/gcte-formal-098da04c/epoch-001-last.pt",
+    "sha256": "9687babfb189518e5b4eceeb1ad0594024fa896addc276576259f6cb04032f61",
+    "github_release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-formal-098da04c-epoch-001"
+  },
+  "protocol": {
+    "epochs": 100,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "device": "0",
+    "seed": 0,
+    "pretrained": false,
+    "optimizer": "MuSGD",
+    "amp": true,
+    "amp_scale": 128.0
+  }
+}

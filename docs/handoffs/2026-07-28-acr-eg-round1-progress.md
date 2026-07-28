@@ -145,6 +145,15 @@ source commit and has SHA256
 The structured launch record is tracked at
 `docs/evidence/gcte-acr-eg-formal-launch.json`.
 
+Epoch 1 completed in `490.196s` with train losses
+`giou=2.36849`, `cls=0.45560`, `l1=0.94033`; the detector has continued into
+the next epoch. The epoch-1 checkpoint SHA256 is
+`9687babfb189518e5b4eceeb1ad0594024fa896addc276576259f6cb04032f61` and is
+available as the
+[epoch-1 GitHub Release asset](https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-formal-098da04c-epoch-001).
+The structured epoch record is tracked at
+`docs/evidence/gcte-acr-eg-formal-epoch-001.json`.
+
 ## Reproducibility anchors
 
 - train10 cache manifest SHA256:
