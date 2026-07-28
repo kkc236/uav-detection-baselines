@@ -13,6 +13,7 @@ RESIDUAL_WEIGHT = 0.01
 TINY_UTILITY_WEIGHT = 1.0
 NON_TINY_RISK_WEIGHT = 2.0
 GLOBAL_RETAIN_WEIGHT = 2.0
+ANCHOR_ADMISSION_WEIGHT = 1.0
 
 
 @dataclass(frozen=True)
@@ -24,11 +25,13 @@ class GCQFLoss:
     tiny_utility: torch.Tensor
     non_tiny_risk: torch.Tensor
     global_retain: torch.Tensor
+    admission: torch.Tensor
     equivariance_weight: float = EQUIVARIANCE_WEIGHT
     residual_weight: float = RESIDUAL_WEIGHT
     tiny_utility_weight: float = TINY_UTILITY_WEIGHT
     non_tiny_risk_weight: float = NON_TINY_RISK_WEIGHT
     global_retain_weight: float = GLOBAL_RETAIN_WEIGHT
+    admission_weight: float = ANCHOR_ADMISSION_WEIGHT
 
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -53,6 +56,8 @@ def compute_gcqf_loss(
     non_tiny_risk_targets: torch.Tensor | None = None,
     global_retain_logits: torch.Tensor | None = None,
     global_retain_targets: torch.Tensor | None = None,
+    anchor_admission_logits: torch.Tensor | None = None,
+    anchor_admission_targets: torch.Tensor | None = None,
     positive_weights: dict[str, float] | None = None,
 ) -> GCQFLoss:
     """Compute quality, cross-view equivariance, and anchor residual losses."""
@@ -130,12 +135,15 @@ def compute_gcqf_loss(
         non_tiny_risk_targets,
         global_retain_logits,
         global_retain_targets,
+        anchor_admission_logits,
+        anchor_admission_targets,
         positive_weights,
     )
     if all(value is None for value in sr_values):
         tiny_utility = adjusted_scores.sum() * 0.0
         non_tiny_risk = adjusted_scores.sum() * 0.0
         global_retain = adjusted_scores.sum() * 0.0
+        admission = adjusted_scores.sum() * 0.0
     elif any(value is None for value in sr_values):
         raise ValueError("all SR-PEG loss inputs must be supplied together")
     else:
@@ -145,6 +153,8 @@ def compute_gcqf_loss(
         assert non_tiny_risk_targets is not None
         assert global_retain_logits is not None
         assert global_retain_targets is not None
+        assert anchor_admission_logits is not None
+        assert anchor_admission_targets is not None
         assert positive_weights is not None
         if tiny_utility_logits.shape != adjusted_scores.shape:
             raise ValueError("tiny utility logits must match local scores")
@@ -154,6 +164,10 @@ def compute_gcqf_loss(
             raise ValueError("tiny utility targets must match local scores")
         if non_tiny_risk_targets.shape != adjusted_scores.shape:
             raise ValueError("non-tiny risk targets must match local scores")
+        if anchor_admission_logits.shape != adjusted_scores.shape:
+            raise ValueError("anchor admission logits must match local scores")
+        if anchor_admission_targets.shape != adjusted_scores.shape:
+            raise ValueError("anchor admission targets must match local scores")
         if (
             global_retain_logits.ndim != 3
             or global_retain_logits.shape[0] != batch
@@ -214,6 +228,12 @@ def compute_gcqf_loss(
             pos_weight=positive_weights["retain"],
             mask=None,
         )
+        admission = binary_head_loss(
+            anchor_admission_logits,
+            anchor_admission_targets,
+            pos_weight=1.0,
+            mask=local_mask,
+        )
 
     total = (
         quality
@@ -222,6 +242,7 @@ def compute_gcqf_loss(
         + TINY_UTILITY_WEIGHT * tiny_utility
         + NON_TINY_RISK_WEIGHT * non_tiny_risk
         + GLOBAL_RETAIN_WEIGHT * global_retain
+        + ANCHOR_ADMISSION_WEIGHT * admission
     )
     if not bool(torch.isfinite(total)):
         raise FloatingPointError("GCQF loss is nonfinite")
@@ -233,10 +254,12 @@ def compute_gcqf_loss(
         tiny_utility=tiny_utility,
         non_tiny_risk=non_tiny_risk,
         global_retain=global_retain,
+        admission=admission,
     )
 
 
 __all__ = [
+    "ANCHOR_ADMISSION_WEIGHT",
     "EQUIVARIANCE_WEIGHT",
     "GLOBAL_RETAIN_WEIGHT",
     "GCQFLoss",

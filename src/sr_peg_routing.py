@@ -42,6 +42,7 @@ class SRPEGLearnedOutputs:
     score_residual: torch.Tensor
     tiny_utility: torch.Tensor
     non_tiny_risk: torch.Tensor
+    anchor_admission: torch.Tensor
     global_retain: torch.Tensor
 
 
@@ -76,9 +77,14 @@ def _iou(left: Detection, right: Detection) -> float:
 def _stable_key(
     detection: Detection,
     original_index: int,
+    rank_score: float | None = None,
 ) -> tuple[float, int, int, int]:
     return (
-        -detection.score,
+        -(
+            detection.score
+            if rank_score is None
+            else float(rank_score)
+        ),
         detection.source_order,
         detection.query_index,
         original_index,
@@ -108,6 +114,7 @@ def route_sr_peg_record(
     score_residual: torch.Tensor | None = None,
     tiny_utility: torch.Tensor | None = None,
     non_tiny_risk: torch.Tensor | None = None,
+    anchor_admission: torch.Tensor | None = None,
     global_retain: torch.Tensor | None = None,
     thresholds: SRPEGThresholds | None = None,
     residual_enabled: bool = True,
@@ -118,6 +125,7 @@ def route_sr_peg_record(
         score_residual,
         tiny_utility,
         non_tiny_risk,
+        anchor_admission,
         global_retain,
     )
     if learned_outputs is None and all(value is None for value in individual):
@@ -128,12 +136,14 @@ def route_sr_peg_record(
         score_residual = learned_outputs.score_residual
         tiny_utility = learned_outputs.tiny_utility
         non_tiny_risk = learned_outputs.non_tiny_risk
+        anchor_admission = learned_outputs.anchor_admission
         global_retain = learned_outputs.global_retain
     if any(value is None for value in individual) or thresholds is None:
         raise ValueError("complete learned outputs and thresholds are required")
     assert score_residual is not None
     assert tiny_utility is not None
     assert non_tiny_risk is not None
+    assert anchor_admission is not None
     assert global_retain is not None
     if (
         score_residual.shape != (1, 1200, 1)
@@ -147,6 +157,9 @@ def route_sr_peg_record(
     )
     risk = _validate_probability_tensor(
         "non_tiny_risk", non_tiny_risk, (1, 1200, 1)
+    )
+    admission = _validate_probability_tensor(
+        "anchor_admission", anchor_admission, (1, 1200, 1)
     )
     retain = _validate_probability_tensor(
         "global_retain", global_retain, (1, 300, 1)
@@ -167,7 +180,7 @@ def route_sr_peg_record(
     height, width = (int(value) for value in source_shape)
 
     protected: list[tuple[Detection, int]] = []
-    unprotected_globals: list[tuple[Detection, int]] = []
+    unprotected_globals: list[tuple[Detection, int, float]] = []
     learned_protected = 0
     for original_index, detection in enumerate(full):
         query = _query_index(detection, selected)
@@ -183,12 +196,14 @@ def route_sr_peg_record(
             protected.append((detection, original_index))
             learned_protected += int(learned)
         else:
-            unprotected_globals.append((detection, original_index))
+            unprotected_globals.append(
+                (detection, original_index, detection.score)
+            )
     if len(protected) > MAX_DET:
         raise ValueError("protected global predictions exceed max_det")
 
-    eligible_locals: list[tuple[Detection, int]] = []
-    size_rejected = utility_rejected = risk_rejected = fragment_rejected = 0
+    eligible_locals: list[tuple[Detection, int, float]] = []
+    size_rejected = fragment_rejected = 0
     for original_index, detection in enumerate(raw_union):
         if detection.source_order == 0:
             continue
@@ -199,12 +214,6 @@ def route_sr_peg_record(
         ):
             size_rejected += 1
             continue
-        if float(utility[0, query, 0]) < thresholds.tiny_utility:
-            utility_rejected += 1
-            continue
-        if float(risk[0, query, 0]) >= thresholds.non_tiny_risk:
-            risk_rejected += 1
-            continue
         if any(
             intersection_over_smaller(detection.box, global_detection.box)
             >= 0.5
@@ -212,18 +221,21 @@ def route_sr_peg_record(
         ):
             fragment_rejected += 1
             continue
-        eligible_locals.append((detection, original_index))
+        rank_score = detection.score * float(admission[0, query, 0])
+        eligible_locals.append((detection, original_index, rank_score))
 
     remaining = unprotected_globals + eligible_locals
-    remaining.sort(key=lambda item: _stable_key(*item))
-    deduplicated: list[tuple[Detection, int]] = []
+    remaining.sort(
+        key=lambda item: _stable_key(item[0], item[1], item[2])
+    )
+    deduplicated: list[tuple[Detection, int, float]] = []
     duplicate_rejected = 0
     for candidate in remaining:
-        detection, _ = candidate
+        detection, _, _ = candidate
         if any(
             detection.class_id == kept.class_id
             and _iou(detection, kept) > 0.5
-            for kept, _ in deduplicated
+            for kept, _, _ in deduplicated
         ):
             duplicate_rejected += 1
             continue
@@ -233,11 +245,11 @@ def route_sr_peg_record(
     selected_remaining = deduplicated[:available]
     protected_detections = tuple(detection for detection, _ in protected)
     output = protected_detections + tuple(
-        detection for detection, _ in selected_remaining
+        detection for detection, _, _ in selected_remaining
     )
     admitted_locals = tuple(
         detection
-        for detection, _ in selected_remaining
+        for detection, _, _ in selected_remaining
         if detection.source_order > 0
     )
     invariants = {
@@ -272,8 +284,9 @@ def route_sr_peg_record(
         "learned_protected_global": learned_protected,
         "accepted_local": len(admitted_locals),
         "local_non_tiny_rejected": size_rejected,
-        "utility_rejected": utility_rejected,
-        "risk_rejected": risk_rejected,
+        "utility_rejected": 0,
+        "risk_rejected": 0,
+        "admission_rejected": 0,
         "fragment_rejected": fragment_rejected,
         "duplicate_rejected": duplicate_rejected,
         "capacity_rejected": max(0, len(deduplicated) - available),

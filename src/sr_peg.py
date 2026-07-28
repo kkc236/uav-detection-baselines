@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import nn
+
+
+ANCHOR_PRIOR_LOGIT = math.log(3.0)
 
 
 @dataclass(frozen=True)
@@ -14,6 +18,7 @@ class SRPEGOutput:
 
     tiny_utility_logits: torch.Tensor
     non_tiny_risk_logits: torch.Tensor
+    anchor_admission_logits: torch.Tensor
     global_retain_logits: torch.Tensor
     score_residual: torch.Tensor
     adjusted_local_scores: torch.Tensor
@@ -24,8 +29,8 @@ def _zero_linear(layer: nn.Linear) -> None:
     nn.init.zeros_(layer.bias)
 
 
-class ScaleRiskProtectedEvidenceGate(nn.Module):
-    """Learn tiny utility, non-tiny risk, global retention, and score residuals."""
+class AnchorConditionedResidualEvidenceGate(nn.Module):
+    """Learn bounded admission residuals around the fixed geometric anchor."""
 
     def __init__(
         self,
@@ -42,13 +47,14 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
         self.query_dim = int(query_dim)
         self.residual_eta = float(residual_eta)
         self.local_trunk = nn.Sequential(
-            nn.Linear(query_dim * 3 + 1, query_dim),
+            nn.Linear(query_dim * 3 + 2, query_dim),
             nn.GELU(),
             nn.Linear(query_dim, query_dim),
             nn.LayerNorm(query_dim),
         )
         self.tiny_utility_head = nn.Linear(query_dim, 1)
         self.non_tiny_risk_head = nn.Linear(query_dim, 1)
+        self.anchor_delta_head = nn.Linear(query_dim, 1)
         self.score_residual_head = nn.Linear(query_dim, 1)
         self.global_attention = nn.MultiheadAttention(
             query_dim,
@@ -68,6 +74,7 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
         )
         _zero_linear(self.tiny_utility_head)
         _zero_linear(self.non_tiny_risk_head)
+        _zero_linear(self.anchor_delta_head)
         _zero_linear(self.score_residual_head)
         _zero_linear(self.global_retain_head[-1])
 
@@ -78,6 +85,7 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
         global_context: torch.Tensor,
         geometry_embedding: torch.Tensor,
         local_scores: torch.Tensor,
+        anchor_mask: torch.Tensor,
         global_queries: torch.Tensor,
         global_boxes: torch.Tensor,
         global_scores: torch.Tensor,
@@ -96,6 +104,8 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
             raise ValueError("local_scores must have shape [B,L,1]")
         if local_valid_mask.shape != local_shape[:2] or local_valid_mask.dtype != torch.bool:
             raise ValueError("local_valid_mask must be bool with shape [B,L]")
+        if anchor_mask.shape != local_scores.shape or anchor_mask.dtype != torch.bool:
+            raise ValueError("anchor_mask must be bool and match local_scores")
         if bool(((local_scores < 0.0) | (local_scores > 1.0)).any()):
             raise ValueError("local_scores must be probabilities in [0,1]")
         if (
@@ -129,6 +139,7 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
                 global_context,
                 geometry_embedding,
                 local_scores.detach(),
+                anchor_mask.detach().to(local_scores.dtype),
             ),
             dim=-1,
         )
@@ -142,6 +153,23 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
         risk_logits = torch.where(
             valid,
             self.non_tiny_risk_head(local_hidden),
+            torch.zeros_like(local_scores),
+        )
+        anchor_prior = torch.where(
+            anchor_mask,
+            torch.full_like(local_scores, ANCHOR_PRIOR_LOGIT),
+            torch.full_like(local_scores, -ANCHOR_PRIOR_LOGIT),
+        )
+        anchor_delta = (
+            torch.tanh(self.anchor_delta_head(local_hidden))
+            * ANCHOR_PRIOR_LOGIT
+        )
+        admission_logits = torch.where(
+            valid,
+            anchor_prior
+            + anchor_delta
+            + 0.5 * tiny_logits
+            - 0.5 * risk_logits,
             torch.zeros_like(local_scores),
         )
         residual = torch.where(
@@ -178,13 +206,19 @@ class ScaleRiskProtectedEvidenceGate(nn.Module):
         return SRPEGOutput(
             tiny_utility_logits=tiny_logits,
             non_tiny_risk_logits=risk_logits,
+            anchor_admission_logits=admission_logits,
             global_retain_logits=retain_logits,
             score_residual=residual,
             adjusted_local_scores=adjusted,
         )
 
 
+ScaleRiskProtectedEvidenceGate = AnchorConditionedResidualEvidenceGate
+
+
 __all__ = [
+    "ANCHOR_PRIOR_LOGIT",
+    "AnchorConditionedResidualEvidenceGate",
     "SRPEGOutput",
     "ScaleRiskProtectedEvidenceGate",
 ]

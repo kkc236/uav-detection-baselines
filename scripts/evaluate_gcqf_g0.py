@@ -333,6 +333,7 @@ def evaluate(args: argparse.Namespace) -> Path:
     probability_values: dict[str, list[torch.Tensor]] = {
         "tiny_utility": [],
         "non_tiny_risk": [],
+        "anchor_admission": [],
         "global_retain": [],
     }
     loader = torch.utils.data.DataLoader(
@@ -366,6 +367,9 @@ def evaluate(args: argparse.Namespace) -> Path:
             risk = prediction.non_tiny_risk_logits[
                 index : index + 1
             ].sigmoid().detach().cpu()
+            admission = prediction.anchor_admission_logits[
+                index : index + 1
+            ].sigmoid().detach().cpu()
             retain = prediction.global_retain_logits[
                 index : index + 1
             ].sigmoid().detach().cpu()
@@ -373,6 +377,7 @@ def evaluate(args: argparse.Namespace) -> Path:
                 "score_residual": residual,
                 "tiny_utility": utility,
                 "non_tiny_risk": risk,
+                "anchor_admission": admission,
                 "global_retain": retain,
             }
             eligible = batch.anchor_mask[index].detach().cpu().squeeze(-1)
@@ -380,6 +385,9 @@ def evaluate(args: argparse.Namespace) -> Path:
             residual_values.append(residual[0, eligible])
             probability_values["tiny_utility"].append(utility[0, valid])
             probability_values["non_tiny_risk"].append(risk[0, valid])
+            probability_values["anchor_admission"].append(
+                admission[0, valid]
+            )
             probability_values["global_retain"].append(retain[0])
     residual_vector = torch.cat(residual_values).float()
     residual_statistics = _tensor_statistics(residual_vector)

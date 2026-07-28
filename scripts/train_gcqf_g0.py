@@ -35,7 +35,7 @@ from src.gcqf_training import (
 )
 
 
-MODULE_ARTIFACT_SCHEMA = "gcte-gcqf-module/v2"
+MODULE_ARTIFACT_SCHEMA = "gcte-gcqf-module/v3"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +202,14 @@ def _loss_for_batch(
             non_tiny_risk_targets=batch.local_non_tiny_risk_targets,
             global_retain_logits=output.global_retain_logits,
             global_retain_targets=batch.global_retain_targets,
+            anchor_admission_logits=output.anchor_admission_logits,
+            anchor_admission_targets=(
+                0.5 * batch.anchor_mask.to(
+                    batch.local_tiny_utility_targets.dtype
+                )
+                + 0.5 * batch.local_tiny_utility_targets
+                - 0.5 * batch.local_non_tiny_risk_targets
+            ).clamp(0.0, 1.0),
             positive_weights=positive_weights,
         )
     return output, loss
@@ -230,6 +238,7 @@ def _epoch(
         "tiny_utility": 0.0,
         "non_tiny_risk": 0.0,
         "global_retain": 0.0,
+        "admission": 0.0,
     }
     count = 0
     step = step_offset
@@ -288,6 +297,9 @@ def _epoch(
         )
         totals["global_retain"] += (
             float(loss.global_retain.detach()) * batch_size
+        )
+        totals["admission"] += (
+            float(loss.admission.detach()) * batch_size
         )
     if count <= 0:
         raise RuntimeError("GCQF epoch received no records")
@@ -361,6 +373,7 @@ def train(args: argparse.Namespace) -> Path:
             "train_tiny_utility",
             "train_non_tiny_risk",
             "train_global_retain",
+            "train_admission",
             "calibration_total",
             "calibration_quality",
             "calibration_equivariance",
@@ -368,6 +381,7 @@ def train(args: argparse.Namespace) -> Path:
             "calibration_tiny_utility",
             "calibration_non_tiny_risk",
             "calibration_global_retain",
+            "calibration_admission",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()

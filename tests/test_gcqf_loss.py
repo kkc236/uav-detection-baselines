@@ -102,6 +102,12 @@ def test_sr_peg_loss_uses_frozen_weights_and_all_heads():
         "global_retain_targets": torch.tensor(
             [[[1.0], [0.0]]]
         ),
+        "anchor_admission_logits": torch.zeros(
+            1, 3, 1, requires_grad=True
+        ),
+        "anchor_admission_targets": torch.tensor(
+            [[[1.0], [0.5], [0.0]]]
+        ),
         "positive_weights": {
             "tiny": 3.0,
             "risk": 2.0,
@@ -118,12 +124,14 @@ def test_sr_peg_loss_uses_frozen_weights_and_all_heads():
         + 0.01 * result.residual_regularization
         + result.tiny_utility
         + 2.0 * result.non_tiny_risk
-        + 2.0 * result.global_retain,
+        + 2.0 * result.global_retain
+        + result.admission,
     )
     result.total.backward()
     assert inputs["tiny_utility_logits"].grad is not None
     assert inputs["non_tiny_risk_logits"].grad is not None
     assert inputs["global_retain_logits"].grad is not None
+    assert inputs["anchor_admission_logits"].grad is not None
     assert not inputs["tiny_utility_targets"].requires_grad
 
 
@@ -170,6 +178,24 @@ def test_loss_rejects_pairs_outside_query_range():
 def test_admission_loss_requires_new_head_and_produces_finite_gradient():
     inputs = {
         **_inputs(),
+        "tiny_utility_logits": torch.zeros(
+            1, 3, 1, requires_grad=True
+        ),
+        "tiny_utility_targets": torch.tensor(
+            [[[1.0], [0.0], [0.0]]]
+        ),
+        "non_tiny_risk_logits": torch.zeros(
+            1, 3, 1, requires_grad=True
+        ),
+        "non_tiny_risk_targets": torch.tensor(
+            [[[0.0], [1.0], [0.0]]]
+        ),
+        "global_retain_logits": torch.zeros(
+            1, 2, 1, requires_grad=True
+        ),
+        "global_retain_targets": torch.tensor(
+            [[[1.0], [0.0]]]
+        ),
         "anchor_admission_logits": torch.zeros(
             1, 3, 1, requires_grad=True
         ),

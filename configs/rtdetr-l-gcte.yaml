@@ -18,12 +18,13 @@ gcte:
   stages:
     - GeometryQueryProjector
     - GlobalLocalQueryInteraction
-    - ScaleRiskProtectedEvidenceGate
+    - AnchorConditionedResidualEvidenceGate
   sr_peg:
-    local_trunk: [769, 256, 256]
+    local_trunk: [770, 256, 256]
     global_box_embedding: 64
     tiny_utility_head: true
     non_tiny_risk_head: true
+    anchor_admission_head: true
     global_retain_head: true
   protect_global_non_tiny: true
   exact_anchor_fallback: true
@@ -34,6 +35,7 @@ gcte:
     tiny_utility: 1.0
     non_tiny_risk: 2.0
     global_retain: 2.0
+    anchor_admission: 1.0
 
 backbone:
   - [-1, 1, HGStem, [32, 48]]

@@ -16,7 +16,7 @@ from torch import nn
 
 from src.gcte_types import QueryEvidence, ViewGeometry
 from src.gcte_views import transform_xywh_homography
-from src.sr_peg import ScaleRiskProtectedEvidenceGate
+from src.sr_peg import AnchorConditionedResidualEvidenceGate
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ class GCQFOutput:
     global_context: torch.Tensor
     tiny_utility_logits: torch.Tensor
     non_tiny_risk_logits: torch.Tensor
+    anchor_admission_logits: torch.Tensor
     global_retain_logits: torch.Tensor
     score_residual: torch.Tensor
     adjusted_local_scores: torch.Tensor
@@ -298,7 +299,7 @@ class GCQF(nn.Module):
             query_dim=query_dim,
             num_heads=num_heads,
         )
-        self.sr_peg = ScaleRiskProtectedEvidenceGate(
+        self.sr_peg = AnchorConditionedResidualEvidenceGate(
             query_dim=query_dim,
             num_heads=num_heads,
             residual_eta=residual_eta,
@@ -332,6 +333,7 @@ class GCQF(nn.Module):
             global_context=context,
             geometry_embedding=projected.geometry_embedding,
             local_scores=local_evidence.quality,
+            anchor_mask=anchor_mask,
             global_queries=global_evidence.queries,
             global_boxes=global_evidence.boxes,
             global_scores=global_evidence.quality,
@@ -346,6 +348,7 @@ class GCQF(nn.Module):
             global_context=context,
             tiny_utility_logits=gated.tiny_utility_logits,
             non_tiny_risk_logits=gated.non_tiny_risk_logits,
+            anchor_admission_logits=gated.anchor_admission_logits,
             global_retain_logits=gated.global_retain_logits,
             score_residual=gated.score_residual,
             adjusted_local_scores=gated.adjusted_local_scores,

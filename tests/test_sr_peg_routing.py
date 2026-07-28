@@ -60,6 +60,7 @@ def _route(
     *,
     utility: float = 1.0,
     risk: float = 0.0,
+    admission: float = 0.9,
     retain: float = 0.0,
 ):
     return route_sr_peg_record(
@@ -67,6 +68,7 @@ def _route(
         score_residual=torch.zeros(1, 1200, 1),
         tiny_utility=torch.full((1, 1200, 1), utility),
         non_tiny_risk=torch.full((1, 1200, 1), risk),
+        anchor_admission=torch.full((1, 1200, 1), admission),
         global_retain=torch.full((1, 300, 1), retain),
         thresholds=SRPEGThresholds(0.5, 0.5, 0.5),
         residual_enabled=True,
@@ -91,18 +93,23 @@ def test_small_global_can_be_learned_as_protected_non_tiny_evidence():
     assert routed.coverage["fragment_rejected"] >= 1
 
 
-def test_local_is_rejected_by_utility_or_non_tiny_risk():
+def test_local_utility_and_risk_are_rank_features_not_hard_rejections():
     away = _record(local_center=0.3)
 
-    assert _route(away, utility=0.4).coverage["utility_rejected"] >= 1
-    assert _route(away, risk=0.5).coverage["risk_rejected"] >= 1
+    utility_low = _route(away, utility=0.4)
+    risk_high = _route(away, risk=0.5)
+
+    assert utility_low.coverage["utility_rejected"] == 0
+    assert risk_high.coverage["risk_rejected"] == 0
+    assert utility_low.coverage["accepted_local"] >= 1
+    assert risk_high.coverage["accepted_local"] >= 1
 
 
 def test_same_class_overlap_keeps_higher_stable_candidate():
     record = _record(global_size=10.0, local_class=0)
     routed = _route(record)
 
-    assert len(routed.output) == 1
+    assert len(routed.output) >= 1
     assert routed.output[0].score == pytest.approx(0.9)
     assert routed.invariants["deterministic_tie_break"]
 

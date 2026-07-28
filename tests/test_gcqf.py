@@ -233,6 +233,7 @@ def test_trainable_stages_receive_gradients_but_frozen_evidence_and_geometry_do_
         + output.global_context.square().mean()
         + output.tiny_utility_logits.sum()
         + output.non_tiny_risk_logits.sum()
+        + output.anchor_admission_logits.sum()
         + output.global_retain_logits.sum()
     ).backward()
 
@@ -241,6 +242,7 @@ def test_trainable_stages_receive_gradients_but_frozen_evidence_and_geometry_do_
     assert module.sr_peg.score_residual_head.weight.grad is not None
     assert module.sr_peg.tiny_utility_head.weight.grad is not None
     assert module.sr_peg.non_tiny_risk_head.weight.grad is not None
+    assert module.sr_peg.anchor_delta_head.weight.grad is not None
     assert module.sr_peg.global_retain_head[-1].weight.grad is not None
     assert global_evidence.queries.grad is None
     assert local.queries.grad is None

@@ -28,13 +28,14 @@ def test_gcte_yaml_freezes_single_gcqf_module_and_protocol():
         "stages": [
             "GeometryQueryProjector",
             "GlobalLocalQueryInteraction",
-            "ScaleRiskProtectedEvidenceGate",
+            "AnchorConditionedResidualEvidenceGate",
         ],
         "sr_peg": {
-            "local_trunk": [769, 256, 256],
+            "local_trunk": [770, 256, 256],
             "global_box_embedding": 64,
             "tiny_utility_head": True,
             "non_tiny_risk_head": True,
+            "anchor_admission_head": True,
             "global_retain_head": True,
         },
         "protect_global_non_tiny": True,
@@ -46,6 +47,7 @@ def test_gcte_yaml_freezes_single_gcqf_module_and_protocol():
             "tiny_utility": 1.0,
             "non_tiny_risk": 2.0,
             "global_retain": 2.0,
+            "anchor_admission": 1.0,
         },
     }
 

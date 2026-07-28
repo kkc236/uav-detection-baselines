@@ -181,6 +181,9 @@ def calibrate(args: argparse.Namespace) -> Path:
                 "non_tiny_risk": prediction.non_tiny_risk_logits[
                     index : index + 1
                 ].sigmoid().detach().cpu(),
+                "anchor_admission": prediction.anchor_admission_logits[
+                    index : index + 1
+                ].sigmoid().detach().cpu(),
                 "global_retain": prediction.global_retain_logits[
                     index : index + 1
                 ].sigmoid().detach().cpu(),
