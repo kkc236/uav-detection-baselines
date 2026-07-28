@@ -108,6 +108,7 @@ def test_formal_entry_accepts_yaml_and_mature_baseline_checkpoint(tmp_path) -> N
     settings = build_settings(args)
 
     assert settings["gcte_config"] == str(config.resolve())
+    assert settings["model"] == str(config.resolve())
     assert settings["baseline_checkpoint"] == str(baseline.resolve())
     assert settings["gcte_forward_integration"] is True
     assert settings["baseline_sha256"] == (

@@ -15,7 +15,8 @@ sys.path.insert(0, str(ROOT))
 
 DEFAULT_DATA = "/mnt/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml"
 DEFAULT_MODEL = "rtdetr-l.yaml"
-DEFAULT_CONFIG = ROOT / "configs" / "rtdetr-l-gcte.yaml"
+DEFAULT_CONFIG = ROOT / "configs" / "rtdetr-l-acr-eg.yaml"
+DEFAULT_BASELINE = "/home/ubuntu/matched-baseline-best-epoch-0100.pt"
 MATURE_BASELINE_SHA256 = (
     "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
 )
@@ -38,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", default="acr-eg-rtdetr-formal-100")
     parser.add_argument("--module", default="")
     parser.add_argument("--module-sha256", default="")
-    parser.add_argument("--baseline-checkpoint", default="")
+    parser.add_argument("--baseline-checkpoint", default=DEFAULT_BASELINE)
     parser.add_argument("--baseline-sha256", default=MATURE_BASELINE_SHA256)
     parser.add_argument(
         "--resume",
@@ -66,7 +67,7 @@ def build_settings(args: argparse.Namespace) -> dict[str, Any]:
 
     gcte_config = load_acr_eg_config(args.config)
     return {
-        "model": args.model,
+        "model": str(Path(args.config).resolve()),
         "data": str(Path(args.data).resolve()),
         "epochs": 100,
         "imgsz": 640,
@@ -148,7 +149,7 @@ def main() -> None:
     if protocol_path.exists():
         raise FileExistsError(protocol_path)
     protocol = {
-        "schema_version": "gcte-formal-training/v1",
+        "schema_version": "gcte-acr-eg-formal-training/v2",
         "source_commit": os.environ.get("GCTE_SOURCE_COMMIT", "unknown"),
         "module_path": str(Path(args.module).resolve()) if args.module else "",
         "module_sha256": args.module_sha256,
@@ -159,26 +160,37 @@ def main() -> None:
     if args.dry_run:
         return
 
-    from ultralytics import RTDETR
-
-    from src.gcte_formal_trainer import GCTEFormalTrainer
+    from src.rtdetr_acr_eg import ACREGFormalTrainer
 
     if args.model != DEFAULT_MODEL:
         raise ValueError("GCTE_FORMAL_MODEL_CONFIG_DRIFT")
-    train_settings = dict(settings)
-    train_settings.pop("model")
-    train_settings.pop("amp_scale")
+    baseline = Path(args.baseline_checkpoint).resolve()
+    if not baseline.is_file():
+        raise FileNotFoundError(baseline)
+    actual_baseline_sha256 = sha256(baseline.read_bytes()).hexdigest().upper()
+    if actual_baseline_sha256 != settings["baseline_sha256"]:
+        raise ValueError("GCTE_FORMAL_BASELINE_SHA256_MISMATCH")
     if args.resume:
-        model = RTDETR(str(Path(args.resume).resolve()))
-        train_settings["resume"] = True
-    elif args.baseline_checkpoint:
-        baseline = Path(args.baseline_checkpoint).resolve()
-        if not baseline.is_file():
-            raise FileNotFoundError(baseline)
-        model = RTDETR(str(baseline))
-    else:
-        model = RTDETR(DEFAULT_MODEL)
-    model.train(trainer=GCTEFormalTrainer, **train_settings)
+        raise ValueError("GCTE_ACR_EG_RESUME_REQUIRES_INTEGRATED_CHECKPOINT")
+    os.environ["GCTE_ACR_EG_BASELINE"] = str(baseline)
+    os.environ["GCTE_ACR_EG_YAML"] = settings["gcte_config"]
+    train_settings = {
+        key: value
+        for key, value in settings.items()
+        if key
+        not in {
+            "gcte_config",
+            "baseline_checkpoint",
+            "baseline_sha256",
+            "gcte_enabled",
+            "gcte_forward_integration",
+            "gcte_acr_eg_off",
+            "gcte_off",
+            "amp_scale",
+        }
+    }
+    trainer = ACREGFormalTrainer(overrides=train_settings)
+    trainer.train()
 
 
 if __name__ == "__main__":

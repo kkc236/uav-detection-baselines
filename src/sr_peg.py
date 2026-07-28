@@ -68,7 +68,7 @@ class AnchorConditionedResidualEvidenceGate(nn.Module):
             nn.Linear(64, 64),
         )
         self.global_retain_head = nn.Sequential(
-            nn.Linear(query_dim * 2 + 64 + 1, query_dim),
+            nn.Linear(query_dim * 2 + 64 + 2, query_dim),
             nn.GELU(),
             nn.Linear(query_dim, 1),
         )
@@ -192,6 +192,19 @@ class AnchorConditionedResidualEvidenceGate(nn.Module):
                 attended_local,
                 self.global_box_mlp(global_boxes.detach()),
                 global_scores.detach(),
+                (
+                    (
+                        torch.sigmoid(admission_logits)
+                        * local_valid_mask.unsqueeze(-1).to(
+                            admission_logits.dtype
+                        )
+                    ).sum(dim=1, keepdim=True)
+                    / local_valid_mask.sum(
+                        dim=1, keepdim=True
+                    ).clamp_min(1).unsqueeze(-1).to(
+                        admission_logits.dtype
+                    )
+                ).expand(-1, global_queries.shape[1], -1),
             ),
             dim=-1,
         )

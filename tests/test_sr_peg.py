@@ -123,3 +123,18 @@ def test_anchor_admission_head_receives_gradient():
     output.anchor_admission_logits.square().mean().backward()
 
     assert module.anchor_delta_head.weight.grad is not None
+
+
+def test_global_retain_path_receives_anchor_admission_evidence():
+    module = ScaleRiskProtectedEvidenceGate(query_dim=32, num_heads=4)
+    inputs = _inputs()
+    with torch.no_grad():
+        module.global_retain_head[-1].weight.fill_(0.1)
+        module.tiny_utility_head.bias.fill_(2.0)
+    high_utility = module(**inputs).global_retain_logits
+
+    with torch.no_grad():
+        module.tiny_utility_head.bias.fill_(-2.0)
+    low_utility = module(**inputs).global_retain_logits
+
+    assert not torch.allclose(high_utility, low_utility)
