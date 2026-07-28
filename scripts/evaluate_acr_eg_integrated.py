@@ -6,7 +6,11 @@ import argparse
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from scripts import evaluate_gcqf_g0
 
