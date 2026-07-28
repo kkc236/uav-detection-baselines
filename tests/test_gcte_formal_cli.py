@@ -69,3 +69,11 @@ def test_formal_entry_uses_new_output_and_explicit_protocol_manifest(tmp_path) -
     assert settings["exist_ok"] is False
     assert settings["resume"] is False
     assert settings["cache"] is False
+
+
+def test_formal_entry_accepts_a_downloaded_checkpoint_for_resume(tmp_path) -> None:
+    checkpoint = tmp_path / "epoch-002-last.pt"
+    args = build_parser().parse_args(["--resume", str(checkpoint)])
+    settings = build_settings(args)
+
+    assert settings["resume"] == str(checkpoint.resolve())

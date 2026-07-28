@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", default="acr-eg-rtdetr-formal-100")
     parser.add_argument("--module", default="")
     parser.add_argument("--module-sha256", default="")
+    parser.add_argument(
+        "--resume",
+        default="",
+        help="Downloaded last.pt/epoch checkpoint to resume after interruption.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -56,7 +61,7 @@ def build_settings(args: argparse.Namespace) -> dict[str, Any]:
         "name": args.name,
         "exist_ok": False,
         "pretrained": False,
-        "resume": False,
+        "resume": str(Path(args.resume).resolve()) if args.resume else False,
         "cache": False,
         "amp": True,
         "amp_scale": 128.0,
@@ -135,7 +140,11 @@ def main() -> None:
     train_settings = dict(settings)
     train_settings.pop("model")
     train_settings.pop("amp_scale")
-    model = RTDETR(DEFAULT_MODEL)
+    if args.resume:
+        model = RTDETR(str(Path(args.resume).resolve()))
+        train_settings["resume"] = True
+    else:
+        model = RTDETR(DEFAULT_MODEL)
     model.train(trainer=GCTEFormalTrainer, **train_settings)
 
 
