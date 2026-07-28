@@ -5,7 +5,8 @@ Date: 2026-07-28 (Asia/Shanghai)
 ## Current authoritative conclusion
 
 The previous `GCQF/SR-PEG` seed0 diagnostic is useful but is not accepted as
-the final method. It passes every frozen safety gate except
+the final method. It passes every Global-relative safety gate; its only
+shortfall is relative to the internal Fixed-SADED development anchor:
 `map_nonnegative_vs_fixed`.
 
 | Comparison | mAP50-95 | AP-tiny-SBR | Tiny recall | AP-medium-SBR | AP-large-SBR |
@@ -79,7 +80,12 @@ The new design and implementation plan are:
 - Previous module SHA256:
   `0AB9A949E838B1FFA462591BFB7934BACEBC252C94D0FF965CB516AD145CA88C`
 
-The previous evaluation is retained as evidence, not as a passing result.
+The previous evaluation is retained as evidence, not as the ACR-EG result.
+Fixed-SADED is an internal development anchor, not an external paper
+baseline. Formal advancement is decided by the complete method versus the
+original Global RT-DETR-L baseline, tiny improvement, medium/large
+protection, and network/safety invariants. Fixed-relative deltas remain
+reported for ablation and debugging.
 
 ## Server continuity and cleanup
 

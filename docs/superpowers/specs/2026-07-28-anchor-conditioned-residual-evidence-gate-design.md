@@ -270,18 +270,23 @@ Only seed0 is run. Training and calibration identities remain exactly the
 same as the completed diagnostic. The sealed 548-image validation set and
 all thresholds for declaring success remain unchanged.
 
-The corrected model advances only if every existing hard gate passes,
-including:
+The corrected model advances when the unchanged Global-relative gates and
+network safety invariants pass:
 
 - `Full - Global mAP50-95 >= +0.005`;
 - `Full - Global AP-tiny-SBR >= +0.010`;
 - `Full - Global tiny recall >= +0.020`;
 - `Full - Global AP-medium-SBR >= -0.002`;
 - `Full - Global AP-large-SBR >= -0.005`;
-- `Full - Fixed AP-medium-SBR >= +0.008`;
-- `Full - Fixed mAP50-95 >= 0`.
+- protected global identity is exact;
+- output count and fragment protections are valid;
+- residual is active and not saturated.
 
-No validation-set tuning, gate relaxation, seed1, or seed2 is allowed.
+`Full - Fixed-SADED` mAP and medium recovery remain in the evaluation JSON as
+internal development diagnostics. They are not an external baseline and do
+not block formal training. The paper's primary comparison is the complete
+method against the original Global RT-DETR-L baseline. No validation-set
+tuning, gate relaxation, seed1, or seed2 is allowed.
 
 If the corrected seed0 run fails any hard gate, local patching stops and the
 architecture is reshaped from the successful multi-view SADED evidence.

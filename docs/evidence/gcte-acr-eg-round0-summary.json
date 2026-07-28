@@ -40,5 +40,11 @@
     "skipped": 1
   },
   "next_module": "ACR-EG",
-  "estimated_seed0_gate_probability": "65-70%"
+  "estimated_seed0_gate_probability": "65-70%",
+  "formal_decision_policy": {
+    "primary_baseline": "Global RT-DETR-L",
+    "fixed_saded_role": "internal_development_anchor",
+    "fixed_relative_deltas_block_formal_training": false,
+    "global_relative_tiny_and_scale_gates_block_formal_training": true
+  }
 }

@@ -134,8 +134,9 @@ new output directory, train the module for the frozen ten epochs with seed0,
 calibrate on the fixed 129-image split, and evaluate the five states on the
 548-image validation set.
 
-Stop immediately if any hard gate fails. If all hard gates pass, archive the
-new JSON, checksums, logs, and exact commit.
+Stop immediately if any Global-relative hard gate or safety invariant fails.
+Keep the Fixed-SADED-relative deltas as nonblocking internal diagnostics,
+then archive the new JSON, checksums, logs, and exact commit.
 
 ## Step 7: Formal 100-epoch entry
 

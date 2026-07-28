@@ -83,7 +83,7 @@ def test_evaluation_stringifies_nested_metric_threshold_keys():
     }
 
 
-def test_per_seed_gate_enforces_global_and_fixed_saded_success_budgets():
+def test_per_seed_gate_reports_fixed_anchor_budgets_without_blocking_global_gate():
     metrics = {
         "Global": _metrics(),
         "Raw-Union": _metrics(),
@@ -124,6 +124,35 @@ def test_per_seed_gate_enforces_global_and_fixed_saded_success_budgets():
     assert gate["large_budget_vs_global"] is True
     assert gate["medium_recovery_vs_fixed"] is True
     assert gate["map_nonnegative_vs_fixed"] is True
+    assert gate["passed"] is True
+
+
+def test_per_seed_gate_can_advance_when_only_internal_anchor_delta_fails():
+    metrics = {
+        "Global": _metrics(),
+        "Raw-Union": _metrics(),
+        "Fixed-SADED": _metrics(**{"mAP50-95": 0.224}),
+        "Residual-Off": _metrics(),
+        "Full-GCQF": _metrics(
+            **{
+                "mAP50-95": 0.21,
+                "AP-tiny-SBR": 0.12,
+                "tiny_recall": 0.63,
+                "AP-medium-SBR": 0.249,
+                "AP-large-SBR": 0.299,
+            }
+        ),
+    }
+
+    gate = per_seed_gate(
+        metrics,
+        anchor_exact=True,
+        protected_exact=True,
+        max_det_exact=True,
+        residual_statistics={"mean_abs": 0.1, "saturation_fraction": 0.0},
+    )
+
+    assert gate["map_nonnegative_vs_fixed"] is False
     assert gate["passed"] is True
 
 

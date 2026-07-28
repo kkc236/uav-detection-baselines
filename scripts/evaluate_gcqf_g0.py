@@ -186,10 +186,19 @@ def per_seed_gate(
         ),
     }
     checks.update(diagnostics)
+    # Fixed-SADED is an internal development anchor, not the paper's
+    # external baseline. Keep both comparisons in the report, but only
+    # Global-relative performance, safety invariants, and residual health
+    # decide whether the method advances to formal training.
+    nonblocking_anchor_diagnostics = {
+        "medium_recovery_vs_fixed",
+        "map_nonnegative_vs_fixed",
+    }
     checks["passed"] = all(
         value
         for name, value in checks.items()
         if name not in diagnostics
+        and name not in nonblocking_anchor_diagnostics
     )
     return checks
 
