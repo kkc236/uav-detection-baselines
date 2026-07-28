@@ -163,6 +163,20 @@ available as the
 The structured epoch-2 record is tracked at
 `docs/evidence/gcte-acr-eg-formal-epoch-002.json`.
 
+The GitHub branch now includes a resume-capable formal entry. After downloading
+the latest Release checkpoint, resume with the same protocol and a new output
+name, for example:
+
+```bash
+python scripts/train_gcte_formal.py \
+  --resume /absolute/path/to/epoch-002-last.pt \
+  --data /mnt/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml \
+  --project /home/ubuntu/gcte-acr-eg-formal-output-resumed \
+  --name full-rtdetr-100-resumed \
+  --module /absolute/path/to/best-module.pt \
+  --module-sha256 427a7062a95f6ea44bf9f4fe67c88d1fd7dd0e64e2d7bcd2397016e0782a8a86
+```
+
 ## Reproducibility anchors
 
 - train10 cache manifest SHA256:
