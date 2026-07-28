@@ -31,6 +31,28 @@ def test_formal_parser_defaults_to_frozen_seed0_protocol() -> None:
     assert settings["amp_scale"] == 128.0
 
 
+def test_trainer_overrides_remove_only_protocol_metadata() -> None:
+    from scripts.train_gcte_formal import build_trainer_overrides
+
+    settings = {
+        "model": "model.yaml",
+        "batch": 8,
+        "workers": 8,
+        "gcte_config": "config.yaml",
+        "baseline_checkpoint": "baseline.pt",
+        "baseline_sha256": "A" * 64,
+        "gcte_enabled": True,
+        "gcte_forward_integration": True,
+        "gcte_acr_eg_off": False,
+        "gcte_off": False,
+        "amp_scale": 128.0,
+    }
+
+    overrides = build_trainer_overrides(settings)
+
+    assert overrides == {"model": "model.yaml", "batch": 8, "workers": 8}
+
+
 def test_formal_settings_keep_frozen_augmentation() -> None:
     args = build_parser().parse_args([])
     settings = build_settings(args)

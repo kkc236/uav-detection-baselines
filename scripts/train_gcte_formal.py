@@ -20,6 +20,18 @@ DEFAULT_BASELINE = "/home/ubuntu/matched-baseline-best-epoch-0100.pt"
 MATURE_BASELINE_SHA256 = (
     "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
 )
+TRAINER_METADATA_KEYS = frozenset(
+    {
+        "gcte_config",
+        "baseline_checkpoint",
+        "baseline_sha256",
+        "gcte_enabled",
+        "gcte_forward_integration",
+        "gcte_acr_eg_off",
+        "gcte_off",
+        "amp_scale",
+    }
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -131,6 +143,16 @@ def build_settings(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def build_trainer_overrides(settings: dict[str, Any]) -> dict[str, Any]:
+    """Remove evidence-only metadata while preserving every trainer setting."""
+
+    return {
+        key: value
+        for key, value in settings.items()
+        if key not in TRAINER_METADATA_KEYS
+    }
+
+
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -200,21 +222,7 @@ def main() -> None:
 
     os.environ["GCTE_ACR_EG_BASELINE"] = str(baseline)
     os.environ["GCTE_ACR_EG_YAML"] = settings["gcte_config"]
-    train_settings = {
-        key: value
-        for key, value in settings.items()
-        if key
-        not in {
-            "gcte_config",
-            "baseline_checkpoint",
-            "baseline_sha256",
-            "gcte_enabled",
-            "gcte_forward_integration",
-            "gcte_acr_eg_off",
-            "gcte_off",
-            "amp_scale",
-        }
-    }
+    train_settings = build_trainer_overrides(settings)
     trainer = ACREGFormalTrainer(overrides=train_settings)
     trainer.train()
 
