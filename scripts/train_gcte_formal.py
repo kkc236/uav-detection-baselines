@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 import os
 import sys
@@ -14,6 +15,10 @@ sys.path.insert(0, str(ROOT))
 
 DEFAULT_DATA = "/mnt/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml"
 DEFAULT_MODEL = "rtdetr-l.yaml"
+DEFAULT_CONFIG = ROOT / "configs" / "rtdetr-l-gcte.yaml"
+MATURE_BASELINE_SHA256 = (
+    "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run the frozen 100-epoch RT-DETR detector stage for ACR-EG."
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--data", default=DEFAULT_DATA)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
@@ -32,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", default="acr-eg-rtdetr-formal-100")
     parser.add_argument("--module", default="")
     parser.add_argument("--module-sha256", default="")
+    parser.add_argument("--baseline-checkpoint", default="")
+    parser.add_argument("--baseline-sha256", default=MATURE_BASELINE_SHA256)
     parser.add_argument(
         "--resume",
         default="",
@@ -48,6 +56,15 @@ def build_settings(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("GCTE_FORMAL_INPUT_PROTOCOL_DRIFT")
     if args.device != "0" or args.seed != 0:
         raise ValueError("GCTE_FORMAL_DEVICE_OR_SEED_DRIFT")
+    baseline_sha256 = str(args.baseline_sha256).upper()
+    if (
+        len(baseline_sha256) != 64
+        or any(character not in "0123456789ABCDEF" for character in baseline_sha256)
+    ):
+        raise ValueError("GCTE_FORMAL_BASELINE_SHA256_INVALID")
+    from src.acr_eg_integration import load_acr_eg_config
+
+    gcte_config = load_acr_eg_config(args.config)
     return {
         "model": args.model,
         "data": str(Path(args.data).resolve()),
@@ -59,6 +76,17 @@ def build_settings(args: argparse.Namespace) -> dict[str, Any]:
         "seed": 0,
         "project": str(Path(args.project).resolve()),
         "name": args.name,
+        "gcte_config": str(Path(args.config).resolve()),
+        "baseline_checkpoint": (
+            str(Path(args.baseline_checkpoint).resolve())
+            if args.baseline_checkpoint
+            else ""
+        ),
+        "baseline_sha256": baseline_sha256,
+        "gcte_enabled": gcte_config.enabled,
+        "gcte_forward_integration": gcte_config.forward_integration,
+        "gcte_acr_eg_off": gcte_config.acr_eg_off,
+        "gcte_off": gcte_config.gcte_off,
         "exist_ok": False,
         "pretrained": False,
         "resume": str(Path(args.resume).resolve()) if args.resume else False,
@@ -143,6 +171,11 @@ def main() -> None:
     if args.resume:
         model = RTDETR(str(Path(args.resume).resolve()))
         train_settings["resume"] = True
+    elif args.baseline_checkpoint:
+        baseline = Path(args.baseline_checkpoint).resolve()
+        if not baseline.is_file():
+            raise FileNotFoundError(baseline)
+        model = RTDETR(str(baseline))
     else:
         model = RTDETR(DEFAULT_MODEL)
     model.train(trainer=GCTEFormalTrainer, **train_settings)

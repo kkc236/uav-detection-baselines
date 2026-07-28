@@ -52,7 +52,7 @@ def test_yaml_declares_acr_eg_as_forward_network_module() -> None:
     assert config.enabled is True
     assert config.forward_integration is True
     assert config.num_views == 4
-    assert config.query_dim == 32
+    assert config.query_dim == 256
     assert config.residual_eta == 0.2
 
 

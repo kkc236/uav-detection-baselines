@@ -77,3 +77,39 @@ def test_formal_entry_accepts_a_downloaded_checkpoint_for_resume(tmp_path) -> No
     settings = build_settings(args)
 
     assert settings["resume"] == str(checkpoint.resolve())
+
+
+def test_formal_entry_accepts_yaml_and_mature_baseline_checkpoint(tmp_path) -> None:
+    config = tmp_path / "rtdetr-l-gcte.yaml"
+    config.write_text(
+        "model: rtdetr-l.yaml\n"
+        "gcte:\n"
+        "  enabled: true\n"
+        "  forward_integration: true\n"
+        "  query_dim: 256\n"
+        "  num_classes: 10\n"
+        "  num_heads: 8\n"
+        "  num_views: 4\n"
+        "  residual_eta: 0.2\n"
+        "  residual_enabled: true\n"
+        "  acr_eg_off: false\n"
+        "  gcte_off: false\n",
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "matched-baseline-best-epoch-0100.pt"
+    args = build_parser().parse_args(
+        [
+            "--config",
+            str(config),
+            "--baseline-checkpoint",
+            str(baseline),
+        ]
+    )
+    settings = build_settings(args)
+
+    assert settings["gcte_config"] == str(config.resolve())
+    assert settings["baseline_checkpoint"] == str(baseline.resolve())
+    assert settings["gcte_forward_integration"] is True
+    assert settings["baseline_sha256"] == (
+        "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
+    )
