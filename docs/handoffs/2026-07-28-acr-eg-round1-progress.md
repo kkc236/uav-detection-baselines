@@ -70,15 +70,37 @@ error was:
 
 The contract was reproduced: the directory is rejected, while
 `.../train-cache/manifest.json` loads 647 records with schema
-`gcte-gcqf-evidence/v2`. The corrected three-route calibration is now running:
+`gcte-gcqf-evidence/v2`. The corrected three-route calibration completed:
 
-- PID: `8561`
+- PID: `8561` (exited normally)
 - log: `/home/ubuntu/gcte-acr-eg-output-c966512f/calibration.log`
 - output: `/home/ubuntu/gcte-acr-eg-output-c966512f/calibration.json`
 - cache manifest: `/home/ubuntu/gcte-srpeg-seed0-output-e1a8b039/train-cache/manifest.json`
+- calibration SHA256:
+  `212a9c969808d7f3cdc76dccb3c3b2158b0c0d709bc8b2b5509d061d0fdefd35`
+- selected thresholds: `tiny_utility=0.5`,
+  `non_tiny_risk=0.5`, `global_retain=0.6`
 
 The corrected run reuses the sealed 647-record cache and the completed module;
 it does not change the model or formal thresholds.
+
+On the 129-image calibration holdout, the selected route relative to Global
+gave:
+
+- mAP50-95: `+0.009687565603029163`
+- AP-tiny: `+0.01233865643379875`
+- tiny recall: `+0.0751782242384964`
+- AP-medium: `-0.0005373218279140501`
+- AP-large: `+0.00043539309350792976`
+
+These holdout numbers are diagnostic only; the formal decision remains pending
+on the 548-image validation evaluation.
+
+The 548-image five-state evaluation is now running:
+
+- PID: `9611`
+- log: `/home/ubuntu/gcte-acr-eg-output-c966512f/evaluation.log`
+- output: `/home/ubuntu/gcte-acr-eg-output-c966512f/seed0-evaluation.json`
 
 ## Reproducibility anchors
 
