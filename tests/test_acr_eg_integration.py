@@ -8,6 +8,7 @@ from torch import nn
 from src.acr_eg_integration import (
     ACREGConfig,
     ACREGIntegratedRTDETR,
+    build_integrated_artifact,
     load_acr_eg_config,
 )
 from src.gcqf import GCQF
@@ -122,3 +123,35 @@ def test_forward_calls_acr_eg_and_disabled_mode_restores_global_evidence() -> No
     )
     assert disabled.module_output is None
     assert disabled.global_evidence is global_evidence
+
+
+def test_integrated_artifact_contains_detector_and_acr_eg_state() -> None:
+    config = ACREGConfig(
+        enabled=True,
+        forward_integration=True,
+        query_dim=32,
+        num_classes=3,
+        num_heads=4,
+        num_views=4,
+        residual_eta=0.2,
+    )
+    wrapper = ACREGIntegratedRTDETR(TinyDetector(), config)
+    artifact = build_integrated_artifact(
+        wrapper,
+        baseline_sha256="A" * 64,
+        module_sha256="B" * 64,
+        source_commit="c" * 40,
+    )
+
+    assert artifact["schema_version"] == "gcte-acr-eg-integrated/v1"
+    assert artifact["baseline_sha256"] == "A" * 64
+    assert artifact["module_sha256"] == "B" * 64
+    assert artifact["config"]["forward_integration"] is True
+    assert any(
+        key.startswith("detector.")
+        for key in artifact["wrapper_state"]
+    )
+    assert any(
+        key.startswith("acr_eg.")
+        for key in artifact["wrapper_state"]
+    )

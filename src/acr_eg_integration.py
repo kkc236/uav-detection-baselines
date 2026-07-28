@@ -8,7 +8,7 @@ checkpoints.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -144,9 +144,55 @@ class ACREGIntegratedRTDETR(nn.Module):
         )
 
 
+def _require_sha256(name: str, value: str) -> str:
+    normalized = str(value).upper()
+    if len(normalized) != 64 or any(
+        character not in "0123456789ABCDEF" for character in normalized
+    ):
+        raise ValueError(f"{name} must be a SHA-256 digest")
+    return normalized
+
+
+def build_integrated_artifact(
+    wrapper: ACREGIntegratedRTDETR,
+    *,
+    baseline_sha256: str,
+    module_sha256: str,
+    source_commit: str,
+) -> dict[str, Any]:
+    commit = str(source_commit).lower()
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ValueError("source_commit must be an exact Git SHA")
+    state = {
+        name: value.detach().cpu().clone()
+        for name, value in wrapper.state_dict().items()
+    }
+    if not any(name.startswith("detector.") for name in state):
+        raise ValueError("integrated checkpoint has no detector state")
+    if not any(name.startswith("acr_eg.") for name in state):
+        raise ValueError("integrated checkpoint has no ACR-EG state")
+    return {
+        "schema_version": "gcte-acr-eg-integrated/v1",
+        "source_commit": commit,
+        "baseline_sha256": _require_sha256(
+            "baseline_sha256",
+            baseline_sha256,
+        ),
+        "module_sha256": _require_sha256(
+            "module_sha256",
+            module_sha256,
+        ),
+        "config": asdict(wrapper.config),
+        "wrapper_state": state,
+    }
+
+
 __all__ = [
     "ACREGConfig",
     "ACREGForwardOutput",
     "ACREGIntegratedRTDETR",
+    "build_integrated_artifact",
     "load_acr_eg_config",
 ]
