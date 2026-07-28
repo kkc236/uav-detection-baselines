@@ -172,6 +172,15 @@ available as the
 The structured epoch-3 record is tracked at
 `docs/evidence/gcte-acr-eg-formal-epoch-003.json`.
 
+Epoch 4 completed in `1444.01s` with train losses
+`giou=1.95616`, `cls=0.25764`, `l1=0.51428`; the process remains active.
+Its checkpoint SHA256 is
+`f92521b93cc7b36a9cc983b516647b9a94dc5d1b5c3a54b647e82c95ee259f0f` and
+the verified 197,570,893-byte asset is available from the
+[epoch-4 GitHub Release](https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-formal-098da04c-epoch-004).
+The structured epoch-4 record is tracked at
+`docs/evidence/gcte-acr-eg-formal-epoch-004.json`.
+
 The GitHub branch now includes a resume-capable formal entry. After downloading
 the latest Release checkpoint, resume with the same protocol and a new output
 name, for example:
