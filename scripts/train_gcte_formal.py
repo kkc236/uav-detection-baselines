@@ -145,33 +145,59 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def main() -> None:
     args = build_parser().parse_args()
     settings = build_settings(args)
+    if args.model != DEFAULT_MODEL:
+        raise ValueError("GCTE_FORMAL_MODEL_CONFIG_DRIFT")
+
+    if not args.dry_run:
+        from src.rtdetr_acr_eg import (
+            ACREGFormalTrainer,
+            validate_acr_eg_resume_checkpoint,
+        )
+
+        baseline = Path(args.baseline_checkpoint).resolve()
+        if not baseline.is_file():
+            raise FileNotFoundError(baseline)
+        actual_baseline_sha256 = sha256(baseline.read_bytes()).hexdigest().upper()
+        if actual_baseline_sha256 != settings["baseline_sha256"]:
+            raise ValueError("GCTE_FORMAL_BASELINE_SHA256_MISMATCH")
+        if args.resume:
+            import torch
+
+            resume_path = Path(args.resume).resolve()
+            if not resume_path.is_file():
+                raise FileNotFoundError(resume_path)
+            payload = torch.load(resume_path, map_location="cpu", weights_only=False)
+            validate_acr_eg_resume_checkpoint(payload)
+            del payload
+
     protocol_path = Path(settings["project"]) / f"{args.name}.protocol.json"
     if protocol_path.exists():
         raise FileExistsError(protocol_path)
+    run_path = Path(settings["project"]) / args.name
+    if run_path.exists():
+        raise FileExistsError(run_path)
     protocol = {
         "schema_version": "gcte-acr-eg-formal-training/v2",
         "source_commit": os.environ.get("GCTE_SOURCE_COMMIT", "unknown"),
         "module_path": str(Path(args.module).resolve()) if args.module else "",
         "module_sha256": args.module_sha256,
         "settings": settings,
+        "resume_contract": {
+            "enabled": bool(args.resume),
+            "fixed_amp_scale": 128.0,
+            "fixed_amp_growth_interval": 2**31 - 1,
+            "fixed_scale_reconstruction": bool(args.resume),
+            "note": (
+                "fixed-scale scaler has no dynamic growth state; reconstruction "
+                "at the same exact scale is the frozen protocol"
+            ),
+        },
     }
     _write_json(protocol_path, protocol)
     print(f"GCTE_FORMAL_PROTOCOL {protocol_path}", flush=True)
     if args.dry_run:
         return
 
-    from src.rtdetr_acr_eg import ACREGFormalTrainer
-
-    if args.model != DEFAULT_MODEL:
-        raise ValueError("GCTE_FORMAL_MODEL_CONFIG_DRIFT")
-    baseline = Path(args.baseline_checkpoint).resolve()
-    if not baseline.is_file():
-        raise FileNotFoundError(baseline)
-    actual_baseline_sha256 = sha256(baseline.read_bytes()).hexdigest().upper()
-    if actual_baseline_sha256 != settings["baseline_sha256"]:
-        raise ValueError("GCTE_FORMAL_BASELINE_SHA256_MISMATCH")
-    if args.resume:
-        raise ValueError("GCTE_ACR_EG_RESUME_REQUIRES_INTEGRATED_CHECKPOINT")
     os.environ["GCTE_ACR_EG_BASELINE"] = str(baseline)
     os.environ["GCTE_ACR_EG_YAML"] = settings["gcte_config"]
     train_settings = {

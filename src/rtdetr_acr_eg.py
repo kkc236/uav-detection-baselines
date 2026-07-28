@@ -21,6 +21,7 @@ from torch import nn
 from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
 from ultralytics.utils import RANK, colorstr
+from ultralytics.utils.torch_utils import unwrap_model
 
 from src.acr_eg_integration import ACREGConfig, load_acr_eg_config
 from src.ascv_loc import preserve_batchnorm_buffers
@@ -34,6 +35,7 @@ from src.gcte_formal_trainer import GCTEFormalTrainer
 
 ACR_EG_LOSS_NAMES = ("giou_loss", "cls_loss", "l1_loss", "acr_eg_gate")
 ACR_EG_EXTRA_PREFIX = "acr_eg."
+ACR_EG_STATE_KEY_COUNT = 48
 
 
 def inject_query_retention_logits(
@@ -285,6 +287,63 @@ class ACREGDetectionModel(RTDETRDetectionModel):
         return detection_loss, torch.cat((detection_items, gate_item))
 
 
+def validate_acr_eg_resume_checkpoint(
+    checkpoint: dict,
+    *,
+    expected_model_state_keys: set[str] | None = None,
+) -> ACREGDetectionModel:
+    """Fail closed unless a checkpoint contains the complete integrated run state."""
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("ACR_EG_RESUME_CHECKPOINT_NOT_MAPPING")
+    for key in ("ema", "optimizer", "scaler", "epoch", "updates"):
+        if checkpoint.get(key) is None:
+            raise ValueError(f"ACR_EG_RESUME_MISSING_{key.upper()}")
+
+    ema = checkpoint["ema"]
+    if not isinstance(ema, ACREGDetectionModel):
+        raise ValueError("ACR_EG_RESUME_MODEL_IDENTITY_MISMATCH")
+
+    epoch = checkpoint["epoch"]
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or not 0 <= epoch < 99:
+        raise ValueError("ACR_EG_RESUME_EPOCH_INVALID")
+
+    state_keys = set(ema.state_dict())
+    acr_keys = {key for key in state_keys if key.startswith(ACR_EG_EXTRA_PREFIX)}
+    if len(acr_keys) != ACR_EG_STATE_KEY_COUNT:
+        raise ValueError("ACR_EG_RESUME_STATE_IDENTITY_MISMATCH")
+    if expected_model_state_keys is not None and state_keys != expected_model_state_keys:
+        raise ValueError("ACR_EG_RESUME_STATE_KEYS_MISMATCH")
+
+    optimizer = checkpoint["optimizer"]
+    if not isinstance(optimizer, dict) or not optimizer.get("state"):
+        raise ValueError("ACR_EG_RESUME_OPTIMIZER_STATE_EMPTY")
+    scaler = checkpoint["scaler"]
+    if not isinstance(scaler, dict) or float(scaler.get("scale", 0.0)) != 128.0:
+        raise ValueError("ACR_EG_RESUME_SCALER_SCALE_MISMATCH")
+    if int(scaler.get("growth_interval", -1)) != 2**31 - 1:
+        raise ValueError("ACR_EG_RESUME_SCALER_GROWTH_INTERVAL_MISMATCH")
+    return ema
+
+
+def assert_acr_eg_resume_continuity(trainer: object, checkpoint: dict) -> None:
+    """Audit optimizer, epoch, and fixed-scale AMP state after trainer setup."""
+
+    checkpoint_scale = float(checkpoint["scaler"]["scale"])
+    if checkpoint_scale != 128.0:
+        raise RuntimeError("ACR_EG_RESUME_CHECKPOINT_SCALER_DRIFT")
+    if float(trainer.scaler.get_scale()) != checkpoint_scale:
+        raise RuntimeError("ACR_EG_RESUME_RUNTIME_SCALER_DRIFT")
+    scaler_state = trainer.scaler.state_dict()
+    if int(scaler_state.get("growth_interval", -1)) != 2**31 - 1:
+        raise RuntimeError("ACR_EG_RESUME_RUNTIME_SCALER_GROWTH_INTERVAL_DRIFT")
+    if trainer.start_epoch != checkpoint["epoch"] + 1:
+        raise RuntimeError("ACR_EG_RESUME_START_EPOCH_DRIFT")
+    optimizer_state = trainer.optimizer.state_dict().get("state", {})
+    if not optimizer_state:
+        raise RuntimeError("ACR_EG_RESUME_OPTIMIZER_STATE_EMPTY")
+
+
 def load_mature_baseline(model: ACREGDetectionModel, path: str | Path) -> None:
     """Load only stock RT-DETR parameters, preserving the new ACR-EG module."""
 
@@ -318,17 +377,79 @@ class ACREGFormalTrainer(GCTEFormalTrainer):
         self.model_yaml = Path(os.environ["GCTE_ACR_EG_YAML"]).resolve()
         super().__init__(*args, **kwargs)
 
+    def check_resume(self, overrides):
+        requested = {
+            key: overrides.get(key)
+            for key in (
+                "project",
+                "name",
+                "imgsz",
+                "batch",
+                "workers",
+                "device",
+                "close_mosaic",
+                "save_period",
+                "cache",
+                "val",
+                "plots",
+            )
+        }
+        super().check_resume(overrides)
+        if not self.resume:
+            return
+        for key, value in requested.items():
+            if value is not None:
+                setattr(self.args, key, value)
+        if self.args.epochs != 100 or self.args.imgsz != 640:
+            raise ValueError("GCTE_FORMAL_INPUT_PROTOCOL_DRIFT")
+        if self.args.batch != 8 or self.args.workers != 8:
+            raise ValueError("GCTE_FORMAL_INPUT_PROTOCOL_DRIFT")
+        if self.args.device != "0" or self.args.seed != 0:
+            raise ValueError("GCTE_FORMAL_DEVICE_OR_SEED_DRIFT")
+        if self.args.cache is not False or self.args.val is not False:
+            raise ValueError("GCTE_FORMAL_RUNTIME_PROTOCOL_DRIFT")
+        if self.args.plots is not False or self.args.close_mosaic != 10:
+            raise ValueError("GCTE_FORMAL_RUNTIME_PROTOCOL_DRIFT")
+        if self.args.save_period != 1:
+            raise ValueError("GCTE_FORMAL_CHECKPOINT_PROTOCOL_DRIFT")
+        if self.args.deterministic is not True or self.args.optimizer != "MuSGD":
+            raise ValueError("GCTE_FORMAL_OPTIMIZER_OR_SEED_DRIFT")
+
     def get_model(self, cfg=None, weights=None, verbose: bool = True):
-        if weights is not None:
-            raise ValueError("ACR-EG formal run must load only the sealed mature baseline")
         model = ACREGDetectionModel(
-            cfg or self.model_yaml,
+            self.model_yaml,
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,
         )
-        load_mature_baseline(model, self.baseline_checkpoint)
+        if weights is None:
+            load_mature_baseline(model, self.baseline_checkpoint)
+            return model
+        if not isinstance(weights, ACREGDetectionModel):
+            raise ValueError("ACR_EG_RESUME_MODEL_IDENTITY_MISMATCH")
+        source = weights.float().state_dict()
+        destination = model.state_dict()
+        if set(source) != set(destination):
+            raise ValueError("ACR_EG_RESUME_STATE_KEYS_MISMATCH")
+        model.load_state_dict(source, strict=True)
         return model
+
+    def _setup_train(self):
+        super()._setup_train()
+        if not self.resume:
+            return
+        resume_path = Path(self.args.resume).resolve()
+        checkpoint = torch.load(resume_path, map_location="cpu", weights_only=False)
+        model = unwrap_model(self.model)
+        if not isinstance(model, ACREGDetectionModel):
+            raise RuntimeError("ACR_EG_RESUME_RUNTIME_MODEL_IDENTITY_MISMATCH")
+        validate_acr_eg_resume_checkpoint(
+            checkpoint,
+            expected_model_state_keys=set(model.state_dict()),
+        )
+        # The frozen scaler cannot grow, so reconstruction at the exact scale
+        # preserves the protocol while optimizer and epoch state remain restored.
+        assert_acr_eg_resume_continuity(self, checkpoint)
 
     def build_dataset(self, img_path: str, mode: str = "val", batch: int | None = None):
         return GCMVRTDETRDataset(
@@ -368,6 +489,8 @@ __all__ = [
     "ACREGDetectionModel",
     "ACREGFormalTrainer",
     "ACR_EG_LOSS_NAMES",
+    "assert_acr_eg_resume_continuity",
     "inject_query_retention_logits",
     "load_mature_baseline",
+    "validate_acr_eg_resume_checkpoint",
 ]

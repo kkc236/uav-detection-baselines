@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from scripts.train_gcte_formal import build_parser, build_settings
 
 
@@ -114,3 +116,51 @@ def test_formal_entry_accepts_yaml_and_mature_baseline_checkpoint(tmp_path) -> N
     assert settings["baseline_sha256"] == (
         "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
     )
+
+
+def test_resume_reapplies_new_project_name_and_frozen_runtime_overrides(
+    monkeypatch, tmp_path
+) -> None:
+    from src.gcte_formal_trainer import GCTEFormalTrainer
+    from src.rtdetr_acr_eg import ACREGFormalTrainer
+
+    def fake_check_resume(self, _overrides) -> None:
+        self.resume = True
+        self.args = SimpleNamespace(
+            project="/old/project",
+            name="old-name",
+            imgsz=320,
+            batch=1,
+            workers=1,
+            device="1",
+            close_mosaic=0,
+            save_period=10,
+            cache=True,
+            val=True,
+            plots=True,
+            epochs=100,
+            seed=0,
+            deterministic=True,
+            optimizer="MuSGD",
+        )
+
+    monkeypatch.setattr(GCTEFormalTrainer, "check_resume", fake_check_resume)
+    trainer = object.__new__(ACREGFormalTrainer)
+    overrides = {
+        "project": str(tmp_path / "new-project"),
+        "name": "resume-epoch009-to-100",
+        "imgsz": 640,
+        "batch": 8,
+        "workers": 8,
+        "device": "0",
+        "close_mosaic": 10,
+        "save_period": 1,
+        "cache": False,
+        "val": False,
+        "plots": False,
+    }
+
+    ACREGFormalTrainer.check_resume(trainer, overrides)
+
+    for key, value in overrides.items():
+        assert getattr(trainer.args, key) == value

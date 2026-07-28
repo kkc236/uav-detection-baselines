@@ -39,7 +39,9 @@ class GCTEFormalTrainer(RTDETRTrainer):
 
     def _setup_train(self):
         # Let Ultralytics construct the scaler-dependent training state, then
-        # replace it with a fixed-scale scaler for the frozen protocol.
+        # replace it with a fixed-scale scaler for the frozen protocol. Resume
+        # restores optimizer/epoch state in super(); the integrated trainer then
+        # audits that reconstruction stayed at the exact frozen scale.
         self.args.amp = False
         super()._setup_train()
         if not torch.cuda.is_available() or self.device.type != "cuda":
