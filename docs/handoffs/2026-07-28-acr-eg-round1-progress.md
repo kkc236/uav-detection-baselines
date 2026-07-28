@@ -154,6 +154,15 @@ available as the
 The structured epoch record is tracked at
 `docs/evidence/gcte-acr-eg-formal-epoch-001.json`.
 
+Epoch 2 also completed in `840.743s` with train losses
+`giou=2.30258`, `cls=0.15589`, `l1=0.80998`; the run remains active. Its
+checkpoint SHA256 is
+`938c6b4f7239e3806a0fc8cb9a6b89fe8faeb016b9a0a42da00990e6630d11d6` and is
+available as the
+[epoch-2 GitHub Release asset](https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-formal-098da04c-epoch-002).
+The structured epoch-2 record is tracked at
+`docs/evidence/gcte-acr-eg-formal-epoch-002.json`.
+
 ## Reproducibility anchors
 
 - train10 cache manifest SHA256:
