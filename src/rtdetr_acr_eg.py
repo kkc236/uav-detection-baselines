@@ -102,11 +102,12 @@ def _capture_final_decoder_queries(model: RTDETRDetectionModel) -> Iterator[_Liv
         capture.remove()
 
 
-def _require_raw_training_output(value: object) -> tuple[torch.Tensor, ...]:
+def _require_raw_training_output(value: object) -> tuple[object, ...]:
     if (
         not isinstance(value, tuple)
         or len(value) != 5
-        or not all(isinstance(item, torch.Tensor) or item is None for item in value)
+        or not all(isinstance(item, torch.Tensor) for item in value[:4])
+        or not (isinstance(value[4], dict) or value[4] is None)
     ):
         raise RuntimeError("ACR-EG RT-DETR training output contract drift")
     return value

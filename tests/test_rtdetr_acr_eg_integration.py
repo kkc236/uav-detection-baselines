@@ -44,3 +44,19 @@ def test_yaml_model_registers_acr_eg_parameters():
 
     assert model.nc == 10
     assert any(name.startswith("acr_eg.") for name in model.state_dict())
+
+
+def test_training_output_contract_accepts_rtdetr_denoising_metadata():
+    from src.rtdetr_acr_eg import _require_raw_training_output
+
+    output = _require_raw_training_output(
+        (
+            torch.zeros(1),
+            torch.zeros(1),
+            torch.zeros(1),
+            torch.zeros(1),
+            {"dn_num_split": [100, 300]},
+        )
+    )
+
+    assert output[4]["dn_num_split"] == [100, 300]
