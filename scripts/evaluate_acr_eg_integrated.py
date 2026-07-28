@@ -54,6 +54,8 @@ def build_protocol(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def evaluate(args: argparse.Namespace) -> Path:
+    if args.cache.is_dir():
+        args.cache = args.cache / "manifest.json"
     output = evaluate_gcqf_g0.evaluate(args)
     payload = json.loads(output.read_text(encoding="utf-8"))
     payload["integration_protocol"] = build_protocol(args)
