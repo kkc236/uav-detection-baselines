@@ -9,6 +9,13 @@ def _inputs() -> dict[str, torch.Tensor | bool]:
         "global_context": torch.randn(2, 12, 32),
         "geometry_embedding": torch.randn(2, 12, 32),
         "local_scores": torch.full((2, 12, 1), 0.5),
+        "anchor_mask": torch.tensor(
+            [
+                [[True]] * 12,
+                [[False]] * 12,
+            ],
+            dtype=torch.bool,
+        ),
         "global_queries": torch.randn(2, 3, 32),
         "global_boxes": torch.full((2, 3, 4), 0.2),
         "global_scores": torch.full((2, 3, 1), 0.5),
@@ -23,6 +30,7 @@ def test_sr_peg_emits_four_trainable_query_outputs():
 
     assert output.tiny_utility_logits.shape == (2, 12, 1)
     assert output.non_tiny_risk_logits.shape == (2, 12, 1)
+    assert output.anchor_admission_logits.shape == (2, 12, 1)
     assert output.global_retain_logits.shape == (2, 3, 1)
     assert output.score_residual.shape == (2, 12, 1)
     assert output.score_residual.abs().max() <= 1
@@ -30,6 +38,7 @@ def test_sr_peg_emits_four_trainable_query_outputs():
         output.adjusted_local_scores.sum()
         + output.tiny_utility_logits.sum()
         + output.non_tiny_risk_logits.sum()
+        + output.anchor_admission_logits.sum()
         + output.global_retain_logits.sum()
     ).backward()
     assert module.local_trunk[0].weight.grad is not None
@@ -60,6 +69,7 @@ def test_sr_peg_bypass_returns_original_score_object_but_keeps_gate_logits():
     assert output.adjusted_local_scores is inputs["local_scores"]
     assert output.tiny_utility_logits.shape == (2, 12, 1)
     assert output.non_tiny_risk_logits.shape == (2, 12, 1)
+    assert output.anchor_admission_logits.shape == (2, 12, 1)
     assert output.global_retain_logits.shape == (2, 3, 1)
     torch.testing.assert_close(
         output.score_residual,
@@ -86,3 +96,30 @@ def test_sr_peg_rejects_invalid_masks_and_score_bounds():
         assert "local_scores" in str(error)
     else:
         raise AssertionError("out-of-range local scores must fail closed")
+
+
+def test_anchor_prior_prefers_fixed_membership_before_learning():
+    module = ScaleRiskProtectedEvidenceGate(query_dim=32, num_heads=4)
+    inputs = _inputs()
+    inputs["canonical_queries"] = inputs["canonical_queries"][:1].repeat(2, 1, 1)
+    inputs["global_context"] = inputs["global_context"][:1].repeat(2, 1, 1)
+    inputs["geometry_embedding"] = inputs["geometry_embedding"][:1].repeat(2, 1, 1)
+    inputs["local_scores"] = inputs["local_scores"][:1].repeat(2, 1, 1)
+    inputs["anchor_mask"] = torch.tensor(
+        [[[True]] * 12, [[False]] * 12],
+        dtype=torch.bool,
+    )
+    output = module(**inputs)
+
+    assert torch.all(
+        output.anchor_admission_logits[0]
+        > output.anchor_admission_logits[1]
+    )
+
+
+def test_anchor_admission_head_receives_gradient():
+    module = ScaleRiskProtectedEvidenceGate(query_dim=32, num_heads=4)
+    output = module(**_inputs())
+    output.anchor_admission_logits.square().mean().backward()
+
+    assert module.anchor_delta_head.weight.grad is not None

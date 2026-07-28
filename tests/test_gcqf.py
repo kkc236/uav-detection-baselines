@@ -245,3 +245,21 @@ def test_trainable_stages_receive_gradients_but_frozen_evidence_and_geometry_do_
     assert global_evidence.queries.grad is None
     assert local.queries.grad is None
     assert geometry.homography.grad is None
+
+
+def test_gcqf_exposes_anchor_admission_as_third_stage_output():
+    module = GCQF(
+        query_dim=32,
+        num_classes=3,
+        num_heads=4,
+        num_views=4,
+    )
+    output = module(
+        _evidence(queries=3),
+        _evidence(queries=2),
+        _geometry(torch.eye(3), queries=2),
+        anchor_mask=torch.tensor([[[True], [False]]]),
+        residual_enabled=True,
+    )
+
+    assert output.anchor_admission_logits.shape == (1, 2, 1)

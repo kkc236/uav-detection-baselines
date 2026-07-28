@@ -1,0 +1,44 @@
+{
+  "schema_version": "gcte-acr-eg-round0-summary/v1",
+  "date": "2026-07-28",
+  "repository": "kkc236/uav-detection-baselines",
+  "branch": "codex/gcte-rtdetr-g0",
+  "design_commit": "46b5d98",
+  "plan_commit": "66bd54b",
+  "previous_diagnostic_commit": "3b1f43a4847f0b26652b98807a1aee5c81358aeb",
+  "previous_evaluation_sha256": "7a4bab626aedf0b8e3b5c5aa3f09fc4bbcf4a6a094078413c218df11cbbb462b",
+  "previous_module_sha256": "0AB9A949E838B1FFA462591BFB7934BACEBC252C94D0FF965CB516AD145CA88C",
+  "baseline_sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+  "dataset_signature": "A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A",
+  "validation_images": 548,
+  "old_method": {
+    "full_minus_global": {
+      "map50_95": 0.01059477545675891,
+      "ap_tiny_sbr": 0.0134116943679079,
+      "tiny_recall": 0.054338202744577235,
+      "ap_medium_sbr": -0.0016400479689508973,
+      "ap_large_sbr": -0.00009592819312331802
+    },
+    "full_minus_fixed": {
+      "map50_95": -0.016578506475579652,
+      "ap_tiny_sbr": -0.030630347739476788,
+      "ap_medium_sbr": 0.009264660260466101
+    },
+    "coverage": {
+      "fixed_accepted_local": 120326,
+      "fixed_final_predictions": 164384,
+      "full_accepted_local": 23283,
+      "full_final_predictions": 156960,
+      "empty_capacity_slots": 7440
+    },
+    "passed_hard_gate": false,
+    "failed_gate": "map_nonnegative_vs_fixed"
+  },
+  "tdd_red": {
+    "failed": 9,
+    "passed": 22,
+    "skipped": 1
+  },
+  "next_module": "ACR-EG",
+  "estimated_seed0_gate_probability": "65-70%"
+}

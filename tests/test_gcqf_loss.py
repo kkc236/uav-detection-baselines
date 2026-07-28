@@ -167,6 +167,25 @@ def test_loss_rejects_pairs_outside_query_range():
         )
 
 
+def test_admission_loss_requires_new_head_and_produces_finite_gradient():
+    inputs = {
+        **_inputs(),
+        "anchor_admission_logits": torch.zeros(
+            1, 3, 1, requires_grad=True
+        ),
+        "anchor_admission_targets": torch.tensor(
+            [[[1.0], [0.5], [0.0]]]
+        ),
+        "positive_weights": {"tiny": 3.0, "risk": 2.0, "retain": 4.0},
+    }
+
+    result = compute_gcqf_loss(**inputs)
+
+    assert torch.isfinite(result.admission)
+    result.total.backward()
+    assert inputs["anchor_admission_logits"].grad is not None
+
+
 @pytest.mark.skipif(
     not torch.cuda.is_available(),
     reason="CUDA autocast regression requires the production device",

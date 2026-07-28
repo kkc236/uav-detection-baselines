@@ -125,3 +125,20 @@ def test_thresholds_fail_closed_outside_probability_range():
         assert "[0,1]" in str(error)
     else:
         raise AssertionError("invalid thresholds must fail closed")
+
+
+def test_anchor_conditioned_ranking_fills_safe_capacity_slots():
+    record = _record(local_center=0.3)
+    routed = route_sr_peg_record(
+        record,
+        score_residual=torch.zeros(1, 1200, 1),
+        tiny_utility=torch.full((1, 1200, 1), 0.0),
+        non_tiny_risk=torch.full((1, 1200, 1), 0.0),
+        anchor_admission=torch.full((1, 1200, 1), 0.9),
+        global_retain=torch.full((1, 300, 1), 0.0),
+        thresholds=SRPEGThresholds(0.5, 0.5, 0.5),
+        residual_enabled=True,
+    )
+
+    assert routed.coverage["final_predictions"] > len(routed.control)
+    assert routed.coverage["capacity_rejected"] == 0
