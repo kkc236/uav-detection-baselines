@@ -1,0 +1,84 @@
+{
+  "schema_version": "gcte-acr-eg-integrated-checkpoint-backups/v1",
+  "recorded_at": "2026-07-28T18:33:52+08:00",
+  "repository": "kkc236/uav-detection-baselines",
+  "branch": "codex/gcte-rtdetr-g0",
+  "source_commit": "a22838e3e7cd1cd858d6aad9f42e5b68fab50471",
+  "baseline": {
+    "asset": "matched-baseline-best-epoch-0100.pt",
+    "bytes": 66262262,
+    "sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+    "release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/rtdetr-l-btdse-matched-baseline-live"
+  },
+  "formal_run": {
+    "server": "36.103.199.151",
+    "source_directory": "/home/ubuntu/gcte-acr-eg-formal-a22838e3",
+    "output_directory": "/home/ubuntu/gcte-acr-eg-formal-output-a22838e3/acr-eg-integrated-rtdetr-100",
+    "runner_pid_at_snapshot": 31100,
+    "snapshot_time": "2026-07-28T18:16:00+08:00",
+    "process_state": "running",
+    "current_human_epoch": 10,
+    "latest_completed_human_epoch": 9,
+    "subsequent_connectivity_check": {
+      "time": "2026-07-28T18:33:00+08:00",
+      "status": "ssh_protocol_banner_unavailable_after_two_attempts",
+      "interpretation": "No claim is made about server or process state after the last successful snapshot."
+    },
+    "results_csv_latest": {
+      "epoch": 9,
+      "time_seconds": 7320.23,
+      "train_giou_loss": 1.54419,
+      "train_cls_loss": 0.28404,
+      "train_l1_loss": 0.20044
+    },
+    "validation_during_training": false,
+    "training_metric_zero_columns_are_placeholders": true
+  },
+  "checkpoints": [
+    {
+      "completed_human_epoch": 4,
+      "checkpoint_epoch": 3,
+      "asset": "epoch3.pt",
+      "bytes": 205324956,
+      "sha256": "344951097A89A5F2B49FFFB0DE09E5D4DF2857DC2A5F1874A44CA733127B58AA",
+      "tag": "gcte-acr-eg-a22838e3-epoch-004",
+      "release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-a22838e3-epoch-004"
+    },
+    {
+      "completed_human_epoch": 7,
+      "checkpoint_epoch": 6,
+      "asset": "epoch6.pt",
+      "bytes": 205324892,
+      "sha256": "ACEED252061AF2E6D72FA65461D138E94DDED6B69474E1B0706BEBAD4C4929CB",
+      "tag": "gcte-acr-eg-a22838e3-epoch-007",
+      "release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-a22838e3-epoch-007"
+    },
+    {
+      "completed_human_epoch": 9,
+      "checkpoint_epoch": 8,
+      "asset": "epoch8.pt",
+      "bytes": 205325084,
+      "sha256": "802D72326F4B8FEE55C0FF8818A5B96B7445CBEE34F5C1ED9002A6D3E6771FE6",
+      "github_digest": "sha256:802d72326f4b8fee55c0ff8818a5b96b7445cbee34f5c1ed9002a6d3e6771fe6",
+      "tag": "gcte-acr-eg-a22838e3-epoch-009",
+      "release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-a22838e3-epoch-009",
+      "download": "https://github.com/kkc236/uav-detection-baselines/releases/download/gcte-acr-eg-a22838e3-epoch-009/epoch8.pt",
+      "published": true,
+      "draft": false
+    }
+  ],
+  "checkpoint_contract": {
+    "ema_type": "ACREGDetectionModel",
+    "top_level_model_is_none": true,
+    "acr_eg_state_dict_keys": 48,
+    "optimizer_present": true,
+    "scaler_present": true,
+    "epoch_present": true,
+    "updates_present": true
+  },
+  "resume_status": {
+    "supported_by_source_commit": false,
+    "blocking_error": "GCTE_ACR_EG_RESUME_REQUIRES_INTEGRATED_CHECKPOINT",
+    "required_next_step": "Implement and verify strict integrated-checkpoint resume in a new test-first commit."
+  }
+}

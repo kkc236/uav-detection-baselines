@@ -48,25 +48,32 @@
 
 ### 0.3 当前训练与备份快照
 
-截至 2026-07-28 17:25（UTC+8）的只读服务器快照：
+截至 2026-07-28 18:16（UTC+8）的只读服务器快照：
 
 - 正式进程 PID：`31100`
-- 已完成：`5/100 epoch`
-- 正在运行：第 `6` 轮，约 `138/809` batch（约 17%）
-- GPU：RTX 4090，显存约 `16.6/24.6 GB`（采样瞬间）
-- 服务器根分区：约 `13 GB` 可用
-- 服务器已有：`epoch0.pt` 至 `epoch4.pt`、`last.pt`、`best.pt`
+- 已完成：`9/100 epoch`
+- 正在运行：第 `10` 轮
+- GPU：RTX 4090，训练进程仍真实占用 GPU
+- 服务器 `/home`：约 `12 GB` 可用
+- 服务器已有：`epoch0.pt` 至 `epoch8.pt`、`last.pt`、`best.pt`
 
-当前最可靠的恢复锚点是第 3 轮：
+当前最新的 GitHub 恢复锚点是完成第 9 轮：
 
-- Ultralytics 文件名：`epoch2.pt`
-- 文件大小：`205,324,828` bytes
-- SHA256：`7AB2CAC3A58F9FAF7B014596891E611AC061D2D0BB12C7E1CCE1CFA0828A1A2B`
-- 本地备份：`artifacts/gcte-acr-eg-a22838e3/epoch2.pt`
+- Ultralytics 文件名：`epoch8.pt`
+- checkpoint 内部 epoch：`8`
+- 文件大小：`205,325,084` bytes
+- SHA256：`802D72326F4B8FEE55C0FF8818A5B96B7445CBEE34F5C1ED9002A6D3E6771FE6`
+- 本地备份：`artifacts/gcte-acr-eg-a22838e3/epoch8.pt`
 - GitHub Release：
-  <https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-a22838e3-epoch-003>
+  <https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-a22838e3-epoch-009>
 
-该 Release 资产大小、GitHub digest、本地 SHA256 和服务器 SHA256 已完全一致。即使当前服务器立即关闭，第 3 轮真正集成模型的参数不会丢失。
+该 Release 的 GitHub digest、资产大小、本地 SHA256 和服务器 SHA256 已完全一致。第 4、7、9 轮均已有独立 Release。全新服务器安装、镜像、数据迁移、checkpoint 身份检查及安全恢复边界见：
+
+```text
+docs/handoffs/2026-07-28-gcte-acr-eg-clean-server-migration-and-resume.md
+```
+
+2026-07-28 18:33 的后续 SSH 只读检查在 protocol banner 阶段连续断开，故没有比 18:16 更新的可信服务器状态；最后可靠恢复点仍为已完成三方哈希闭环的第 9 轮。
 
 ### 0.4 还没有做成的部分
 

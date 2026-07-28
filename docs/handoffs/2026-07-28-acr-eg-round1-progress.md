@@ -206,19 +206,16 @@ the verified 197,570,893-byte asset is available from the
 The structured epoch-4 record is tracked at
 `docs/evidence/gcte-acr-eg-formal-epoch-004.json`.
 
-The GitHub branch now includes a resume-capable formal entry. After downloading
-the latest Release checkpoint, resume with the same protocol and a new output
-name, for example:
-
-```bash
-python scripts/train_gcte_formal.py \
-  --resume /absolute/path/to/epoch-002-last.pt \
-  --data /mnt/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml \
-  --project /home/ubuntu/gcte-acr-eg-formal-output-resumed \
-  --name full-rtdetr-100-resumed \
-  --module /absolute/path/to/best-module.pt \
-  --module-sha256 427a7062a95f6ea44bf9f4fe67c88d1fd7dd0e64e2d7bcd2397016e0782a8a86
-```
+> Superseded resume note, audited 2026-07-28: the command that previously
+> appeared here is not a safe resume path for the genuine YAML-integrated
+> `ACREGDetectionModel`. The old `098da04c` formal run was stock RT-DETR and
+> its checkpoint must not be relabelled as ACR-EG. Source commit `a22838e3`
+> creates genuine integrated checkpoints, but its main entry still rejects
+> `--resume` with `GCTE_ACR_EG_RESUME_REQUIRES_INTEGRATED_CHECKPOINT`, and
+> `ACREGFormalTrainer.get_model()` rejects non-null `weights`. Use the
+> test-first recovery requirements in
+> `docs/handoffs/2026-07-28-gcte-acr-eg-clean-server-migration-and-resume.md`;
+> do not execute the removed example.
 
 ## Reproducibility anchors
 
