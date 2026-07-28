@@ -123,6 +123,31 @@ The complete metric, gate, coverage, and checksum record is tracked at
 
 ## Formal 100-epoch launch
 
+### Superseding status: genuine integrated model
+
+The earlier `098da04c` stock detector run is obsolete and is not used as an
+ACR-EG result. The formal experiment now uses `ACREGDetectionModel`, a
+subclass of `RTDETRDetectionModel`, and declares the module in
+`configs/rtdetr-l-acr-eg.yaml`. Its `loss()` calls the paired multi-view
+`predict()` path, captures global and local final decoder queries, calls the
+registered `acr_eg: GCQF` child module, and injects the learned global-retain
+logit into the final non-denoising decoder-query classification logits before
+the stock RT-DETR criterion. The detector loss therefore updates ACR-EG;
+ACR-EG parameters are present in the model state dict and MuSGD optimizer.
+
+The current formal run is:
+
+- source commit: `a22838e3e7cd1cd858d6aad9f42e5b68fab50471`;
+- source directory: `/home/ubuntu/gcte-acr-eg-formal-a22838e3`;
+- output directory: `/home/ubuntu/gcte-acr-eg-formal-output-a22838e3/acr-eg-integrated-rtdetr-100`;
+- YAML SHA256: `D86A166A7166C18FDB9603180A2C65C60A0B1A4BE663CE4A088E14574F7CF422`;
+- mature baseline SHA256: `54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B`.
+
+Focused server regression: `16 passed`; a live denoising-query forward and
+backward smoke passed with nonzero ACR-EG gradient. The formal process then
+entered epoch 1 and recorded real batches on the RTX 4090. Metrics are not
+claimed until the frozen independent validation runs after epoch 100.
+
 The formal detector stage is now running from the verified new source:
 
 - source commit: `098da04c7ef6f460ecf8298ab563ed70392bf97c`
