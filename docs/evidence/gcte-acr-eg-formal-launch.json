@@ -49,7 +49,18 @@
     "gpu_utilization_percent": 46,
     "train_images_scanned": 6471,
     "val_images_scanned": 548,
-    "train_cache": "false"
+    "train_cache": "false",
+    "root_free_gib_after_cleanup": 16.0
+  },
+  "cleanup": {
+    "authorized_obsolete_directories_removed": [
+      "/home/ubuntu/tascv-runs",
+      "/home/ubuntu/tsgr-p2-e1-final-9d9d7994",
+      "/home/ubuntu/tsgr-p2-e1-8cb70c50",
+      "/home/ubuntu/ascv-runs"
+    ],
+    "root_free_gib_before_cleanup": 4.6,
+    "root_free_gib_after_cleanup": 16.0
   },
   "notes": [
     "ACR-EG seed0 passed the Global-relative formal gates before launch.",

@@ -162,5 +162,14 @@ The structured launch record is tracked at
 
 Obsolete GCMV outputs were removed after checking their real paths and active
 processes. Current GCTE caches, baseline checkpoint, and evidence outputs are
-retained. The server root filesystem is currently approximately 4.7 GB free;
-no current GCTE evidence was deleted.
+retained. The server root filesystem had approximately 4.6 GB free at formal
+launch. After confirming that no active process referenced them, four more
+authorized obsolete experiment directories were removed:
+
+- `/home/ubuntu/tascv-runs`
+- `/home/ubuntu/tsgr-p2-e1-final-9d9d7994`
+- `/home/ubuntu/tsgr-p2-e1-8cb70c50`
+- `/home/ubuntu/ascv-runs`
+
+Current free space is approximately 16.0 GB. No current GCTE evidence, cache,
+module, baseline checkpoint, or formal output was deleted.
