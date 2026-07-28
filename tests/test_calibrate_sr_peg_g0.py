@@ -56,11 +56,12 @@ def test_calibration_prefers_budget_safe_map_then_tiny_then_thresholds():
     }
 
 
-def test_threshold_grid_contains_exactly_twenty_seven_unique_settings():
+def test_threshold_grid_contains_only_effective_global_retain_settings():
     values = threshold_grid()
 
-    assert len(values) == 27
-    assert len(set(values)) == 27
+    assert len(values) == 3
+    assert len(set(values)) == 3
+    assert all(row[:2] == (0.5, 0.5) for row in values)
     assert set(value for row in values for value in row) == {0.4, 0.5, 0.6}
 
 

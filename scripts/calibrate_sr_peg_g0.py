@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from hashlib import sha256
-import itertools
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -31,7 +30,10 @@ LARGE_BUDGET = -0.005
 
 
 def threshold_grid() -> tuple[tuple[float, float, float], ...]:
-    return tuple(itertools.product((0.4, 0.5, 0.6), repeat=3))
+    # ACR-EG no longer hard-rejects local queries by tiny/risk thresholds.
+    # Only global-retain changes inference, so the obsolete 3^3 grid would
+    # repeat each route nine times.
+    return tuple((0.5, 0.5, retain) for retain in (0.4, 0.5, 0.6))
 
 
 def select_calibration(
@@ -235,7 +237,7 @@ def calibrate(args: argparse.Namespace) -> Path:
                 "protected_global_exact": protected_exact,
             }
         )
-    if len(candidate_rows) != 27:
+    if len(candidate_rows) != 3:
         raise RuntimeError("calibration grid coverage drift")
     selected = select_calibration(candidate_rows)
     result = {

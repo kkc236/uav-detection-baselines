@@ -87,6 +87,11 @@ original Global RT-DETR-L baseline, tiny improvement, medium/large
 protection, and network/safety invariants. Fixed-relative deltas remain
 reported for ablation and debugging.
 
+Because ACR-EG uses utility and risk as learned rank features rather than
+hard thresholds, calibration evaluates only the three effective
+`global_retain` settings. This removes nine-fold duplicate CPU work without
+changing any accepted candidate or scientific gate.
+
 ## Server continuity and cleanup
 
 Replacement server: `36.103.199.151`, user `ubuntu`, SSH port `22`,
