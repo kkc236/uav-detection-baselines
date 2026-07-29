@@ -1,0 +1,43 @@
+{
+  "checkpoint": {
+    "acr_eg_key_count": 48,
+    "bytes": 205324188,
+    "checkpoint_epoch": 9,
+    "completed_epoch": 10,
+    "model_type": "ACREGDetectionModel",
+    "optimizer_state_entries": 621,
+    "scaler_growth_interval": 2147483647,
+    "scaler_scale": 128.0,
+    "sha256": "dceed642343aaeb04e29f6783f9cb1855ebff6213fd98e965afca3352f0438d1",
+    "source": "/root/data/gcte-acr-eg-resume-output-11580c73/acr-eg-integrated-rtdetr-resume-epoch009-to-100/weights/epoch9.pt",
+    "state_key_count": 989,
+    "updates": 1456
+  },
+  "continuity": {
+    "checkpoint_epoch": 9,
+    "completed_epoch": 10,
+    "optimizer_state_entries": 621,
+    "scaler_growth_interval": 2147483647,
+    "scaler_scale": 128.0,
+    "updates": 1456
+  },
+  "model": {
+    "acr_eg_key_count": 48,
+    "state_key_count": 989,
+    "type": "ACREGDetectionModel"
+  },
+  "release": {
+    "asset_id": 493655409,
+    "asset_name": "epoch9.pt",
+    "bytes": 205324188,
+    "digest": "sha256:dceed642343aaeb04e29f6783f9cb1855ebff6213fd98e965afca3352f0438d1",
+    "tag": "gcte-acr-eg-11580c73-epoch-010",
+    "target_commit": "11580c73c1256ff619460395bcaf3d48bf500c83",
+    "url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/gcte-acr-eg-11580c73-epoch-010"
+  },
+  "schema_version": 1,
+  "source_commit": "11580c73c1256ff619460395bcaf3d48bf500c83",
+  "source_short_commit": "11580c73",
+  "state": "published_and_verified",
+  "verified_at": "2026-07-29T05:47:03.592621+00:00"
+}
