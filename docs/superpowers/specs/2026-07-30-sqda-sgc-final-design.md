@@ -274,6 +274,15 @@ p_i^{k,m}
 \tanh(W_p^{k,m}s_i^k).
 \]
 
+所有 point-offset 输出层必须使用零初始化：
+
+```text
+W_p.weight = 0
+W_p.bias = 0
+```
+
+因此正式训练从固定中心、边界和外环模板开始；offset 参数在第一次反向传播后仍可获得梯度，但不会在初始化时把小目标采样点随机推入背景。第一版保持 `0.1u` 上限，不把扩大 offset 搜索范围作为 G1/G2 调参项。
+
 第一版不预测全局自适应半径。固定模板已经覆盖中心、边界和外环；再增加 radius network 会与 point offset 功能重复。
 
 越界点使用 validity mask。单个角色全部越界时，其 descriptor 置零；所有写回角色均无效时，最终残差严格为零，禁止对全负无穷 logits 执行 softmax。
@@ -422,30 +431,43 @@ r_i^{geo}
 
 Cosine similarity 统一使用 \(10^{-6}\) 范数下限；descriptor 为零时相似度定义为零，禁止产生 NaN。
 
-上下文只调制语义证据：
+上下文只调制语义证据。为避免固定上下文分支在语义与上下文同等相似时仍把新增语义证据压到 `0.75`，引入一个全局可学习、严格有界的 context strength：
+
+\[
+\lambda_{ctx}
+=
+0.25\,\sigma(a_{ctx}),
+\qquad
+\lambda_{ctx,\mathrm{init}}=0.05,
+\qquad
+a_{ctx,\mathrm{init}}=\operatorname{logit}(0.2)\approx-1.3863.
+\]
+
+语义可信度定义为：
 
 \[
 c_i^{sem}
 =
-0.5
-+
-0.5\,\sigma
+1-\lambda_{ctx}\,
+\sigma
 \left(
-2(r_i^{sem}-r_i^{ctx})
+2(r_i^{ctx}-r_i^{sem})
 \right).
 \]
 
 因此：
 
 \[
-0.5<c_i^{sem}<1.
+0.75<c_i^{sem}<1.
 \]
+
+初始化时约有 \(0.95<c_i^{sem}<1\)，且 \(r_i^{sem}=r_i^{ctx}\) 时 \(c_i^{sem}=0.975\)，近似中性而不是固定衰减 25%。
 
 该式满足：
 
 - context 不直接写入 query；
 - context 不从 target descriptor 中相减；
-- 外环存在同类邻居时不会把语义更新完全关闭；
+- 外环存在同类邻居时最多衰减 25% 的新增语义证据；
 - context 不压制 geometry branch；
 - context descriptor 无效时固定 \(c_i^{sem}=1\)。
 
@@ -629,12 +651,18 @@ G0 失败只能修复集成错误，禁止调参或训练。
 - 3 epochs；
 - \(\alpha_{\mathrm{init}}=10^{-3}\)；
 - \(0<\alpha<0.05\)；
+- optimizer 固定为 AdamW；
+- module learning rate 固定为 \(10^{-4}\)；
+- `betas=(0.9,0.999)`；
+- projector、attention、gate 和 fusion 矩阵使用 `weight_decay=1e-4`；
+- bias、LayerNorm、\(\alpha\)、\(\lambda_{ctx}\) 和其他标量参数使用 `weight_decay=0`；
+- module-only gradient norm clip 固定为 `0.1`；
 - 不新增辅助 loss；
 - 不改变数据、增强、输入尺寸、阈值或 validator。
 
 ### G2：正式训练
 
-G1 通过后继续冻结 baseline，只训练 SQDA-SGC 10 epochs。只有满足四项硬约束的 checkpoint 才进入候选集：
+G1 通过后从同一成熟 baseline 重新开始正式训练，继续冻结 baseline，只训练 SQDA-SGC 10 epochs；不得把 G1 的 3 epochs 叠加成 13-epoch schedule。只有满足四项硬约束的 checkpoint 才进入候选集：
 
 \[
 \Delta P\ge0,\quad
@@ -667,12 +695,14 @@ G1 通过后继续冻结 baseline，只训练 SQDA-SGC 10 epochs。只有满足�
 - 输入输出 shape、dtype、device；
 - 300×20 sampling tensor；
 - center/edge/ring 固定模板；
+- point-offset 输出层权重和 bias 零初始化；
 - tiny box 的 C2 cell 尺度下限；
 - detached reference boxes 无梯度；
 - 角色 token 使用自己的 point attention；
 - 越界 mask 和 all-invalid fallback 无 NaN；
 - cosine 的零向量输入无 NaN；
 - context 无效时 reliability 为 1；
+- \(\lambda_{ctx}\) 的范围、初始化和 context modulation 上下界；
 - context descriptor 不进入 fusion tensor；
 - 16-group gate 正确扩展到 256；
 - `W_f.bias=0` 且所有写回角色无效时 residual 严格为零；
@@ -704,7 +734,7 @@ G1 通过后继续冻结 baseline，只训练 SQDA-SGC 10 epochs。只有满足�
 | 可能冲突 | 风险 | 最终处理 | 结论 |
 |---|---|---|---|
 | raw C2 细节 vs 背景纹理 | Precision 下降 | context 只读可靠度 + grouped gate | 已隔离 |
-| context vs 密集同类邻居 | Recall 下降 | 不相减、不写回、语义调制下限 0.5 | 已缓解 |
+| context vs 密集同类邻居 | Recall 下降 | 不相减、不写回、可学习强度、语义调制下限 0.75、初始化近似 1 | 已缓解 |
 | context vs geometry | 抑制 AP75 | context 不调制 geometry | 已消除结构性冲突 |
 | semantic vs geometry 双 residual | 两路抵消或放大 | 单融合、单 LayerScale | 已消除显式对冲 |
 | sampling vs box regression | proposal 为采样迁移 | reference box stop-gradient | 已隔离 |
@@ -751,6 +781,48 @@ G1 通过后继续冻结 baseline，只训练 SQDA-SGC 10 epochs。只有满足�
 - 新增参数目标：小于 1M；
 - 端到端延迟目标：不超过 baseline 的 1.20 倍；
 - 若超出任一目标，先减少隐藏维度，不删除中心/边界/context 的逻辑边界。
+
+### 23.1 权威实验底座
+
+交接材料只提供实验底座，不继承其中的 ACR-EG/GCQF 网络、checkpoint 或续训任务。SQDA-SGC 的权威底座冻结为：
+
+```text
+repository = kkc236/uav-detection-baselines
+implementation branch = codex/sqda-sgc
+branch base = codex/matched-baseline@b08bc2ac
+baseline model = stock RT-DETR-L
+baseline checkpoint = matched-baseline-best-epoch-0100.pt
+baseline checkpoint bytes = 66262262
+baseline checkpoint SHA256 = 54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B
+dataset = VisDrone2019-DET train/val
+train images = 6471
+val images = 548
+classes = 10
+seed = 0
+imgsz = 640
+batch = 8
+queries = 300
+max_det = 300
+NMS = False
+```
+
+服务器目标环境：
+
+```text
+Ubuntu = 22.04 x86_64
+GPU = RTX 4090 24GB
+Python = 3.10.x
+Ultralytics = 8.4.90
+PyTorch = 2.5.1+cu121
+TorchVision = 0.20.1+cu121
+CUDA runtime = 12.1
+dataset root = /root/data/uav/datasets/VisDrone
+data yaml = /root/data/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml
+```
+
+服务器实际根目录与旧交接中的 `/mnt/uav` 不同，因此本次统一落盘到 93GB 数据盘 `/root/data/uav`，禁止占满系统盘。部署时必须重新验证数据文件数、YAML SHA256、val 内容签名和 baseline checkpoint SHA256。
+
+ACR-EG 的 `epoch8.pt`、多视图输入、GCQF、logit injection、MuSGD 续训和 100-epoch resume 均不属于 SQDA-SGC，禁止混入实现、训练或论文结果。
 
 ## 24. 论文可主张与不可主张
 
