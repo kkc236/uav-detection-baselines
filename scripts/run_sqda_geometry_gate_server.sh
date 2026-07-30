@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export PYTHONHASHSEED=0
 
 gate="${1:?usage: run_sqda_geometry_gate_server.sh g1|g2 [token-file] [resume-from]}"
 if [[ "$gate" != "g1" && "$gate" != "g2" ]]; then
