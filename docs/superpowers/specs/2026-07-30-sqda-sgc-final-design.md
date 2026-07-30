@@ -658,6 +658,7 @@ G0 失败只能修复集成错误，禁止调参或训练。
 - projector、attention、gate 和 fusion 矩阵使用 `weight_decay=1e-4`；
 - bias、LayerNorm、\(\alpha\)、\(\lambda_{ctx}\) 和其他标量参数使用 `weight_decay=0`；
 - module-only gradient norm clip 固定为 `0.1`；
+- AMP 沿用成熟 baseline 的固定协议：`init_scale=128`、`growth_interval=2^31-1`；scale 在任一 optimizer step 前后偏离 128 即 fail closed；
 - 不新增辅助 loss；
 - 不改变数据、增强、输入尺寸、阈值或 validator。
 
@@ -799,12 +800,24 @@ dataset = VisDrone2019-DET train/val
 train images = 6471
 val images = 548
 classes = 10
+full dataset semantic SHA256 = FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB
+val content SHA256 = A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A
 seed = 0
 imgsz = 640
 batch = 8
 queries = 300
 max_det = 300
 NMS = False
+AMP = True, fixed scale 128, growth_interval 2147483647
+mosaic = 1.0
+close_mosaic = 10
+mixup = 0.0
+scale = 0.5
+translate = 0.1
+degrees/shear/perspective/flipud = 0
+fliplr = 0.5
+hsv_h/hsv_s/hsv_v = 0.015/0.7/0.4
+cutmix/copy_paste = 0
 ```
 
 服务器目标环境：
@@ -823,7 +836,7 @@ data yaml = /root/data/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml
 
 服务器实际根目录与旧交接中的 `/mnt/uav` 不同，因此本次统一落盘到 93GB 数据盘 `/root/data/uav`，禁止占满系统盘。部署时必须重新验证数据文件数、YAML SHA256、val 内容签名和 baseline checkpoint SHA256。
 
-ACR-EG 的 `epoch8.pt`、多视图输入、GCQF、logit injection、MuSGD 续训和 100-epoch resume 均不属于 SQDA-SGC，禁止混入实现、训练或论文结果。
+成熟 baseline 的原始 100-epoch 身份包含 MuSGD；这只用于说明 checkpoint 的来源。SQDA-SGC 阶段冻结该 checkpoint 的全部 stock 参数，新增模块单独使用第 18 节预注册的 AdamW。ACR-EG 的 `epoch8.pt`、多视图输入、GCQF、logit injection、旧 optimizer state 和 100-epoch resume 均不属于 SQDA-SGC，禁止混入实现、训练或论文结果。
 
 ## 24. 论文可主张与不可主张
 

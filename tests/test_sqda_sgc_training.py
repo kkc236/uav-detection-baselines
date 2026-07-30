@@ -7,7 +7,13 @@ import torch
 from torch import nn
 
 from scripts.train_rtdetr_sqda_sgc import build_parser, build_settings
-from src.rtdetr_sqda_sgc import SQDASGCTrainer, build_sqda_optimizer, freeze_stock_model
+from src.rtdetr_sqda_sgc import (
+    MATCHED_AMP_GROWTH_INTERVAL,
+    MATCHED_AMP_SCALE,
+    SQDASGCTrainer,
+    build_sqda_optimizer,
+    freeze_stock_model,
+)
 from src.sqda_sgc import SQDASGCAdapter
 
 
@@ -20,6 +26,20 @@ class _ToyDetector(nn.Module):
             nn.Linear(8, 4),
         )
         self.sqda_sgc = SQDASGCAdapter()
+
+
+class _FixedTestScaler:
+    def get_scale(self) -> float:
+        return MATCHED_AMP_SCALE
+
+    def unscale_(self, _optimizer) -> None:
+        return None
+
+    def step(self, optimizer) -> None:
+        optimizer.step()
+
+    def update(self) -> None:
+        return None
 
 
 def _parameter_ids(optimizer: torch.optim.Optimizer) -> set[int]:
@@ -124,7 +144,7 @@ def test_trainer_optimizer_step_clips_only_adapter(monkeypatch: pytest.MonkeyPat
     trainer = SQDASGCTrainer.__new__(SQDASGCTrainer)
     trainer.model = detector
     trainer.optimizer = optimizer
-    trainer.scaler = torch.amp.GradScaler("cpu", enabled=False)
+    trainer.scaler = _FixedTestScaler()
     trainer.ema = None
     recorded: dict[str, object] = {}
     original_clip = torch.nn.utils.clip_grad_norm_
@@ -175,6 +195,7 @@ def test_formal_settings_are_frozen(
     assert settings["momentum"] == 0.9
     assert settings["weight_decay"] == pytest.approx(1e-4)
     assert settings["warmup_epochs"] == 0.5
+    assert settings["warmup_momentum"] == 0.8
     assert settings["warmup_bias_lr"] == 0.0
     assert settings["cos_lr"] is False
     assert settings["resume"] is False
@@ -183,6 +204,19 @@ def test_formal_settings_are_frozen(
     assert settings["freeze"] == list(range(29))
     assert settings["pretrained"] is False
     assert settings["model"] == "rtdetr-l.yaml"
+    assert settings["close_mosaic"] == 10
+    assert settings["degrees"] == 0.0
+    assert settings["shear"] == 0.0
+    assert settings["perspective"] == 0.0
+    assert settings["flipud"] == 0.0
+    assert settings["fliplr"] == 0.5
+    assert settings["hsv_h"] == 0.015
+    assert settings["hsv_s"] == 0.7
+    assert settings["hsv_v"] == 0.4
+    assert settings["cutmix"] == 0.0
+    assert settings["copy_paste"] == 0.0
+    assert MATCHED_AMP_SCALE == 128.0
+    assert MATCHED_AMP_GROWTH_INTERVAL == 2**31 - 1
 
 
 def test_cli_does_not_expose_protocol_mutations() -> None:

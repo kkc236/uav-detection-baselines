@@ -15,6 +15,8 @@ from src.sqda_sgc import SQDASGCAdapter
 
 
 BASELINE_SHA256 = "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
+MATCHED_AMP_SCALE = 128.0
+MATCHED_AMP_GROWTH_INTERVAL = 2**31 - 1
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
@@ -355,6 +357,24 @@ class SQDASGCTrainer(RTDETRTrainer):
         self._update_manifest_with_model(model)
         return model
 
+    def _setup_train(self) -> None:
+        # Avoid Ultralytics' dynamic AMP probe, then restore the baseline's exact
+        # fixed-scale mixed-precision contract after the stock setup is complete.
+        self.args.amp = False
+        super()._setup_train()
+        if not torch.cuda.is_available() or self.device.type != "cuda":
+            raise RuntimeError("SQDA-SGC formal training requires CUDA for the fixed AMP contract")
+        self.args.amp = True
+        self.amp = True
+        if hasattr(self.validator, "args"):
+            self.validator.args.amp = True
+        self.scaler = torch.amp.GradScaler(
+            "cuda",
+            enabled=True,
+            init_scale=MATCHED_AMP_SCALE,
+            growth_interval=MATCHED_AMP_GROWTH_INTERVAL,
+        )
+
     def build_optimizer(
         self,
         model: nn.Module,
@@ -373,6 +393,11 @@ class SQDASGCTrainer(RTDETRTrainer):
         return build_sqda_optimizer(model)
 
     def optimizer_step(self) -> None:
+        scale_before = float(self.scaler.get_scale())
+        if scale_before != MATCHED_AMP_SCALE:
+            raise RuntimeError(
+                f"fixed AMP scale drifted before optimizer step: {scale_before}"
+            )
         self.scaler.unscale_(self.optimizer)
         adapter = unwrap_model(self.model).sqda_sgc
         gradient_norm = torch.nn.utils.clip_grad_norm_(
@@ -384,6 +409,11 @@ class SQDASGCTrainer(RTDETRTrainer):
             raise RuntimeError("SQDA-SGC gradient norm became non-finite")
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        scale_after = float(self.scaler.get_scale())
+        if scale_after != MATCHED_AMP_SCALE:
+            raise FloatingPointError(
+                f"fixed AMP scale drifted after optimizer step: {scale_after}"
+            )
         self.optimizer.zero_grad()
         if self.ema:
             self.ema.update(self.model)

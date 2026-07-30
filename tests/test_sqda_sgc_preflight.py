@@ -14,6 +14,7 @@ from src.sqda_diagnostics import (
 from src.sqda_preflight import (
     dataset_signature,
     parse_yolo_label,
+    split_content_signature,
     validate_visdrone_dataset,
     write_dataset_yaml,
 )
@@ -43,6 +44,7 @@ def test_dataset_validation_counts_pairs_labels_and_is_deterministic(tmp_path: P
     assert first["total_files"] == 10
     assert first["total_boxes"] == 5
     assert first["signature"] == dataset_signature(tmp_path)
+    assert first["val_content_signature"] == split_content_signature(tmp_path, "val")
 
 
 def test_dataset_validation_rejects_count_and_pair_mismatches(tmp_path: Path) -> None:

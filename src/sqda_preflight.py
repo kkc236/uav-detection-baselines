@@ -8,6 +8,9 @@ from typing import Iterable
 import yaml
 
 
+EXPECTED_FULL_DATASET_SHA256 = "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+EXPECTED_VAL_CONTENT_SHA256 = "A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A"
+EXPECTED_TRAIN10_SHA256 = "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0"
 EXPECTED_SPLIT_COUNTS = {
     "train": 6471,
     "val": 548,
@@ -66,22 +69,50 @@ def parse_yolo_label(path: Path, class_count: int = 10) -> int:
     return rows
 
 
-def dataset_signature(dataset_root: str | Path, splits: Iterable[str] = ("train", "val")) -> str:
-    """Hash stable paths, image sizes, and label contents without reading all image pixels."""
-    root = Path(dataset_root).expanduser().resolve()
+def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    for split in splits:
-        images = _files_with_suffixes(root / "images" / split, IMAGE_SUFFIXES)
-        labels = _files_with_suffixes(root / "labels" / split, {".txt"})
-        for image in images:
-            relative = image.relative_to(root).as_posix()
-            digest.update(f"I\0{relative}\0{image.stat().st_size}\n".encode())
-        for label in labels:
-            relative = label.relative_to(root).as_posix()
-            payload = label.read_bytes()
-            digest.update(f"L\0{relative}\0{len(payload)}\0".encode())
-            digest.update(hashlib.sha256(payload).digest())
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def dataset_signature(dataset_root: str | Path, splits: Iterable[str] = ("train", "val")) -> str:
+    """Reproduce the frozen baseline semantic signature over images and labels."""
+    root = Path(dataset_root).expanduser().resolve()
+    files = sorted(
+        path
+        for directory in ("images", "labels")
+        for split in splits
+        for path in (root / directory / split).glob("**/*")
+        if path.is_file()
+    )
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_file_sha256(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest().upper()
+
+
+def split_content_signature(dataset_root: str | Path, split: str) -> str:
+    """Hash images, labels, and ignore labels using the frozen val-content protocol."""
+    root = Path(dataset_root).expanduser().resolve()
+    paths = []
+    for folder in (
+        root / "images" / split,
+        root / "labels" / split,
+        root / "labels_ignore" / split,
+    ):
+        if folder.exists():
+            paths.extend(path for path in folder.rglob("*") if path.is_file())
+    lines = [
+        f"{_file_sha256(path).lower()}  {path.relative_to(root).as_posix()}"
+        for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix())
+    ]
+    payload = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest().upper()
 
 
 def validate_visdrone_dataset(
@@ -116,6 +147,23 @@ def validate_visdrone_dataset(
             "labels": len(labels),
             "boxes": boxes,
         }
+    semantic_signature = dataset_signature(root, expected)
+    validation_signature = (
+        split_content_signature(root, "val") if "val" in expected else None
+    )
+    if expected_counts is None and semantic_signature != EXPECTED_FULL_DATASET_SHA256:
+        raise RuntimeError(
+            f"full dataset SHA256 mismatch: expected {EXPECTED_FULL_DATASET_SHA256}, "
+            f"got {semantic_signature}"
+        )
+    if (
+        expected_counts is None
+        and validation_signature != EXPECTED_VAL_CONTENT_SHA256
+    ):
+        raise RuntimeError(
+            f"val content SHA256 mismatch: expected {EXPECTED_VAL_CONTENT_SHA256}, "
+            f"got {validation_signature}"
+        )
     return {
         "root": str(root),
         "splits": split_report,
@@ -123,7 +171,14 @@ def validate_visdrone_dataset(
             report["images"] + report["labels"] for report in split_report.values()
         ),
         "total_boxes": total_boxes,
-        "signature": dataset_signature(root, expected),
+        "signature": semantic_signature,
+        "expected_signature": (
+            EXPECTED_FULL_DATASET_SHA256 if expected_counts is None else None
+        ),
+        "val_content_signature": validation_signature,
+        "expected_val_content_signature": (
+            EXPECTED_VAL_CONTENT_SHA256 if expected_counts is None else None
+        ),
     }
 
 
