@@ -1,0 +1,33 @@
+{
+  "baseline": {
+    "bytes": 66262262,
+    "path": "/root/data/uav/checkpoints/matched-baseline-best-epoch-0100.pt",
+    "sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+    "source": "existing"
+  },
+  "dataset": {
+    "expected_signature": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "expected_val_content_signature": "A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A",
+    "root": "/root/data/uav/datasets/VisDrone",
+    "signature": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "splits": {
+      "train": {
+        "boxes": 343204,
+        "images": 6471,
+        "labels": 6471
+      },
+      "val": {
+        "boxes": 38759,
+        "images": 548,
+        "labels": 548
+      }
+    },
+    "total_boxes": 381963,
+    "total_files": 14038,
+    "val_content_signature": "A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A"
+  },
+  "dataset_yaml": {
+    "path": "/root/data/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml",
+    "sha256": "EA4524B85E72B4C7F68B8344D14E6458B04A4EB467F3DD4768B23806D162CD67"
+  }
+}
