@@ -22,8 +22,8 @@ admission="$project/geometry-branch-diagnosis/g1-admission.json"
 run_name="sqda-geometry-smgt-$gate-seed0-$([[ "$gate" == "g1" ]] && echo 3 || echo 10)ep"
 run_dir="$project/$run_name"
 pending_log="$project/.${gate}-console.pending.log"
-sync_log="$project/${gate}-github-sync.log"
-status_file="$project/${gate}-github-sync-status.json"
+sync_log="$project/smgt-${gate}-github-sync.log"
+status_file="$project/smgt-${gate}-github-sync-status.json"
 resume_from="${3:-}"
 
 if [[ ! -f "$admission" ]]; then
@@ -95,15 +95,15 @@ if [[ -z "$sync_pid" ]]; then
     --token-file "$token_file" \
     --repo kkc236/uav-detection-baselines \
     --repo-url https://github.com/kkc236/uav-detection-baselines.git \
-    --tag "sqda-geometry-gate-${gate}-live" \
+    --tag "sqda-smgt-${gate}-live" \
     --source-branch "$branch" \
     --results-branch sqda-geometry-gate-results \
     --results-repo "$root/sqda-geometry-gate-results" \
     --run-name "$run_name" \
     --retain 3 \
-    --asset-prefix "sqda-geometry-gate-${gate}" \
-    --release-name "SQDA Geometry Gate ${gate^^} RTX 4090" \
-    --release-body "Frozen inherited SQDA adapter; only geometry trust MLP is trainable." \
+    --asset-prefix "sqda-smgt-${gate}" \
+    --release-name "SQDA SMGT ${gate^^} RTX 4090" \
+    --release-body "Frozen inherited SQDA adapter; only the scale-monotone geometry trust module is trainable." \
     --interval 60 \
     --status-file "$status_file" \
     > "$sync_log" 2>&1 &

@@ -24,6 +24,8 @@ def test_smgt_runner_requires_the_inventory_selected_checkpoint_for_g2() -> None
     assert "sqda-geometry-smgt-" in runner
     assert "candidate-inventory.json" in runner
     assert "selected_checkpoint" in runner
+    assert "smgt-${gate}-github-sync-status.json" in runner
+    assert "sqda-smgt-${gate}-live" in runner
 
 
 @pytest.mark.parametrize(("gate", "epochs"), [("g1", 3), ("g2", 10)])
