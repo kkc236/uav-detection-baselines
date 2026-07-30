@@ -5,6 +5,8 @@ from typing import Any
 
 
 RECALL_TOLERANCE = 0.0002
+AP_TOLERANCE = 0.0002
+LOWER_SATURATION_MAX_FRACTION = 0.05
 
 
 def _precision_recall(error: Mapping[str, Any]) -> tuple[float, float]:
@@ -59,4 +61,46 @@ def decide_g1_admission(diagnosis: Mapping[str, Any]) -> dict[str, Any]:
         },
         "recall_tolerance": RECALL_TOLERANCE,
         "training_signal": False,
+    }
+
+
+def decide_g1_result(
+    full: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply the pre-registered post-G1 gate without masking any adverse metric."""
+    full_error = full["fixed_baseline_threshold"]["error"]["all"]
+    candidate_error = candidate["fixed_baseline_threshold"]["error"]["all"]
+    full_precision, full_recall = _precision_recall(full_error)
+    candidate_precision, candidate_recall = _precision_recall(candidate_error)
+    map_delta = float(candidate["coco"]["ap"]) - float(full["coco"]["ap"])
+    small_ap_delta = float(candidate["coco"]["ap_small"]) - float(full["coco"]["ap_small"])
+    max_f1_precision_delta = float(candidate["pr_f1_curve"]["best_f1"]["precision"]) - float(
+        full["pr_f1_curve"]["best_f1"]["precision"]
+    )
+    lower_bound_fraction = float(candidate["gate"]["lower_bound_fraction"])
+    criteria = {
+        "precision_at_baseline_threshold_non_decrease": candidate_precision >= full_precision,
+        "recall_at_baseline_threshold_non_decrease": candidate_recall >= full_recall,
+        "max_f1_precision_non_decrease": max_f1_precision_delta >= 0.0,
+        "map_within_tolerance": map_delta >= -AP_TOLERANCE,
+        "ap_small_within_tolerance": small_ap_delta >= -AP_TOLERANCE,
+        "gate_not_saturated_low": lower_bound_fraction <= LOWER_SATURATION_MAX_FRACTION,
+    }
+    return {
+        "passed": all(criteria.values()),
+        "criteria": criteria,
+        "deltas": {
+            "precision_at_baseline_threshold": candidate_precision - full_precision,
+            "recall_at_baseline_threshold": candidate_recall - full_recall,
+            "max_f1_precision": max_f1_precision_delta,
+            "ap": map_delta,
+            "ap_small": small_ap_delta,
+        },
+        "tolerances": {
+            "ap": AP_TOLERANCE,
+            "lower_saturation_max_fraction": LOWER_SATURATION_MAX_FRACTION,
+        },
+        "full": dict(full),
+        "candidate": dict(candidate),
     }

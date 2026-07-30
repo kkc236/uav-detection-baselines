@@ -12,6 +12,7 @@ from src.rtdetr_sqda_sgc import (
     adapt_decoder_inputs,
     load_inherited_sqda_adapter,
     load_mature_baseline,
+    load_trained_geometry_adapter,
     sha256_file,
 )
 from src.sqda_sgc import SQDASGCAdapter
@@ -383,3 +384,19 @@ def test_inherited_adapter_loader_rejects_any_non_gate_difference(
 
     with pytest.raises(RuntimeError, match=message):
         load_inherited_sqda_adapter(target, checkpoint)
+
+
+def test_trained_geometry_adapter_loader_requires_every_current_adapter_key(tmp_path: Path) -> None:
+    source = _TinySQDADetector()
+    target = _TinySQDADetector()
+    checkpoint = tmp_path / "g1.pt"
+    torch.save({"model": source}, checkpoint)
+
+    metadata = load_trained_geometry_adapter(target, checkpoint)
+
+    assert metadata["source_key"] == "model"
+    assert metadata["adapter_tensors"] == len(source.sqda_sgc.state_dict())
+    assert all(
+        torch.equal(value, target.sqda_sgc.state_dict()[key])
+        for key, value in source.sqda_sgc.state_dict().items()
+    )

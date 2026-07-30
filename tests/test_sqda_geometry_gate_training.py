@@ -56,3 +56,19 @@ def test_geometry_gate_cli_excludes_training_protocol_mutations() -> None:
         "amp",
         "max_det",
     }.intersection(options)
+
+
+def test_post_g1_evaluation_cli_is_fixed_to_the_frozen_protocol() -> None:
+    from scripts.evaluate_sqda_geometry_gate import build_parser
+
+    options = {action.dest for action in build_parser()._actions}
+    assert {
+        "checkpoint",
+        "candidate_checkpoint",
+        "diagnosis",
+        "data",
+        "images",
+        "labels",
+        "output",
+    }.issubset(options)
+    assert not {"epochs", "optimizer", "lr0", "mode", "threshold"}.intersection(options)

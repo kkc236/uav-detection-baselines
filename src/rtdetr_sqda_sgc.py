@@ -320,6 +320,72 @@ def load_inherited_sqda_adapter(
     }
 
 
+def load_trained_geometry_adapter(
+    target: nn.Module,
+    checkpoint: str | Path,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Strictly load a completed geometry-gate adapter with every current key present."""
+    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(checkpoint_path)
+    actual_sha = sha256_file(checkpoint_path)
+    if expected_sha256 is not None and actual_sha != expected_sha256.upper():
+        raise ValueError(
+            f"trained adapter SHA256 mismatch: expected {expected_sha256.upper()}, got {actual_sha}"
+        )
+    target_adapter = getattr(target, "sqda_sgc", None)
+    if not isinstance(target_adapter, SQDASGCAdapter):
+        raise TypeError("target must expose an SQDASGCAdapter under '.sqda_sgc'")
+    payload = _torch_load_full_checkpoint(checkpoint_path)
+    if not isinstance(payload, dict):
+        raise TypeError("trained adapter checkpoint must be a dictionary")
+    source_key = next(
+        (
+            key
+            for key in ("ema", "model")
+            if isinstance(payload.get(key), nn.Module)
+        ),
+        None,
+    )
+    if source_key is None:
+        raise TypeError("trained adapter checkpoint must contain an nn.Module under 'ema' or 'model'")
+    source_adapter = getattr(payload[source_key], "sqda_sgc", None)
+    if not isinstance(source_adapter, nn.Module):
+        raise TypeError("trained adapter checkpoint source does not expose '.sqda_sgc'")
+    source_state = source_adapter.state_dict()
+    target_state = target_adapter.state_dict()
+    missing = sorted(set(target_state) - set(source_state))
+    unexpected = sorted(set(source_state) - set(target_state))
+    mismatched = sorted(
+        key
+        for key in set(source_state).intersection(target_state)
+        if source_state[key].shape != target_state[key].shape
+    )
+    if missing or unexpected or mismatched:
+        raise RuntimeError(
+            "incompatible trained geometry adapter state: "
+            f"missing={missing[:5]}, unexpected={unexpected[:5]}, "
+            f"shape_mismatch={mismatched[:5]}"
+        )
+    target_adapter.load_state_dict(source_state, strict=True)
+    loaded_state = target_adapter.state_dict()
+    unequal = [
+        key
+        for key, value in source_state.items()
+        if not torch.equal(loaded_state[key], value)
+    ]
+    if unequal:
+        raise RuntimeError(f"trained geometry adapter tensors were not copied exactly: {unequal[:5]}")
+    return {
+        "path": str(checkpoint_path),
+        "sha256": actual_sha,
+        "source_key": source_key,
+        "adapter_tensors": len(source_state),
+    }
+
+
 def freeze_stock_model(model: nn.Module) -> None:
     """Freeze every stock detector parameter while leaving SQDA-SGC trainable."""
     stock = getattr(model, "model", None)
