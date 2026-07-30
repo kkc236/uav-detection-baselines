@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "fitness": 0.24173427880487694,
+    "metrics/mAP50(B)": 0.41453658664256154,
+    "metrics/mAP50-95(B)": 0.24173427880487694,
+    "metrics/precision(B)": 0.5119818910028286,
+    "metrics/recall(B)": 0.43538008299157244
+  },
+  "best": {
+    "fitness": 0.24176531175197077,
+    "metrics/mAP50(B)": 0.4144298949998042,
+    "metrics/mAP50-95(B)": 0.24176531175197077,
+    "metrics/precision(B)": 0.5110927680984211,
+    "metrics/recall(B)": 0.4355574354721311
+  },
+  "epoch1": {
+    "fitness": 0.24176531175197077,
+    "metrics/mAP50(B)": 0.4144298949998042,
+    "metrics/mAP50-95(B)": 0.24176531175197077,
+    "metrics/precision(B)": 0.5110927680984211,
+    "metrics/recall(B)": 0.4355574354721311
+  },
+  "epoch2": {
+    "fitness": 0.2416799490135402,
+    "metrics/mAP50(B)": 0.41409738049307354,
+    "metrics/mAP50-95(B)": 0.2416799490135402,
+    "metrics/precision(B)": 0.5109026591276915,
+    "metrics/recall(B)": 0.43562974835948404
+  },
+  "epoch3": {
+    "fitness": 0.24169114272037945,
+    "metrics/mAP50(B)": 0.414097248677283,
+    "metrics/mAP50-95(B)": 0.24169114272037945,
+    "metrics/precision(B)": 0.5108370363285871,
+    "metrics/recall(B)": 0.4356790125042462
+  }
+}
