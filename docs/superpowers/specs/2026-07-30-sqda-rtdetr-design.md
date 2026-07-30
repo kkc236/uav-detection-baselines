@@ -1,7 +1,7 @@
-# SQDA-P-RTDETR 效果优先冻结设计规格
+# SQDA-P-RTDETR 历史设计规格
 
 日期：2026-07-30
-状态：已纳入用户书面复核意见，等待最终复核
+状态：已被 `2026-07-30-sqda-sgc-final-design.md` 取代，仅保留设计演化记录
 目标模型：Ultralytics RT-DETR-L
 目标数据集：VisDrone2019-DET
 研发约束：单卡 RTX 4090/5090，seed 0，15 天内完成主实验
