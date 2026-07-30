@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.rtdetr_sqda_sgc import BASELINE_SHA256, SQDASGCTrainer, sha256_file
+from ultralytics.utils.torch_utils import unwrap_model
 
 
 RUN_NAMES = {
@@ -136,7 +138,69 @@ def prepare_manifest(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    inherited_artifacts = {
+        "g0-equivalence.json": args.project.expanduser().resolve() / "g0-equivalence.json",
+        "top300-diagnostic.json": args.project.expanduser().resolve() / "top300-diagnostic.json",
+        "input-preflight.json": args.project.expanduser().resolve() / "input-preflight.json",
+    }
+    for name, source in inherited_artifacts.items():
+        if source.is_file():
+            shutil.copy2(source, run_dir / name)
     return manifest_path
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def record_epoch_diagnostics(trainer: SQDASGCTrainer) -> None:
+    model = unwrap_model(trainer.model)
+    diagnostics = getattr(model, "last_sqda_diagnostics", None) or {}
+    adapter = model.sqda_sgc
+    payload = {
+        "completed_epoch": int(trainer.epoch) + 1,
+        "module_gradient_norm_before_clip": trainer.last_module_gradient_norm,
+        "layer_scale": float(adapter.layer_scale.detach().cpu()),
+        "context_strength": float(adapter.context_strength.detach().cpu()),
+    }
+    for key in (
+        "sampling_validity",
+        "context_reliability",
+        "semantic_similarity",
+        "geometry_similarity",
+        "context_similarity",
+        "residual_norm",
+        "group_gates",
+    ):
+        value = diagnostics.get(key)
+        if value is not None:
+            value = value.detach().float()
+            payload[f"{key}_mean"] = float(value.mean().cpu())
+            payload[f"{key}_max"] = float(value.max().cpu())
+    destination = Path(trainer.save_dir) / "sqda_sgc_diagnostics.jsonl"
+    with destination.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def record_stage_status(trainer: SQDASGCTrainer) -> None:
+    payload = {
+        "gate": "g1" if int(trainer.epochs) == 3 else "g2",
+        "completed_epoch": int(trainer.epoch) + 1,
+        "target_epochs": int(trainer.epochs),
+        "metrics": {
+            key: float(value)
+            for key, value in (trainer.metrics or {}).items()
+            if isinstance(value, (int, float))
+        },
+        "fitness": float(trainer.fitness) if trainer.fitness is not None else None,
+        "best_fitness": float(trainer.best_fitness),
+    }
+    _write_json_atomic(Path(trainer.save_dir) / "stage-status.json", payload)
 
 
 def main() -> None:
@@ -149,6 +213,8 @@ def main() -> None:
         baseline_sha256=BASELINE_SHA256,
         manifest_path=manifest_path,
     )
+    trainer.add_callback("on_train_epoch_end", record_epoch_diagnostics)
+    trainer.add_callback("on_fit_epoch_end", record_stage_status)
     trainer.train()
 
 

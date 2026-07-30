@@ -29,6 +29,14 @@ from src.github_checkpoint_sync import (
 
 LIGHTWEIGHT_ARTIFACTS = (
     "results.csv",
+    "run-manifest.json",
+    "stage-status.json",
+    "sqda_sgc_diagnostics.jsonl",
+    "g0-equivalence.json",
+    "top300-diagnostic.json",
+    "input-preflight.json",
+    "g1-console.log",
+    "g2-console.log",
     "btdse_diagnostics.jsonl",
     "ioqc_sa_diagnostics.jsonl",
     "vsf_rmr_diagnostics.jsonl",
