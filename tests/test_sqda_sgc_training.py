@@ -162,10 +162,7 @@ def test_trainer_optimizer_step_clips_only_adapter(monkeypatch: pytest.MonkeyPat
     assert recorded["max_norm"] == pytest.approx(0.1)
 
 
-@pytest.mark.parametrize(
-    "gate,epochs",
-    [("g1", 3), ("g1r", 3), ("g1s", 3), ("g2", 10)],
-)
+@pytest.mark.parametrize("gate,epochs", [("g1", 3), ("g1r", 3), ("g2", 10)])
 def test_formal_settings_are_frozen(
     tmp_path: Path,
     gate: str,

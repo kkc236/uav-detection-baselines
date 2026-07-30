@@ -20,7 +20,6 @@ from ultralytics.utils.torch_utils import unwrap_model
 RUN_NAMES = {
     "g1": "sqda-sgc-g1-seed0-3ep",
     "g1r": "sqda-sgc-g1r-seed0-3ep",
-    "g1s": "sqda-sgc-g1s-seed0-3ep",
     "g2": "sqda-sgc-g2-seed0-10ep",
 }
 
@@ -29,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a pre-registered frozen-stock SQDA-SGC RT-DETR-L gate."
     )
-    parser.add_argument("--gate", choices=("g1", "g1r", "g1s", "g2"), required=True)
+    parser.add_argument("--gate", choices=("g1", "g1r", "g2"), required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
@@ -192,10 +191,6 @@ def record_epoch_diagnostics(trainer: SQDASGCTrainer) -> None:
         "context_similarity",
         "residual_norm",
         "group_gates",
-        "group_gate_confidence",
-        "group_gate_entropy",
-        "no_write_gate",
-        "residual_query_cosine_abs_max",
     ):
         value = diagnostics.get(key)
         if value is not None:
