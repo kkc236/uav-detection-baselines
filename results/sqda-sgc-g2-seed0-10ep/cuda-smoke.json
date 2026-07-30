@@ -1,0 +1,28 @@
+{
+  "fixed_amp_growth_interval": 2147483647,
+  "fixed_amp_scale": 128.0,
+  "gradient_clip": 0.1,
+  "gradient_norm_before_clip": 0.0183159951120615,
+  "loss": 42.99232482910156,
+  "loss_items": [
+    3.239286422729492,
+    0.0056723738089203835,
+    1.8542554378509521
+  ],
+  "optimizer": "module-only AdamW",
+  "optimizer_groups": 2,
+  "passed": true,
+  "representative_gradients_nonzero": {
+    "context_logit": true,
+    "edge_query.weight": true,
+    "fusion.weight": true,
+    "gate.0.weight": true,
+    "layer_scale_logit": true,
+    "point_offset_heads.0.weight": true,
+    "point_query.weight": true,
+    "reliability_projection.weight": true,
+    "value_projector.0.weight": true
+  },
+  "stock_buffers_changed": [],
+  "stock_parameters_with_grad": 0
+}

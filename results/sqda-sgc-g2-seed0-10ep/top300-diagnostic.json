@@ -1,0 +1,72 @@
+{
+  "bins": {
+    "all": {
+      "final_missed_at_conf_0.25_iou_0.5": 10543,
+      "objects": 38759,
+      "proposal_recall": {
+        "0.3": 0.9185995510720091,
+        "0.5": 0.8203772027142083,
+        "0.7": 0.5743698237828634
+      },
+      "recoverable_missed_proposal_iou_ge_0.5": 3937,
+      "recoverable_missed_ratio": 0.3734231243479086
+    },
+    "coco_large_ge_96sq": {
+      "final_missed_at_conf_0.25_iou_0.5": 12,
+      "objects": 130,
+      "proposal_recall": {
+        "0.3": 0.9923076923076923,
+        "0.5": 0.9692307692307692,
+        "0.7": 0.9
+      },
+      "recoverable_missed_proposal_iou_ge_0.5": 9,
+      "recoverable_missed_ratio": 0.75
+    },
+    "coco_medium_32_96sq": {
+      "final_missed_at_conf_0.25_iou_0.5": 433,
+      "objects": 5348,
+      "proposal_recall": {
+        "0.3": 0.9882198952879581,
+        "0.5": 0.974943904263276,
+        "0.7": 0.905946148092745
+      },
+      "recoverable_missed_proposal_iou_ge_0.5": 301,
+      "recoverable_missed_ratio": 0.6951501154734411
+    },
+    "coco_small_lt_32sq": {
+      "final_missed_at_conf_0.25_iou_0.5": 10098,
+      "objects": 33281,
+      "proposal_recall": {
+        "0.3": 0.9071241849704035,
+        "0.5": 0.7949580841921817,
+        "0.7": 0.5198161112947327
+      },
+      "recoverable_missed_proposal_iou_ge_0.5": 3627,
+      "recoverable_missed_ratio": 0.3591800356506239
+    },
+    "tiny_lt_16sq": {
+      "final_missed_at_conf_0.25_iou_0.5": 7971,
+      "objects": 20861,
+      "proposal_recall": {
+        "0.3": 0.8738315516993432,
+        "0.5": 0.7229758880207084,
+        "0.7": 0.39010593931259285
+      },
+      "recoverable_missed_proposal_iou_ge_0.5": 2502,
+      "recoverable_missed_ratio": 0.3138878434324426
+    }
+  },
+  "class_agnostic_proposal_recall": true,
+  "final_detection_confidence": 0.25,
+  "identity": {
+    "checkpoint": "/root/data/uav/checkpoints/matched-baseline-best-epoch-0100.pt",
+    "checkpoint_sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+    "data_yaml": "/root/data/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml",
+    "data_yaml_sha256": "EA4524B85E72B4C7F68B8344D14E6458B04A4EB467F3DD4768B23806D162CD67",
+    "git_sha": "478500db6aea4cd0ac72ba9f582e230deca8063c",
+    "imgsz": 640,
+    "seed": 0
+  },
+  "images": 548,
+  "proposal_count": 300
+}

@@ -1,0 +1,15 @@
+{
+  "checkpoint": "/root/data/uav/checkpoints/matched-baseline-best-epoch-0100.pt",
+  "checkpoint_sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+  "data_yaml": "/root/data/uav/protocols/tsgr-p2-e1/source-VisDrone-full.yaml",
+  "gate": "G0",
+  "images": [
+    "/root/data/uav/datasets/VisDrone/images/val/0000001_02999_d_0000005.jpg",
+    "/root/data/uav/datasets/VisDrone/images/val/0000001_03499_d_0000006.jpg"
+  ],
+  "max_abs_difference": 0.0,
+  "passed": true,
+  "query_count": 300,
+  "reference_box_max_abs_difference": 0.0,
+  "tensor_leaves": 5
+}
