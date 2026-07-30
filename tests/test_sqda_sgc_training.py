@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 from torch import nn
 
-from scripts.train_rtdetr_sqda_sgc import build_parser, build_settings
+from scripts.train_rtdetr_sqda_sgc import (
+    build_parser,
+    build_settings,
+    record_stage_status,
+)
 from src.rtdetr_sqda_sgc import (
     MATCHED_AMP_GROWTH_INTERVAL,
     MATCHED_AMP_SCALE,
@@ -261,3 +267,21 @@ def test_cli_does_not_expose_protocol_mutations() -> None:
         "amp",
         "max_det",
     }.intersection(options)
+
+
+def test_stage_status_never_exceeds_the_requested_epoch_budget(tmp_path: Path) -> None:
+    trainer = SimpleNamespace(
+        sqda_gate="g2",
+        epoch=10,
+        epochs=10,
+        metrics={"metrics/mAP50-95(B)": 0.24},
+        fitness=0.24,
+        best_fitness=0.24,
+        save_dir=tmp_path,
+    )
+
+    record_stage_status(trainer)
+
+    status = json.loads((tmp_path / "stage-status.json").read_text(encoding="utf-8"))
+    assert status["completed_epoch"] == 10
+    assert status["target_epochs"] == 10

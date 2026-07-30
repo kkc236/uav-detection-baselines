@@ -217,7 +217,7 @@ def record_epoch_diagnostics(trainer: SQDASGCTrainer) -> None:
     diagnostics = getattr(model, "last_sqda_diagnostics", None) or {}
     adapter = model.sqda_sgc
     payload = {
-        "completed_epoch": int(trainer.epoch) + 1,
+        "completed_epoch": min(int(trainer.epoch) + 1, int(trainer.epochs)),
         "module_gradient_norm_before_clip": trainer.last_module_gradient_norm,
         "layer_scale": float(adapter.layer_scale.detach().cpu()),
         "context_strength": float(adapter.context_strength.detach().cpu()),
@@ -248,7 +248,7 @@ def record_stage_status(trainer: SQDASGCTrainer) -> None:
             "sqda_gate",
             "g1" if int(trainer.epochs) == 3 else "g2",
         ),
-        "completed_epoch": int(trainer.epoch) + 1,
+        "completed_epoch": min(int(trainer.epoch) + 1, int(trainer.epochs)),
         "target_epochs": int(trainer.epochs),
         "metrics": {
             key: float(value)
