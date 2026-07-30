@@ -642,3 +642,116 @@ class SQDASGCTrainer(RTDETRTrainer):
             encoding="utf-8",
         )
         temporary.replace(self.manifest_path)
+
+
+class SQDAGeometryTrustTrainer(SQDASGCTrainer):
+    """SQDA trainer that freezes the inherited G2 adapter and trains only geometry_trust."""
+
+    def __init__(
+        self,
+        *args,
+        adapter_checkpoint: str | Path,
+        adapter_sha256: str | None = None,
+        **kwargs,
+    ) -> None:
+        self.adapter_checkpoint = Path(adapter_checkpoint).expanduser().resolve()
+        self.adapter_sha256 = adapter_sha256.upper() if adapter_sha256 else None
+        self.inherited_adapter_metadata: dict[str, Any] | None = None
+        super().__init__(*args, **kwargs)
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | nn.Module | None = None,
+        verbose: bool = True,
+    ) -> SQDASGCDetectionModel:
+        if weights is not None and not isinstance(weights, SQDASGCDetectionModel):
+            raise RuntimeError(
+                "geometry-gate resume checkpoint must contain SQDASGCDetectionModel weights"
+            )
+        model = SQDASGCDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if len(model.model) != 29:
+            raise RuntimeError(f"expected 29 stock RT-DETR layers, got {len(model.model)}")
+        self.baseline_metadata = load_mature_baseline(
+            model,
+            self.baseline_checkpoint,
+            expected_sha256=self.baseline_sha256,
+        )
+        self.inherited_adapter_metadata = load_inherited_sqda_adapter(
+            model,
+            self.adapter_checkpoint,
+            expected_sha256=self.adapter_sha256,
+        )
+        if weights is not None:
+            source_adapter = getattr(weights, "sqda_sgc", None)
+            if not isinstance(source_adapter, SQDASGCAdapter):
+                raise RuntimeError("geometry-gate resume checkpoint is missing adapter weights")
+            model.sqda_sgc.load_state_dict(source_adapter.state_dict(), strict=True)
+        freeze_inherited_sqda(model)
+        self.args.freeze = list(range(len(model.model)))
+        self._update_manifest_with_model(model)
+        return model
+
+    def build_optimizer(
+        self,
+        model: nn.Module,
+        name: str = "AdamW",
+        lr: float = 1e-4,
+        momentum: float = 0.9,
+        decay: float = 1e-4,
+        iterations: float = 1e5,
+    ) -> torch.optim.AdamW:
+        del iterations, decay
+        if name != "AdamW" or lr != 1e-4 or momentum != 0.9:
+            raise RuntimeError(
+                f"geometry-gate optimizer protocol changed: name={name}, lr={lr}, momentum={momentum}"
+            )
+        assert_geometry_trust_contract(model)
+        return build_geometry_trust_optimizer(model)
+
+    def optimizer_step(self) -> None:
+        scale_before = float(self.scaler.get_scale())
+        if scale_before != MATCHED_AMP_SCALE:
+            raise RuntimeError(
+                f"fixed AMP scale drifted before optimizer step: {scale_before}"
+            )
+        self.scaler.unscale_(self.optimizer)
+        geometry_trust = unwrap_model(self.model).sqda_sgc.geometry_trust
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            geometry_trust.parameters(),
+            max_norm=0.1,
+        )
+        self.last_module_gradient_norm = float(gradient_norm.detach().cpu())
+        if not torch.isfinite(gradient_norm):
+            raise RuntimeError("geometry_trust gradient norm became non-finite")
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        scale_after = float(self.scaler.get_scale())
+        if scale_after != MATCHED_AMP_SCALE:
+            raise FloatingPointError(
+                f"fixed AMP scale drifted after optimizer step: {scale_after}"
+            )
+        self.optimizer.zero_grad()
+        if self.ema:
+            self.ema.update(self.model)
+
+    def _update_manifest_with_model(self, model: SQDASGCDetectionModel) -> None:
+        super()._update_manifest_with_model(model)
+        if self.manifest_path is None:
+            return
+        import json
+
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["inherited_adapter"] = self.inherited_adapter_metadata
+        manifest["training_scope"] = "sqda_sgc.geometry_trust only"
+        temporary = self.manifest_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.replace(self.manifest_path)

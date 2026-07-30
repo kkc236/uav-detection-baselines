@@ -16,6 +16,7 @@ from scripts.train_rtdetr_sqda_sgc import (
 from src.rtdetr_sqda_sgc import (
     MATCHED_AMP_GROWTH_INTERVAL,
     MATCHED_AMP_SCALE,
+    SQDAGeometryTrustTrainer,
     SQDASGCTrainer,
     assert_geometry_trust_contract,
     build_geometry_trust_optimizer,
@@ -223,6 +224,34 @@ def test_trainer_optimizer_step_clips_only_adapter(monkeypatch: pytest.MonkeyPat
     trainer.optimizer_step()
 
     assert recorded["ids"] == {id(p) for p in detector.sqda_sgc.parameters()}
+    assert recorded["max_norm"] == pytest.approx(0.1)
+
+
+def test_geometry_trust_trainer_clips_only_new_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    detector = _ToyDetector()
+    freeze_inherited_sqda(detector)
+    optimizer = build_geometry_trust_optimizer(detector)
+    for parameter in detector.sqda_sgc.geometry_trust.parameters():
+        parameter.grad = torch.ones_like(parameter)
+
+    trainer = SQDAGeometryTrustTrainer.__new__(SQDAGeometryTrustTrainer)
+    trainer.model = detector
+    trainer.optimizer = optimizer
+    trainer.scaler = _FixedTestScaler()
+    trainer.ema = None
+    recorded: dict[str, object] = {}
+    original_clip = torch.nn.utils.clip_grad_norm_
+
+    def recording_clip(parameters, max_norm, *args, **kwargs):
+        materialized = list(parameters)
+        recorded["ids"] = {id(parameter) for parameter in materialized}
+        recorded["max_norm"] = max_norm
+        return original_clip(materialized, max_norm, *args, **kwargs)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", recording_clip)
+    trainer.optimizer_step()
+
+    assert recorded["ids"] == {id(p) for p in detector.sqda_sgc.geometry_trust.parameters()}
     assert recorded["max_norm"] == pytest.approx(0.1)
 
 

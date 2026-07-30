@@ -32,6 +32,7 @@ LIGHTWEIGHT_ARTIFACTS = (
     "run-manifest.json",
     "stage-status.json",
     "sqda_sgc_diagnostics.jsonl",
+    "geometry_gate_diagnostics.jsonl",
     "g0-equivalence.json",
     "top300-diagnostic.json",
     "cuda-smoke.json",
