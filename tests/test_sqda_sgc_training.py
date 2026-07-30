@@ -128,7 +128,10 @@ def test_one_step_changes_adapter_but_not_stock_parameters_or_buffers() -> None:
         "edge_query.weight",
         "reliability_projection.weight",
         "gate.0.weight",
-        "fusion.weight",
+        "semantic_projector.weight",
+        "geometry_projector.weight",
+        "agreement_gate.0.weight",
+        "agreement_gate.2.weight",
         "context_logit",
         "layer_scale_logit",
     }
