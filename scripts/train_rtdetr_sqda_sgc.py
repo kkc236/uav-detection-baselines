@@ -19,6 +19,7 @@ from ultralytics.utils.torch_utils import unwrap_model
 
 RUN_NAMES = {
     "g1": "sqda-sgc-g1-seed0-3ep",
+    "g1r": "sqda-sgc-g1r-seed0-3ep",
     "g2": "sqda-sgc-g2-seed0-10ep",
 }
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a pre-registered frozen-stock SQDA-SGC RT-DETR-L gate."
     )
-    parser.add_argument("--gate", choices=("g1", "g2"), required=True)
+    parser.add_argument("--gate", choices=("g1", "g1r", "g2"), required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
@@ -40,7 +41,7 @@ def build_settings(args: argparse.Namespace) -> dict:
     return {
         "model": "rtdetr-l.yaml",
         "data": str(args.data.expanduser().resolve()),
-        "epochs": 3 if args.gate == "g1" else 10,
+        "epochs": 10 if args.gate == "g2" else 3,
         "imgsz": 640,
         "batch": 8,
         "workers": args.workers,
@@ -154,6 +155,7 @@ def prepare_manifest(
         "g0-equivalence.json": args.project.expanduser().resolve() / "g0-equivalence.json",
         "top300-diagnostic.json": args.project.expanduser().resolve() / "top300-diagnostic.json",
         "cuda-smoke.json": args.project.expanduser().resolve() / "cuda-smoke.json",
+        "cuda-smoke-g1r.json": args.project.expanduser().resolve() / "cuda-smoke-g1r.json",
         "input-preflight.json": args.project.expanduser().resolve() / "input-preflight.json",
     }
     for name, source in inherited_artifacts.items():
@@ -202,7 +204,11 @@ def record_epoch_diagnostics(trainer: SQDASGCTrainer) -> None:
 
 def record_stage_status(trainer: SQDASGCTrainer) -> None:
     payload = {
-        "gate": "g1" if int(trainer.epochs) == 3 else "g2",
+        "gate": getattr(
+            trainer,
+            "sqda_gate",
+            "g1" if int(trainer.epochs) == 3 else "g2",
+        ),
         "completed_epoch": int(trainer.epoch) + 1,
         "target_epochs": int(trainer.epochs),
         "metrics": {
@@ -226,6 +232,7 @@ def main() -> None:
         baseline_sha256=BASELINE_SHA256,
         manifest_path=manifest_path,
     )
+    trainer.sqda_gate = args.gate
     trainer.add_callback("on_train_epoch_end", record_epoch_diagnostics)
     trainer.add_callback("on_fit_epoch_end", record_stage_status)
     trainer.train()

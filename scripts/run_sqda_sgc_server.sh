@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-gate="${1:?usage: run_sqda_sgc_server.sh g1|g2 [token-file]}"
-if [[ "$gate" != "g1" && "$gate" != "g2" ]]; then
-  echo "gate must be g1 or g2" >&2
+gate="${1:?usage: run_sqda_sgc_server.sh g1|g1r|g2 [token-file]}"
+if [[ "$gate" != "g1" && "$gate" != "g1r" && "$gate" != "g2" ]]; then
+  echo "gate must be g1, g1r, or g2" >&2
   exit 2
 fi
 
@@ -16,13 +16,12 @@ data="$root/protocols/tsgr-p2-e1/source-VisDrone-full.yaml"
 token_file="${2:-/root/.config/sqda-sgc/github-token}"
 branch="codex/sqda-sgc"
 
-if [[ "$gate" == "g1" ]]; then
-  run_name="sqda-sgc-g1-seed0-3ep"
-  retain=3
-else
-  run_name="sqda-sgc-g2-seed0-10ep"
-  retain=3
-fi
+case "$gate" in
+  g1) run_name="sqda-sgc-g1-seed0-3ep" ;;
+  g1r) run_name="sqda-sgc-g1r-seed0-3ep" ;;
+  g2) run_name="sqda-sgc-g2-seed0-10ep" ;;
+esac
+retain=3
 run_dir="$project/$run_name"
 pending_log="$project/.${gate}-console.pending.log"
 sync_log="$project/${gate}-github-sync.log"
