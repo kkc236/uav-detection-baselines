@@ -24,7 +24,9 @@ from ultralytics.utils.torch_utils import unwrap_model
 RUN_NAMES = {
     "g1": "sqda-geometry-smgt-g1-seed0-3ep",
     "g2": "sqda-geometry-smgt-g2-seed0-10ep",
+    "formal": "sqda-geometry-smgt-formal-seed0-100ep",
 }
+STAGE_EPOCHS = {"g1": 3, "g2": 10, "formal": 100}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,7 +48,7 @@ def build_settings(args: argparse.Namespace) -> dict:
     return {
         "model": "rtdetr-l.yaml",
         "data": str(args.data.expanduser().resolve()),
-        "epochs": 3 if args.gate == "g1" else 10,
+        "epochs": STAGE_EPOCHS[args.gate],
         "imgsz": 640,
         "batch": 8,
         "workers": args.workers,

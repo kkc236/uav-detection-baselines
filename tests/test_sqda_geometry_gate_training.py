@@ -11,6 +11,7 @@ def test_smgt_runs_use_a_fresh_namespace() -> None:
     assert RUN_NAMES == {
         "g1": "sqda-geometry-smgt-g1-seed0-3ep",
         "g2": "sqda-geometry-smgt-g2-seed0-10ep",
+        "formal": "sqda-geometry-smgt-formal-seed0-100ep",
     }
 
 
@@ -28,7 +29,29 @@ def test_smgt_runner_requires_the_inventory_g2_feasibility_checkpoint() -> None:
     assert "sqda-smgt-${gate}-live" in runner
 
 
-@pytest.mark.parametrize(("gate", "epochs"), [("g1", 3), ("g2", 10)])
+def test_smgt_runner_requires_strict_g2_selection_before_formal_training() -> None:
+    runner = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_sqda_geometry_gate_server.sh"
+    ).read_text(encoding="utf-8")
+
+    formal_guard = runner.split('if [[ "$gate" == "formal" ]]')[1].split(
+        "if pgrep"
+    )[0]
+    assert (
+        'g2_inventory="$project/sqda-geometry-smgt-g2-seed0-10ep/'
+        'evaluation-inventory/candidate-inventory.json"'
+    ) in formal_guard
+    assert 'get("selected_checkpoint")' in formal_guard
+    assert "g2_eligible_checkpoint" not in formal_guard
+    assert "smgt-${gate}-github-sync-status.json" in runner
+    assert "sqda-smgt-${gate}-live" in runner
+
+
+@pytest.mark.parametrize(
+    ("gate", "epochs"), [("g1", 3), ("g2", 10), ("formal", 100)]
+)
 def test_geometry_gate_settings_are_fixed_and_require_inherited_adapter(
     tmp_path,
     gate: str,

@@ -3,11 +3,7 @@ set -euo pipefail
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export PYTHONHASHSEED=0
 
-gate="${1:?usage: run_sqda_geometry_gate_server.sh g1|g2 [token-file] [resume-from]}"
-if [[ "$gate" != "g1" && "$gate" != "g2" ]]; then
-  echo "gate must be g1 or g2" >&2
-  exit 2
-fi
+gate="${1:?usage: run_sqda_geometry_gate_server.sh g1|g2|formal [token-file] [resume-from]}"
 
 root="/root/data/uav"
 repo="$root/sqda-sgc"
@@ -19,7 +15,15 @@ data="$root/protocols/tsgr-p2-e1/source-VisDrone-full.yaml"
 token_file="${2:-/root/.config/sqda-sgc/github-token}"
 branch="codex/sqda-sgc"
 admission="$project/geometry-branch-diagnosis/g1-admission.json"
-run_name="sqda-geometry-smgt-$gate-seed0-$([[ "$gate" == "g1" ]] && echo 3 || echo 10)ep"
+case "$gate" in
+  g1) run_name="sqda-geometry-smgt-g1-seed0-3ep" ;;
+  g2) run_name="sqda-geometry-smgt-g2-seed0-10ep" ;;
+  formal) run_name="sqda-geometry-smgt-formal-seed0-100ep" ;;
+  *)
+    echo "gate must be g1, g2, or formal" >&2
+    exit 2
+    ;;
+esac
 run_dir="$project/$run_name"
 pending_log="$project/.${gate}-console.pending.log"
 sync_log="$project/smgt-${gate}-github-sync.log"
@@ -38,6 +42,13 @@ if [[ "$gate" == "g2" ]]; then
   g1_inventory="$project/sqda-geometry-smgt-g1-seed0-3ep/evaluation-inventory/candidate-inventory.json"
   if [[ ! -f "$g1_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("g2_eligible_checkpoint"))).lower())' "$g1_inventory")" != "true" ]]; then
     echo "an SMGT G1 checkpoint within the bounded G2 feasibility tolerance is required before G2." >&2
+    exit 5
+  fi
+fi
+if [[ "$gate" == "formal" ]]; then
+  g2_inventory="$project/sqda-geometry-smgt-g2-seed0-10ep/evaluation-inventory/candidate-inventory.json"
+  if [[ ! -f "$g2_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("selected_checkpoint"))).lower())' "$g2_inventory")" != "true" ]]; then
+    echo "a strict SMGT G2 selected checkpoint is required before formal training." >&2
     exit 5
   fi
 fi
