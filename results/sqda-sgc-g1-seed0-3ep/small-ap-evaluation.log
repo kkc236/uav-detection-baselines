@@ -1,0 +1,98 @@
+creating index...
+index created!
+Loading and preparing results...
+DONE (t=1.14s)
+creating index...
+index created!
+Running per image evaluation...
+Evaluate annotation type *bbox*
+DONE (t=58.55s).
+Accumulating evaluation results...
+DONE (t=2.30s).
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = -1.000
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=300 ] = 0.417
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=300 ] = 0.242
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=300 ] = 0.159
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=300 ] = 0.343
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=300 ] = 0.421
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.104
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.294
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=300 ] = 0.401
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=300 ] = 0.310
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=300 ] = 0.523
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=300 ] = 0.572
+creating index...
+index created!
+Loading and preparing results...
+DONE (t=1.10s)
+creating index...
+index created!
+Running per image evaluation...
+Evaluate annotation type *bbox*
+DONE (t=59.07s).
+Accumulating evaluation results...
+DONE (t=2.29s).
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = -1.000
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=300 ] = 0.417
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=300 ] = 0.242
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=300 ] = 0.159
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=300 ] = 0.343
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=300 ] = 0.421
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.104
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.293
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=300 ] = 0.400
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=300 ] = 0.310
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=300 ] = 0.522
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=300 ] = 0.571
+{
+  "baseline": {
+    "ap": 0.2441173555546976,
+    "ap50": 0.417013972224474,
+    "ap75": 0.24168905600370225,
+    "ap_large": 0.42096822910495046,
+    "ap_medium": 0.3425340108403834,
+    "ap_small": 0.15898876765327266,
+    "ar_large": 0.5717882618840957,
+    "ar_medium": 0.5226589587192559,
+    "ar_small": 0.31043894965343904,
+    "max_dets": 300
+  },
+  "candidate": {
+    "ap": 0.2441485031533864,
+    "ap50": 0.4167506471632699,
+    "ap75": 0.24185725701226354,
+    "ap_large": 0.42148966080127337,
+    "ap_medium": 0.3426913630859799,
+    "ap_small": 0.15882875055310616,
+    "ar_large": 0.5712536857831858,
+    "ar_medium": 0.522419558372131,
+    "ar_small": 0.3100876200497409,
+    "max_dets": 300
+  },
+  "delta": {
+    "ap": 3.1147598688802125e-05,
+    "ap50": -0.0002633250612040783,
+    "ap75": 0.00016820100856129727,
+    "ap_large": 0.0005214316963229049,
+    "ap_medium": 0.0001573522455965426,
+    "ap_small": -0.0001600171001664985,
+    "ar_large": -0.0005345761009099004,
+    "ar_medium": -0.00023940034712488512,
+    "ar_small": -0.00035132960369815835
+  },
+  "protocol": {
+    "annotations": 38759,
+    "area_small": [
+      0,
+      1024
+    ],
+    "coordinate_space": "original image pixels",
+    "images": 548,
+    "iou_thresholds": [
+      0.5,
+      0.95,
+      0.05
+    ],
+    "max_dets": 300
+  }
+}
