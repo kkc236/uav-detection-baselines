@@ -1,0 +1,44 @@
+{
+  "baseline": {
+    "fitness": 0.24173427880487694,
+    "metrics/mAP50(B)": 0.41453658664256154,
+    "metrics/mAP50-95(B)": 0.24173427880487694,
+    "metrics/precision(B)": 0.5119818910028286,
+    "metrics/recall(B)": 0.43538008299157244
+  },
+  "best": {
+    "fitness": 0.24172585621822404,
+    "metrics/mAP50(B)": 0.4145711243325536,
+    "metrics/mAP50-95(B)": 0.24172585621822404,
+    "metrics/precision(B)": 0.5115266538886889,
+    "metrics/recall(B)": 0.4355272863742021
+  },
+  "completed_epoch10": {
+    "fitness": 0.24172585621822404,
+    "metrics/mAP50(B)": 0.4145711243325536,
+    "metrics/mAP50-95(B)": 0.24172585621822404,
+    "metrics/precision(B)": 0.5115266538886889,
+    "metrics/recall(B)": 0.4355272863742021
+  },
+  "completed_epoch8": {
+    "fitness": 0.24176788196655938,
+    "metrics/mAP50(B)": 0.4145813298428275,
+    "metrics/mAP50-95(B)": 0.24176788196655938,
+    "metrics/precision(B)": 0.5113948362019929,
+    "metrics/recall(B)": 0.43549628422993997
+  },
+  "completed_epoch9": {
+    "fitness": 0.2417652988904756,
+    "metrics/mAP50(B)": 0.4145896335188531,
+    "metrics/mAP50-95(B)": 0.2417652988904756,
+    "metrics/precision(B)": 0.5114434447756431,
+    "metrics/recall(B)": 0.4355279864219742
+  },
+  "last": {
+    "fitness": 0.24172585621822404,
+    "metrics/mAP50(B)": 0.4145711243325536,
+    "metrics/mAP50-95(B)": 0.24172585621822404,
+    "metrics/precision(B)": 0.5115266538886889,
+    "metrics/recall(B)": 0.4355272863742021
+  }
+}

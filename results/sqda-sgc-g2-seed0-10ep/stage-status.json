@@ -1,6 +1,6 @@
 {
   "best_fitness": 0.24175,
-  "completed_epoch": 11,
+  "completed_epoch": 10,
   "fitness": 0.24175,
   "gate": "g2",
   "metrics": {
@@ -9,5 +9,7 @@
     "metrics/precision(B)": 0.5105150673165555,
     "metrics/recall(B)": 0.43679788346116444
   },
+  "status_corrected_utc": "2026-07-30T16:06:49.318882+00:00",
+  "status_correction": "The old end-of-fit callback incremented epoch once after completion; results.csv contains exactly 10 training rows.",
   "target_epochs": 10
 }

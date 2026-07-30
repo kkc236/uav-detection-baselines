@@ -1,0 +1,123 @@
+{
+  "created_utc": "2026-07-30T16:06:49.318298+00:00",
+  "decision": "hold_not_passed",
+  "formal_continuation": "not_started",
+  "frozen_stock_audit": {
+    "adapter_tensors": 51,
+    "audited_candidate": "completed_epoch9",
+    "baseline_source": "model",
+    "candidate_source": "ema",
+    "changed_count": 0,
+    "changed_first_10": [],
+    "extra": [],
+    "max_abs_difference": 0.0,
+    "missing": [],
+    "passed": true,
+    "shape_mismatch": [],
+    "stock_tensors": 941
+  },
+  "gate": "g2",
+  "next_action": "do not resume into 100 epochs from this G2 run; retain checkpoint and evidence for architecture-level remediation only",
+  "passed": false,
+  "protocol": {
+    "amp": true,
+    "baseline": "matched-baseline-best-epoch-0100.pt",
+    "batch": 8,
+    "decision_rule": "strict: every primary metric must be non-decreasing versus the exact matched baseline",
+    "device": "0",
+    "epochs": 10,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "seed": 0,
+    "workers": 8
+  },
+  "retained_exact_validation": {
+    "baseline": {
+      "fitness": 0.24173427880487694,
+      "metrics/mAP50(B)": 0.41453658664256154,
+      "metrics/mAP50-95(B)": 0.24173427880487694,
+      "metrics/precision(B)": 0.5119818910028286,
+      "metrics/recall(B)": 0.43538008299157244
+    },
+    "best": {
+      "fitness": 0.24172585621822404,
+      "metrics/mAP50(B)": 0.4145711243325536,
+      "metrics/mAP50-95(B)": 0.24172585621822404,
+      "metrics/precision(B)": 0.5115266538886889,
+      "metrics/recall(B)": 0.4355272863742021
+    },
+    "completed_epoch10": {
+      "fitness": 0.24172585621822404,
+      "metrics/mAP50(B)": 0.4145711243325536,
+      "metrics/mAP50-95(B)": 0.24172585621822404,
+      "metrics/precision(B)": 0.5115266538886889,
+      "metrics/recall(B)": 0.4355272863742021
+    },
+    "completed_epoch8": {
+      "fitness": 0.24176788196655938,
+      "metrics/mAP50(B)": 0.4145813298428275,
+      "metrics/mAP50-95(B)": 0.24176788196655938,
+      "metrics/precision(B)": 0.5113948362019929,
+      "metrics/recall(B)": 0.43549628422993997
+    },
+    "completed_epoch9": {
+      "fitness": 0.2417652988904756,
+      "metrics/mAP50(B)": 0.4145896335188531,
+      "metrics/mAP50-95(B)": 0.2417652988904756,
+      "metrics/precision(B)": 0.5114434447756431,
+      "metrics/recall(B)": 0.4355279864219742
+    },
+    "last": {
+      "fitness": 0.24172585621822404,
+      "metrics/mAP50(B)": 0.4145711243325536,
+      "metrics/mAP50-95(B)": 0.24172585621822404,
+      "metrics/precision(B)": 0.5115266538886889,
+      "metrics/recall(B)": 0.4355272863742021
+    }
+  },
+  "schema": 1,
+  "selected_candidate": {
+    "checkpoint": "weights/epoch8.pt",
+    "exact_metrics": {
+      "fitness": 0.2417652988904756,
+      "metrics/mAP50(B)": 0.4145896335188531,
+      "metrics/mAP50-95(B)": 0.2417652988904756,
+      "metrics/precision(B)": 0.5114434447756431,
+      "metrics/recall(B)": 0.4355279864219742
+    },
+    "exact_primary_delta": {
+      "metrics/mAP50(B)": 5.304687629154037e-05,
+      "metrics/mAP50-95(B)": 3.1020085598659763e-05,
+      "metrics/precision(B)": -0.0005384462271855739,
+      "metrics/recall(B)": 0.00014790343040177456
+    },
+    "label": "completed_epoch9",
+    "primary_non_decreasing": {
+      "metrics/mAP50(B)": true,
+      "metrics/mAP50-95(B)": true,
+      "metrics/precision(B)": false,
+      "metrics/recall(B)": true
+    },
+    "scale_delta": {
+      "ap": 1.987757315707883e-05,
+      "ap50": 5.09903696275793e-05,
+      "ap75": 8.300206447320324e-06,
+      "ap_large": -0.0006158857703001952,
+      "ap_medium": -6.060538505314739e-05,
+      "ap_small": 2.474252328590887e-05,
+      "ar_large": -0.0012219823977613897,
+      "ar_medium": -0.00039431947636903164,
+      "ar_small": 4.7582052429884225e-05
+    },
+    "why": "among retained candidates it has the smallest precision decrease and the strongest recall/mAP50; it is a hold candidate only, not a pass"
+  },
+  "strict_gate": {
+    "all_primary_non_decreasing": false,
+    "failure_reasons": [
+      "metrics/precision(B)"
+    ],
+    "frozen_stock_intact": true,
+    "passed": false
+  }
+}

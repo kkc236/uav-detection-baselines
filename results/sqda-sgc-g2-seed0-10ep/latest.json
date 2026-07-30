@@ -6,7 +6,7 @@
     "sha256": "4328513ef550654841cc20ff5de3549ea2ae14624fe900c7754222b6c8a61b6d"
   },
   "completed_epoch": 10,
-  "published_at": "2026-07-30T15:00:45.628392+00:00",
+  "published_at": "2026-07-30T16:07:14.528171+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/sqda-sgc-g2-live",
   "run_name": "sqda-sgc-g2-seed0-10ep"
 }

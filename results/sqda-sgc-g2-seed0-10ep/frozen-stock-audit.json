@@ -1,0 +1,14 @@
+{
+  "adapter_tensors": 51,
+  "audited_candidate": "completed_epoch9",
+  "baseline_source": "model",
+  "candidate_source": "ema",
+  "changed_count": 0,
+  "changed_first_10": [],
+  "extra": [],
+  "max_abs_difference": 0.0,
+  "missing": [],
+  "passed": true,
+  "shape_mismatch": [],
+  "stock_tensors": 941
+}
