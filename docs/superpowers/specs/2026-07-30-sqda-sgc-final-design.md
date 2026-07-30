@@ -653,6 +653,7 @@ G0 失败只能修复集成错误，禁止调参或训练。
 - \(0<\alpha<0.05\)；
 - optimizer 固定为 AdamW；
 - module learning rate 固定为 \(10^{-4}\)；
+- 学习率在 0.5 epoch 线性 warmup 后保持常数：`lrf=1.0`、`cos_lr=False`、`warmup_epochs=0.5`、`warmup_bias_lr=0`，G1/G2 不临时切换 scheduler；
 - `betas=(0.9,0.999)`；
 - projector、attention、gate 和 fusion 矩阵使用 `weight_decay=1e-4`；
 - bias、LayerNorm、\(\alpha\)、\(\lambda_{ctx}\) 和其他标量参数使用 `weight_decay=0`；
