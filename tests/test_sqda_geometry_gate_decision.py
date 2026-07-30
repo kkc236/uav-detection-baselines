@@ -28,7 +28,7 @@ def test_geometry_gate_admission_requires_evidence_of_geometry_fp_harm() -> None
 
     assert decision["passed"] is True
     assert decision["criteria"]["precision_non_decrease"] is True
-    assert decision["criteria"]["recall_within_tolerance"] is True
+    assert decision["criteria"]["semantic_ablation_recall_cost_bounded"] is True
     assert decision["criteria"]["geometry_fp_excess"] is True
 
 
@@ -45,6 +45,21 @@ def test_geometry_gate_admission_rejects_when_semantic_only_loses_precision() ->
 
     assert decision["passed"] is False
     assert decision["criteria"]["precision_non_decrease"] is False
+
+
+def test_geometry_gate_admission_rejects_large_semantic_ablation_recall_cost() -> None:
+    decision = decide_g1_admission(
+        {
+            "training_signal": False,
+            "branches": {
+                "full": _branch(tp=90, fp=20, fn=10),
+                "semantic_only": _branch(tp=89, fp=16, fn=11),
+            },
+        }
+    )
+
+    assert decision["passed"] is False
+    assert decision["criteria"]["semantic_ablation_recall_cost_bounded"] is False
 
 
 def test_admission_cli_writes_machine_readable_decision(tmp_path, monkeypatch) -> None:

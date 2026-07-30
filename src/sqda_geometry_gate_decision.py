@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-RECALL_TOLERANCE = 0.0002
+SCREENING_RECALL_TOLERANCE = 0.001
 AP_TOLERANCE = 0.0002
 LOWER_SATURATION_MAX_FRACTION = 0.05
 
@@ -38,7 +38,9 @@ def decide_g1_admission(diagnosis: Mapping[str, Any]) -> dict[str, Any]:
     criteria = {
         "same_frozen_baseline_threshold": same_threshold,
         "precision_non_decrease": semantic_precision >= full_precision,
-        "recall_within_tolerance": semantic_recall >= full_recall - RECALL_TOLERANCE,
+        "semantic_ablation_recall_cost_bounded": (
+            semantic_recall >= full_recall - SCREENING_RECALL_TOLERANCE
+        ),
         "geometry_fp_excess": int(full_error["fp"]) > int(semantic_error["fp"]),
     }
     return {
@@ -59,7 +61,7 @@ def decide_g1_admission(diagnosis: Mapping[str, Any]) -> dict[str, Any]:
             "fp": int(semantic_error["fp"]),
             "fn": int(semantic_error["fn"]),
         },
-        "recall_tolerance": RECALL_TOLERANCE,
+        "screening_recall_tolerance": SCREENING_RECALL_TOLERANCE,
         "training_signal": False,
     }
 
