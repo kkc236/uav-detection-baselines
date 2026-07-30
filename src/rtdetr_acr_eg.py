@@ -104,15 +104,66 @@ def _capture_final_decoder_queries(model: RTDETRDetectionModel) -> Iterator[_Liv
         capture.remove()
 
 
-def _require_raw_training_output(value: object) -> tuple[object, ...]:
+def _require_raw_rtdetr_output(value: object) -> tuple[object, ...]:
+    """Normalize Ultralytics' training and evaluation RT-DETR outputs."""
+
+    candidate = value
     if (
-        not isinstance(value, tuple)
-        or len(value) != 5
-        or not all(isinstance(item, torch.Tensor) for item in value[:4])
-        or not (isinstance(value[4], dict) or value[4] is None)
+        isinstance(value, tuple)
+        and len(value) == 2
+        and isinstance(value[0], torch.Tensor)
     ):
-        raise RuntimeError("ACR-EG RT-DETR training output contract drift")
-    return value
+        candidate = value[1]
+    if (
+        not isinstance(candidate, tuple)
+        or len(candidate) != 5
+        or not all(isinstance(item, torch.Tensor) for item in candidate[:4])
+        or not (isinstance(candidate[4], dict) or candidate[4] is None)
+    ):
+        raise RuntimeError("ACR-EG RT-DETR output contract drift")
+    return candidate
+
+
+def _require_raw_training_output(value: object) -> tuple[object, ...]:
+    """Backward-compatible alias for the original training-only contract."""
+
+    return _require_raw_rtdetr_output(value)
+
+
+def _decode_acr_eg_inference(
+    raw: tuple[object, ...],
+    *,
+    fused_scores: torch.Tensor,
+    head: nn.Module,
+) -> tuple[torch.Tensor, tuple[object, ...]]:
+    """Apply stock RT-DETR postprocessing to ACR-EG-fused decoder scores."""
+
+    normalized = _require_raw_rtdetr_output(raw)
+    boxes = normalized[0]
+    stock_scores = normalized[1]
+    if not isinstance(boxes, torch.Tensor) or not isinstance(stock_scores, torch.Tensor):
+        raise RuntimeError("ACR-EG decoder output tensors are missing")
+    if fused_scores.shape != stock_scores.shape:
+        raise RuntimeError("ACR-EG fused score shape drift")
+    if boxes.ndim != 4 or fused_scores.ndim != 4 or boxes.shape[0] != 1:
+        raise RuntimeError("ACR-EG evaluation decoder layout drift")
+    postprocess = getattr(head, "postprocess", None)
+    if not callable(postprocess):
+        raise RuntimeError("ACR-EG RT-DETR head has no postprocess")
+    fused_raw = (
+        boxes,
+        fused_scores,
+        normalized[2],
+        normalized[3],
+        normalized[4],
+    )
+    decoded = postprocess(
+        boxes.squeeze(0),
+        fused_scores.squeeze(0).sigmoid(),
+    )
+    if not isinstance(decoded, torch.Tensor):
+        raise RuntimeError("ACR-EG RT-DETR postprocess returned non-tensor")
+    return decoded, fused_raw
 
 
 class ACREGDetectionModel(RTDETRDetectionModel):
@@ -156,7 +207,7 @@ class ACREGDetectionModel(RTDETRDetectionModel):
     ) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
         with _capture_final_decoder_queries(self) as capture:
             raw = super().predict(image, batch=batch)
-        raw_output = _require_raw_training_output(raw)
+        raw_output = _require_raw_rtdetr_output(raw)
         if capture.value is None:
             raise RuntimeError("ACR-EG final query capture did not execute")
         queries = capture.value
@@ -255,7 +306,13 @@ class ACREGDetectionModel(RTDETRDetectionModel):
             num_queries=self.acr_eg_num_queries,
             gain=self.acr_eg_gain,
         )
-        return (raw[0], fused_scores, raw[2], raw[3], raw[4])
+        if self.training:
+            return (raw[0], fused_scores, raw[2], raw[3], raw[4])
+        return _decode_acr_eg_inference(
+            raw,
+            fused_scores=fused_scores,
+            head=self.model[-1],
+        )
 
     def loss(self, batch: dict, preds=None):
         if (

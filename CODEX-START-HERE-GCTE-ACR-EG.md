@@ -1361,6 +1361,71 @@ vs
 Full GCQF / ACR-EG
 ```
 
+### 16.1 2026-07-30 最终 live 评测结果（已完成）
+
+本节是最终 `epoch99.pt` 的真实端到端结果，不是旧 Query cache 诊断，也不是读取最终框后离线重排。
+
+身份硬门：
+
+```text
+ACR-EG checkpoint:
+  release tag = gcte-acr-eg-11580c73-epoch-100
+  model type = ACREGDetectionModel
+  epoch = 99（即完成第 100 轮）
+  file bytes = 205339548
+  SHA256 = 66E0B8D27706CDA594BE657B20BFD01CAA536D90B7EA0A05EDC2FEEC11C6E2B4
+  acr_eg-related state_dict keys = 48
+
+Mature RT-DETR-L baseline:
+  file bytes = 66262262
+  SHA256 = 54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B
+
+Dataset:
+  VisDrone val images = 548
+  signature = A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A
+```
+
+冻结协议：`imgsz=640`、`batch=1`、`AMP=True`、`conf=0.001`、`max_det=300`、`NMS=False`；Baseline 为单全局视图，ACR-EG 为真实全局 + 4 局部视图。两路都直接加载 checkpoint 并在同一 548 图顺序上前向。
+
+| 指标 | Mature Baseline | ACR-EG | 绝对变化 |
+|---|---:|---:|---:|
+| mAP50-95（SBR） | 0.198797 | **0.240556** | **+0.041758** |
+| AP50 | 0.361831 | **0.424068** | **+0.062237** |
+| AP75 | 0.185396 | **0.233592** | **+0.048196** |
+| AP-tiny-SBR | 0.080828 | **0.106273** | **+0.025445** |
+| tiny recall | 0.582153 | **0.651173** | **+0.069020** |
+| AP-medium-SBR | 0.258082 | **0.293787** | **+0.035705** |
+| AP-large-SBR | 0.155530 | **0.235707** | **+0.080177** |
+
+结论：最终 ACR-EG 在同一 SBR evaluator 下超过成熟 Baseline，且 tiny、medium、large 三个尺度均为正增益；冻结判断 `exceeds_baseline_mAP=true`、`tiny_improves=true`。
+
+本机 RTX 4070 Laptop GPU 的端到端计时：
+
+| 项目 | Baseline | ACR-EG |
+|---|---:|---:|
+| views | 1 | 5 |
+| 平均延迟 | 107.509 ms/image | 402.765 ms/image |
+| FPS | 9.301 | 2.483 |
+| 相对延迟 | 1.00× | 3.746× |
+| PyTorch peak allocated VRAM | 203850240 bytes | 233957376 bytes |
+
+延迟来自 RTX 4070 Laptop，不可冒充 RTX 4090 延迟。上述 `mAP50-95（SBR）` 也不可与既有 Ultralytics 原生验证值 `0.24170` 直接横向比较；正式结论来自同一 SBR evaluator 内的 Baseline 与 ACR-EG 配对差值。
+
+证据文件：
+
+```text
+artifacts/acr-eg-live-final-r1/evaluation.json
+  SHA256 = F16756302307F6CCB1FD9FA01DEC74F85885F5DC0D16EDF61A03B48AA3ABADB7
+
+artifacts/acr-eg-live-final-r1/predictions-baseline.jsonl.gz
+  SHA256 = BF1B64CE75F21E44AA24C7035C280D5784E4B240CDA0F0240FDD6DD82CBCBA25
+
+artifacts/acr-eg-live-final-r1/predictions-acr-eg.jsonl.gz
+  SHA256 = 80AD52E321797459ACC11AB632D8BE9AB372093F526F9E5DEC3F228E006AF8DB
+```
+
+已独立从两份预测文件重新计算：548 条记录、548 个唯一且同序 image id、全部指标与 `evaluation.json` 精确一致、三个证据文件 checksum 精确一致。
+
 还必须补 matched continuation control：
 
 ```text
@@ -1400,34 +1465,35 @@ same continuation epochs
 [ ] optimizer、scaler、epoch、updates 连续
 [ ] GPU 真正运行
 [ ] 第 10–100 轮每轮 Release 备份并校验
-[ ] 100 epoch 完成
-[ ] 最终 checkpoint 发布并校验
-[ ] live 548 图 evaluator 完成
-[ ] Global-relative 指标和延迟已输出
-[ ] 结果、日志、protocol 和 SHA evidence 已推送
+[x] 100 epoch 完成
+[x] 最终 checkpoint 发布并校验
+[x] live 548 图 evaluator 完成
+[x] Global-relative 指标和延迟已输出
+[x] 结果、protocol、两路预测与 SHA evidence 已推送到 `codex/gcte-rtdetr-g0`
 ```
 
 ---
 
 ## 18. 现在允许与禁止的表述
 
-现在允许：
+截至 2026-07-30，现在允许：
 
 - 已设计三阶段 GCQF 查询级网络模块；
 - 已完成真正 YAML/forward/loss/optimizer/checkpoint 集成；
 - 已实现 fail-closed integrated resume、真实 batch smoke 和逐轮 Release 发布器；
 - cache 诊断相对 Global 有正增益；
-- 真正集成模型已完成并备份第 9 轮；
-- checkpoint 是 `ACREGDetectionModel`。
+- 真正集成模型已完成 100 epoch，最终 checkpoint 已发布并校验；
+- checkpoint 是 `ACREGDetectionModel`，包含 48 个 ACR-EG 相关 state keys；
+- live 548 图 SBR 评测相对 Mature Baseline 的 mAP50-95 提升 `+0.041758`；
+- live SBR 的 tiny、medium、large 指标全部提升；
+- RTX 4070 Laptop 上 ACR-EG 平均延迟为 `402.765 ms/image`，约为单视图 Baseline 的 `3.746×`。
 
-现在禁止：
+现在仍禁止：
 
-- 第 9 轮 live mAP 已提升；
-- 100 epoch 已成功；
-- 所有尺度都提升；
+- 把 SBR mAP `0.240556` 冒充 Ultralytics 原生 COCO-style mAP；
+- 把 RTX 4070 Laptop 延迟冒充 RTX 4090 延迟；
+- 在 matched continuation control 完成前，把全部差值严格归因为模块本身；
 - `best.pt` 是验证集最优；
-- local boxes 已进入最终输出；
-- latency 已确定；
 - 当前方法已经达到 CCF-C 录用水平；
 - 已完成多 seed、第二数据集或 SOTA 对比。
 

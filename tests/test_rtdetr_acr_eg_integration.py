@@ -99,6 +99,62 @@ def test_training_output_contract_accepts_rtdetr_denoising_metadata():
     assert output[4]["dn_num_split"] == [100, 300]
 
 
+def test_eval_output_contract_unwraps_stock_postprocessed_pair():
+    from src.rtdetr_acr_eg import _require_raw_rtdetr_output
+
+    raw = (
+        torch.zeros(1, 1, 3, 4),
+        torch.zeros(1, 1, 3, 2),
+        torch.zeros(1, 3, 4),
+        torch.zeros(1, 3, 2),
+        None,
+    )
+    postprocessed = torch.zeros(1, 3, 6)
+
+    assert _require_raw_rtdetr_output((postprocessed, raw)) is raw
+
+
+def test_eval_decoder_uses_fused_scores_and_preserves_boxes():
+    from src.rtdetr_acr_eg import _decode_acr_eg_inference
+
+    class RecordingHead:
+        export = False
+
+        def __init__(self) -> None:
+            self.boxes = None
+            self.scores = None
+
+        def postprocess(self, boxes, scores):
+            self.boxes = boxes
+            self.scores = scores
+            return torch.cat(
+                (
+                    boxes,
+                    scores.amax(dim=-1, keepdim=True),
+                    scores.argmax(dim=-1, keepdim=True).float(),
+                ),
+                dim=-1,
+            )
+
+    boxes = torch.tensor([[[[0.5, 0.5, 0.2, 0.2]]]])
+    stock_scores = torch.zeros(1, 1, 1, 2)
+    fused_scores = torch.tensor([[[[2.0, -2.0]]]])
+    raw = (boxes, stock_scores, torch.zeros(1), torch.zeros(1), None)
+    head = RecordingHead()
+
+    decoded, fused_raw = _decode_acr_eg_inference(
+        raw,
+        fused_scores=fused_scores,
+        head=head,
+    )
+
+    assert torch.equal(head.boxes, boxes.squeeze(0))
+    assert torch.allclose(head.scores, fused_scores.squeeze(0).sigmoid())
+    assert decoded.shape == (1, 1, 6)
+    assert fused_raw[1] is fused_scores
+    assert fused_raw[0] is boxes
+
+
 def test_integrated_resume_requires_custom_ema_optimizer_scaler_epoch_and_updates():
     from src.rtdetr_acr_eg import validate_acr_eg_resume_checkpoint
 

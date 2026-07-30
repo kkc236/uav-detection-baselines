@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 tmp/
 .venv/
+.venv-eval/
 downloads/
 artifacts/
 secrets/
