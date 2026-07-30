@@ -1,9 +1,9 @@
 # SQDA-ABDR 冻结设计规格
 
 日期：2026-07-31
-状态：用户确认设计；尚未实现或训练
+状态：用户确认“双有界分支预算”设计；尚未实现或训练
 基础：Ultralytics RT-DETR-L + matched VisDrone baseline
-目标：修复 SQDA-SGC G2 的“Recall/mAP 微升而 Precision 微降”现象，不改变训练协议、预测集合或推理后处理。
+目标：在不重构 SQDA-SGC 和 RT-DETR 的前提下，针对 SQDA-SGC G2 的 Precision、AP-medium 和 AP-large 微降，限制单次残差对语义与几何证据的耦合；不改变训练协议、预测集合或推理后处理。
 
 ## 1. 可复核的触发证据
 
@@ -63,7 +63,7 @@ r_g=z_g-\langle z_g,u\rangle u.
 
 其中 `r_s` 只沿冻结 query 的方向变化，作为语义强度校正；`r_g` 与该方向严格正交，作为边界/定位细节校正。两者内积理论上为零，避免两个残差分量在同一子空间相互抵消。
 
-### 3.1 有界一致性调制
+### 3.1 双有界分支预算
 
 从 query、两种描述子、其逐元素积与绝对差、三种相似度以及 `log(w),log(h)` 构造输入：
 
@@ -74,40 +74,44 @@ h=[\mathrm{LN}(q);\mathrm{LN}(s);\mathrm{LN}(g);
 \rho_s;\rho_g;\rho_c;\log w;\log h].
 \]
 
-一个 `Linear(5D+5,64) → SiLU → Linear(64,1)` 产生调制值：
+一个 `Linear(5D+5,64) → SiLU → Linear(64,2)` 同时产生语义与几何预算：
 
 \[
-a=a_{\min}+(1-a_{\min})\sigma(\operatorname{MLP}(h)),
-\quad a_{\min}=0.80,\quad a_{\mathrm{init}}=0.98.
+\begin{aligned}
+[b_s,b_g]&=\sigma(\operatorname{MLP}(h)),\\
+a_s&=0.95+0.05b_s,\\
+a_g&=0.80+0.20b_g,
+\end{aligned}
+\qquad a_{s,\mathrm{init}}=a_{g,\mathrm{init}}=0.98.
 \]
 
 最终只有一次写回：
 
 \[
-f=\operatorname{RMSBound}(a(r_s+r_g)),\qquad q'=q+\alpha f.
+f=\operatorname{RMSBound}(a_s r_s+a_g r_g),\qquad q'=q+\alpha f.
 \]
 
 `α` 沿用 SQDA-SGC 的既有单一有界 LayerScale；若五个写回角色均无效，`f` 严格为零。
 
-`a` 永远大于 0.80，因此它不是 no-write 分支、不会筛掉 query、不会 early exit，也不会让新增模块把所有残差塌缩为零。它只在两种证据相互不支持时温和衰减同一个残差。
+`a_s` 严格在 `(0.95,1)`、`a_g` 严格在 `(0.80,1)`，两者都不是 no-write 分支，不会筛掉 query、不会 early exit，也不会让新增模块把所有残差塌缩为零。两路使用同一份包含 `log(w),log(h)` 的条件输入；但共享的 MLP 可为几何写入分配尺度相关预算，同时把语义写入限制在接近原强度的窄区间，以避免为了修正定位而显著削弱分类置信证据。
 
 ## 4. 初始化、梯度与复杂度
 
 - `W_s`、`W_g` 均为 `Linear(D,D)`，权重初始化 `Normal(0,0.01)`，bias 为零；
-- 一致性 MLP 的末层权重为 `Normal(0,0.01)`，bias 设为令 `a_init=0.98` 的反 sigmoid，确保所有角色从首步获得梯度；
+- 双预算 MLP 的末层权重为 `Normal(0,0.01)`；两个 bias 分别初始化为 `logit(0.60)` 与 `logit(0.90)`，从而令 `a_s=a_g=0.98`，确保所有角色从首步获得梯度；
 - `u` 对 stock query stop-gradient，避免把“方向参考”变成可借由 frozen detector 参数逃逸的训练通道；新增模块参数仍完全可训练；
 - 不增加第二个 LayerScale、第二个 residual、辅助 head 或辅助 loss；
-- 两个 `D×D` projector 取代原 `2D→D` fusion projector，主投影参数量近似不变；仅新增约 82K 的一致性 MLP 参数，远低于 1M 约束；
+- 两个 `D×D` projector 取代原 `2D→D` fusion projector，主投影参数量近似不变；双预算 MLP 相较单标量输出仅多 65 个参数，总新增仍约 82K，远低于 1M 约束；
 - 不产生跨 query attention、动态 query 路由、动态采样半径或额外高分辨率特征图。
 
 ## 5. 内部冲突审查
 
 | 潜在冲突 | ABDR 约束 | 预期结果 |
 |---|---|---|
-| 语义残差旋转 query，影响 Precision | 语义仅可沿 `u` 写入 | 降低类别方向扰动，而非承诺校准成功 |
-| 几何证据改变类别强度 | 几何仅可写入 `u` 的正交补 | 降低几何对语义幅度的直接干扰 |
+| 语义残差旋转 query，影响 Precision | 语义仅可沿 `u` 写入且 `a_s>0.95` | 降低类别方向扰动与语义写入衰减，而非承诺校准成功 |
+| 几何证据改变类别强度 | 几何仅可写入 `u` 的正交补；由 `a_g` 独立预算 | 降低几何对语义幅度的直接干扰，并允许尺度条件在两条支路上具有不同、但均有界的响应 |
 | 两路残差抵消 | `r_s ⟂ r_g` 且只做一次相加 | 无同子空间显式对消 |
-| G1S no-write 塌缩 | `a∈(0.80,1)`，不产生第三分支 | 结构上排除完全放弃写入 |
+| G1S no-write 塌缩 | `a_s∈(0.95,1)`、`a_g∈(0.80,1)`，不产生第三分支 | 结构上排除完全放弃写入 |
 | context 压低边界证据 | context 仍只调制 `s`，不调制 `g` | 维持原职责隔离 |
 | 变成推理算法 | train/val/predict 调用同一 adapter forward | 属于参与反向传播的网络层 |
 
@@ -120,7 +124,7 @@ f=\operatorname{RMSBound}(a(r_s+r_g)),\qquad q'=q+\alpha f.
 1. 关闭模块或 `identity_override=True` 时，输出逐元素等于输入；
 2. `r_s` 与 `u` 平行，`r_g` 与 `u` 的点积在 FP32 容差内为零；
 3. `r_s` 与 `r_g` 的点积在 FP32 容差内为零；
-4. `a` 严格在 `(0.80,1)`，无效 context 不产生 NaN；
+4. `a_s` 严格在 `(0.95,1)`、`a_g` 严格在 `(0.80,1)`，无效 context 不产生 NaN；
 5. 所有写回角色无效时残差严格为零；
 6. 一步反传后，语义 projector、几何 projector、一致性 MLP、原 group gate、context reliability 和 LayerScale 均有有限非零梯度；
 7. 941 个 stock 参数和 buffer 在一步训练前后逐项不变；
@@ -133,12 +137,13 @@ f=\operatorname{RMSBound}(a(r_s+r_g)),\qquad q'=q+\alpha f.
 1. G0：严格 identity、Top-300 与 stock 输出一致；
 2. G1：从成熟 baseline 独立训练 3 epoch；
 3. G2：仅当 G1 无数值异常、冻结审计通过后，从同一 baseline 独立训练 10 epoch；
-4. 每个保留 checkpoint 都对照精确 baseline 的 Precision、Recall、mAP50、mAP50-95；任一主指标下降即不通过；
-5. 对最优候选补算 COCO AP/AP50/AP75/AP-small/AP-medium/AP-large、逐类 AP、冻结张量审计和资源开销；
-6. 只有 G2 严格通过才允许从带 optimizer state 的 checkpoint 条件续跑至 100 epoch。
+4. 在训练前，对 baseline 与 SQDA-SGC G2 的固定验证预测按 COCO small/medium/large 分桶，记录 TP、FP、FN、分类置信度及 IoU 分布；该诊断只用于判断下降是否具有尺度或置信度模式，不参与训练、阈值选择或结果判定；
+5. 每个保留 checkpoint 都对照精确 baseline 的 Precision、Recall、mAP50、mAP50-95；任一主指标下降即不通过；
+6. 对最优候选补算 COCO AP/AP50/AP75/AP-small/AP-medium/AP-large、逐类 AP、冻结张量审计和资源开销；
+7. 只有 G2 严格通过才允许从带 optimizer state 的 checkpoint 条件续跑至 100 epoch。
 
 ## 7. 论文表述边界
 
-可主张：ABDR 在冻结 RT-DETR 的原生 object query 上，以语义方向校正、几何正交校正和非零一致性调制形成一个可训练的单次残差模块。
+可主张：ABDR 在冻结 RT-DETR 的原生 object query 上，以语义方向校正、几何正交校正和双有界分支预算形成一个可训练的单次残差模块。
 
 不可主张：语义方向等同于分类 head、正交方向等同于定位 head、必然改善所有尺度或保证任意 seed 成功。论文结果必须以通过后的精确评估为准。
