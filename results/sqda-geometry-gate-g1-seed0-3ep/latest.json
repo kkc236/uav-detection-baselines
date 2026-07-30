@@ -1,0 +1,12 @@
+{
+  "checkpoint": {
+    "asset_id": 495672801,
+    "asset_name": "sqda-geometry-gate-g1-epoch-0001.pt",
+    "bytes": 70259201,
+    "sha256": "e04d7059b4f96932aa30d1fc6a54062c09038219b42fa5cab4e7b30b752f8e13"
+  },
+  "completed_epoch": 1,
+  "published_at": "2026-07-30T17:46:16.850562+00:00",
+  "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/sqda-geometry-gate-g1-live",
+  "run_name": "sqda-geometry-gate-g1-seed0-3ep"
+}
