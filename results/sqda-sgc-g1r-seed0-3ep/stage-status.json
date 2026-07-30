@@ -1,0 +1,16 @@
+{
+  "best_fitness": 0.24173,
+  "completed_epoch": 1,
+  "fitness": 0.24173,
+  "gate": "g1r",
+  "metrics": {
+    "metrics/mAP50(B)": 0.41443,
+    "metrics/mAP50-95(B)": 0.24173,
+    "metrics/precision(B)": 0.51104,
+    "metrics/recall(B)": 0.43583,
+    "val/cls_loss": 0.51532,
+    "val/giou_loss": 0.70943,
+    "val/l1_loss": 0.07298
+  },
+  "target_epochs": 3
+}
