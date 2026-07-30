@@ -35,6 +35,7 @@ def adapt_decoder_inputs(
     *,
     query_count: int,
     identity_override: bool,
+    residual_mode: str | None = None,
 ) -> tuple[tuple, dict, dict[str, Tensor], Tensor]:
     """Apply SQDA-SGC to native object-query embeddings while preserving every other decoder input."""
     if raw_c2 is None:
@@ -61,6 +62,7 @@ def adapt_decoder_inputs(
         reference_boxes,
         adapter_c2,
         identity_override=identity_override,
+        residual_mode=residual_mode,
     )
     if enhanced_queries.shape != native_queries.shape:
         raise RuntimeError(
@@ -98,6 +100,7 @@ class SQDASGCDetectionModel(RTDETRDetectionModel):
             )
         self.sqda_sgc = SQDASGCAdapter(query_count=query_count, hidden_dim=hidden_dim)
         self.identity_override = False
+        self.residual_mode: str | None = None
         self.last_sqda_diagnostics: dict[str, Tensor] | None = None
         self.last_sqda_reference_boxes: Tensor | None = None
         self._sqda_prediction_active = False
@@ -142,6 +145,7 @@ class SQDASGCDetectionModel(RTDETRDetectionModel):
                 transient["c2"],
                 query_count=int(head.num_queries),
                 identity_override=bool(self.identity_override),
+                residual_mode=getattr(self, "residual_mode", None),
             )
             self.last_sqda_diagnostics = diagnostics
             self.last_sqda_reference_boxes = reference_boxes
@@ -254,6 +258,21 @@ def freeze_stock_model(model: nn.Module) -> None:
             module.eval()
 
 
+def freeze_inherited_sqda(model: nn.Module) -> None:
+    """Freeze stock plus inherited SQDA tensors, leaving only geometry_trust trainable."""
+    stock = getattr(model, "model", None)
+    adapter = getattr(model, "sqda_sgc", None)
+    if not isinstance(stock, nn.Module) or not isinstance(adapter, SQDASGCAdapter):
+        raise TypeError("geometry-gate training requires stock layers and an SQDASGCAdapter")
+    for parameter in stock.parameters():
+        parameter.requires_grad_(False)
+    for name, parameter in adapter.named_parameters():
+        parameter.requires_grad_(name.startswith("geometry_trust."))
+    for module in stock.modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            module.eval()
+
+
 def build_sqda_optimizer(model: nn.Module) -> torch.optim.AdamW:
     """Build the exact module-only optimizer without Ultralytics decay scaling."""
     unwrapped = unwrap_model(model)
@@ -300,6 +319,54 @@ def build_sqda_optimizer(model: nn.Module) -> torch.optim.AdamW:
     return torch.optim.AdamW(groups)
 
 
+def build_geometry_trust_optimizer(model: nn.Module) -> torch.optim.AdamW:
+    """Build the exact AdamW optimizer over only the new geometry-trust MLP."""
+    unwrapped = unwrap_model(model)
+    assert_geometry_trust_contract(unwrapped)
+    adapter = getattr(unwrapped, "sqda_sgc", None)
+    if not isinstance(adapter, SQDASGCAdapter):
+        raise TypeError("optimizer target does not expose an SQDASGCAdapter")
+
+    matrix_parameters: list[nn.Parameter] = []
+    no_decay_parameters: list[nn.Parameter] = []
+    seen: set[int] = set()
+    for _module_name, module in adapter.geometry_trust.named_modules():
+        for parameter_name, parameter in module.named_parameters(recurse=False):
+            if not parameter.requires_grad:
+                raise RuntimeError("a geometry_trust parameter was unexpectedly frozen")
+            if id(parameter) in seen:
+                raise RuntimeError("a geometry_trust parameter appeared in multiple optimizer groups")
+            seen.add(id(parameter))
+            target = (
+                matrix_parameters
+                if isinstance(module, nn.Linear) and parameter_name == "weight"
+                else no_decay_parameters
+            )
+            target.append(parameter)
+
+    expected = {id(parameter) for parameter in adapter.geometry_trust.parameters()}
+    if seen != expected:
+        raise RuntimeError("optimizer grouping did not cover every geometry_trust parameter")
+    return torch.optim.AdamW(
+        [
+            {
+                "params": matrix_parameters,
+                "lr": 1e-4,
+                "betas": (0.9, 0.999),
+                "weight_decay": 1e-4,
+                "param_group": "matrix",
+            },
+            {
+                "params": no_decay_parameters,
+                "lr": 1e-4,
+                "betas": (0.9, 0.999),
+                "weight_decay": 0.0,
+                "param_group": "no_decay",
+            },
+        ]
+    )
+
+
 def assert_training_contract(model: nn.Module) -> None:
     unwrapped = unwrap_model(model)
     stock = getattr(unwrapped, "model", None)
@@ -312,6 +379,31 @@ def assert_training_contract(model: nn.Module) -> None:
         raise RuntimeError(
             f"freeze contract violated: trainable_stock={trainable_stock[:5]}, "
             f"frozen_adapter={frozen_adapter[:5]}"
+        )
+
+
+def assert_geometry_trust_contract(model: nn.Module) -> None:
+    """Reject any geometry-gate run that can modify stock or inherited SQDA tensors."""
+    unwrapped = unwrap_model(model)
+    stock = getattr(unwrapped, "model", None)
+    adapter = getattr(unwrapped, "sqda_sgc", None)
+    if not isinstance(stock, nn.Module) or not isinstance(adapter, SQDASGCAdapter):
+        raise RuntimeError("model does not satisfy the SQDA geometry-gate structure")
+    trainable_stock = [name for name, parameter in stock.named_parameters() if parameter.requires_grad]
+    trainable_inherited = [
+        name
+        for name, parameter in adapter.named_parameters()
+        if parameter.requires_grad and not name.startswith("geometry_trust.")
+    ]
+    frozen_gate = [
+        name
+        for name, parameter in adapter.named_parameters()
+        if name.startswith("geometry_trust.") and not parameter.requires_grad
+    ]
+    if trainable_stock or trainable_inherited or frozen_gate:
+        raise RuntimeError(
+            f"geometry-trust freeze contract violated: trainable_stock={trainable_stock[:5]}, "
+            f"trainable_inherited={trainable_inherited[:5]}, frozen_gate={frozen_gate[:5]}"
         )
 
 

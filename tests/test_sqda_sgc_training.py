@@ -17,7 +17,10 @@ from src.rtdetr_sqda_sgc import (
     MATCHED_AMP_GROWTH_INTERVAL,
     MATCHED_AMP_SCALE,
     SQDASGCTrainer,
+    assert_geometry_trust_contract,
+    build_geometry_trust_optimizer,
     build_sqda_optimizer,
+    freeze_inherited_sqda,
     freeze_stock_model,
 )
 from src.sqda_sgc import SQDASGCAdapter
@@ -68,6 +71,59 @@ def test_freeze_contract_and_module_only_optimizer() -> None:
     assert isinstance(optimizer, torch.optim.AdamW)
     assert all(group["lr"] == pytest.approx(1e-4) for group in optimizer.param_groups)
     assert all(group["betas"] == (0.9, 0.999) for group in optimizer.param_groups)
+
+
+def test_geometry_trust_step_changes_only_the_new_gate() -> None:
+    torch.manual_seed(23)
+    detector = _ToyDetector()
+    freeze_inherited_sqda(detector)
+    assert_geometry_trust_contract(detector)
+    optimizer = build_geometry_trust_optimizer(detector)
+    stock_before = {
+        key: value.detach().clone()
+        for key, value in detector.model.state_dict().items()
+    }
+    adapter_before = {
+        key: value.detach().clone()
+        for key, value in detector.sqda_sgc.state_dict().items()
+    }
+
+    queries = torch.randn(1, 12, 256)
+    boxes = torch.rand(1, 12, 4)
+    c2 = torch.randn(1, 128, 16, 16)
+    enhanced, _ = detector.sqda_sgc(queries, boxes, c2)
+    enhanced.square().mean().backward()
+    optimizer.step()
+
+    geometry_names = {
+        name for name, parameter in detector.sqda_sgc.named_parameters() if parameter.requires_grad
+    }
+    assert geometry_names
+    assert all(name.startswith("geometry_trust.") for name in geometry_names)
+    assert _parameter_ids(optimizer) == {
+        id(parameter)
+        for name, parameter in detector.sqda_sgc.named_parameters()
+        if name.startswith("geometry_trust.")
+    }
+    assert all(
+        torch.equal(value, stock_before[key])
+        for key, value in detector.model.state_dict().items()
+    )
+    assert all(
+        torch.equal(value, adapter_before[key])
+        for key, value in detector.sqda_sgc.state_dict().items()
+        if not key.startswith("geometry_trust.")
+    )
+    assert any(
+        not torch.equal(value, adapter_before[key])
+        for key, value in detector.sqda_sgc.state_dict().items()
+        if key.startswith("geometry_trust.")
+    )
+    for name in geometry_names:
+        gradient = dict(detector.sqda_sgc.named_parameters())[name].grad
+        assert gradient is not None, name
+        assert torch.isfinite(gradient).all(), name
+        assert torch.count_nonzero(gradient), name
 
 
 def test_optimizer_decay_groups_match_parameter_roles() -> None:
@@ -128,10 +184,9 @@ def test_one_step_changes_adapter_but_not_stock_parameters_or_buffers() -> None:
         "edge_query.weight",
         "reliability_projection.weight",
         "gate.0.weight",
-        "semantic_projector.weight",
-        "geometry_projector.weight",
-        "agreement_gate.0.weight",
-        "agreement_gate.2.weight",
+        "fusion.weight",
+        "geometry_trust.0.weight",
+        "geometry_trust.2.weight",
         "context_logit",
         "layer_scale_logit",
     }

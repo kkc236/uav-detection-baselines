@@ -105,9 +105,12 @@ def test_forward_shape_dtype_diagnostics_and_reference_detach() -> None:
     assert diagnostics["edge_attention"].shape == (2, 300, 4)
     assert diagnostics["group_gates"].shape == (2, 300, 2, 16)
     assert diagnostics["context_reliability"].shape == (2, 300)
-    assert diagnostics["query_direction"].shape == (2, 300, 256)
-    assert diagnostics["semantic_direction"].shape == (2, 300, 256)
-    assert diagnostics["geometry_direction"].shape == (2, 300, 256)
+    assert diagnostics["geometry_features"].shape == (2, 300, 5)
+    assert diagnostics["semantic_component"].shape == (2, 300, 256)
+    assert diagnostics["geometry_component"].shape == (2, 300, 256)
+    assert diagnostics["raw_fusion"].shape == (2, 300, 256)
+    assert diagnostics["pre_saturation_rms"].shape == (2, 300)
+    assert diagnostics["post_saturation_rms"].shape == (2, 300)
     assert diagnostics["semantic_budget"].shape == (2, 300, 1)
     assert diagnostics["geometry_budget"].shape == (2, 300, 1)
     assert all(not value.requires_grad for value in diagnostics.values() if torch.is_tensor(value))
@@ -167,30 +170,28 @@ def test_invalid_writeback_roles_force_an_exact_zero_residual_without_nan() -> N
     assert all(torch.isfinite(value).all() for value in diagnostics.values() if torch.is_tensor(value))
 
 
-def test_context_is_read_only_and_abdr_projectors_are_separate() -> None:
+def test_context_is_read_only_and_legacy_fusion_is_retained() -> None:
     module = SQDASGCAdapter()
-    assert module.semantic_projector.in_features == 256
-    assert module.semantic_projector.out_features == 256
-    assert module.geometry_projector.in_features == 256
-    assert module.geometry_projector.out_features == 256
-    assert torch.count_nonzero(module.semantic_projector.bias) == 0
-    assert torch.count_nonzero(module.geometry_projector.bias) == 0
+    assert module.fusion.in_features == 512
+    assert module.fusion.out_features == 256
+    assert set(("fusion.weight", "fusion.bias")).issubset(module.state_dict())
+    assert not hasattr(module, "semantic_projector")
+    assert not hasattr(module, "geometry_projector")
+    assert not hasattr(module, "agreement_gate")
     assert module.context_projector is module.value_projector
 
 
-def test_abdr_initialization_and_group_gate_layout() -> None:
+def test_geometry_trust_initialization_and_group_gate_layout() -> None:
     module = SQDASGCAdapter()
     assert module.gate[-1].out_features == 32
     assert torch.count_nonzero(module.gate[-1].bias) == 0
     assert module.gate[0].in_features == 5 * 256 + 4
-    assert module.semantic_projector.weight.std().item() == pytest.approx(0.01, rel=0.15)
-    assert module.geometry_projector.weight.std().item() == pytest.approx(0.01, rel=0.15)
-    assert module.agreement_gate[0].in_features == 5 * 256 + 5
-    assert module.agreement_gate[-1].out_features == 2
-    assert module.agreement_gate[-1].bias.tolist() == pytest.approx(
-        [math.log(0.60 / 0.40), math.log(0.90 / 0.10)],
-        abs=1e-6,
+    assert module.geometry_trust[0].in_features == 5
+    assert module.geometry_trust[-1].out_features == 1
+    assert module.geometry_trust[-1].bias.item() == pytest.approx(
+        math.log(0.90 / 0.10), abs=1e-6
     )
+    assert module.geometry_trust[-1].weight.std().item() == pytest.approx(0.01, rel=0.35)
 
     queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
     _, diagnostics = module(queries, boxes, raw_c2)
@@ -208,8 +209,7 @@ def test_abdr_initialization_and_group_gate_layout() -> None:
 def test_residual_rms_is_bounded_by_layer_scale() -> None:
     module = SQDASGCAdapter()
     with torch.no_grad():
-        module.semantic_projector.weight.fill_(100.0)
-        module.geometry_projector.weight.fill_(100.0)
+        module.fusion.weight.fill_(100.0)
     queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
 
     _, diagnostics = module(queries, boxes, raw_c2)
@@ -218,37 +218,56 @@ def test_residual_rms_is_bounded_by_layer_scale() -> None:
     assert torch.all(diagnostics["residual_norm"] <= maximum_norm + 1e-6)
 
 
-def test_abdr_budget_initialization_and_strict_bounds() -> None:
+def test_geometry_trust_gate_starts_near_one_and_has_strict_bounds() -> None:
     module = SQDASGCAdapter()
     queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
     _, diagnostics = module(queries, boxes, raw_c2)
 
     semantic_budget = diagnostics["semantic_budget"]
     geometry_budget = diagnostics["geometry_budget"]
-    assert torch.all((semantic_budget > 0.95) & (semantic_budget < 1.0))
     assert torch.all((geometry_budget > 0.80) & (geometry_budget < 1.0))
-    assert semantic_budget.mean().item() == pytest.approx(0.98, abs=0.01)
+    assert torch.equal(semantic_budget, torch.ones_like(semantic_budget))
     assert geometry_budget.mean().item() == pytest.approx(0.98, abs=0.01)
 
 
-def test_abdr_directional_factorization_is_orthogonal() -> None:
+def test_full_counterfactual_uses_the_retained_fusion_module() -> None:
     module = SQDASGCAdapter()
     queries, boxes, raw_c2 = _inputs(batch=1, queries=5)
-    _, diagnostics = module(queries, boxes, raw_c2)
+    captured: list[torch.Tensor] = []
+    handle = module.fusion.register_forward_pre_hook(
+        lambda _module, args: captured.append(args[0].detach().clone())
+    )
+    _, diagnostics = module(queries, boxes, raw_c2, residual_mode="full")
+    handle.remove()
 
-    query_direction = diagnostics["query_direction"]
-    semantic_direction = diagnostics["semantic_direction"]
-    geometry_direction = diagnostics["geometry_direction"]
+    assert len(captured) == 1
     assert torch.allclose(
-        (geometry_direction * query_direction).sum(dim=-1),
-        torch.zeros_like(geometry_direction[..., 0]),
-        atol=2e-5,
+        diagnostics["raw_fusion"],
+        module.fusion(captured[0]),
+        atol=2e-6,
+        rtol=1e-5,
     )
-    assert torch.allclose(
-        (semantic_direction * geometry_direction).sum(dim=-1),
-        torch.zeros_like(geometry_direction[..., 0]),
-        atol=2e-5,
-    )
+
+
+def test_counterfactual_modes_are_local_and_identity_is_bitwise_exact() -> None:
+    module = SQDASGCAdapter()
+    queries, boxes, raw_c2 = _inputs(batch=1, queries=5)
+    outputs = {}
+    diagnostics = {}
+    for mode in ("full", "semantic_only", "geometry_only", "identity"):
+        outputs[mode], diagnostics[mode] = module(
+            queries,
+            boxes,
+            raw_c2,
+            residual_mode=mode,
+        )
+        assert outputs[mode].shape == queries.shape
+
+    assert torch.equal(outputs["identity"], queries)
+    assert torch.count_nonzero(diagnostics["semantic_only"]["geometry_component"]) == 0
+    assert torch.count_nonzero(diagnostics["geometry_only"]["semantic_component"]) == 0
+    with pytest.raises(ValueError, match="residual_mode"):
+        module(queries, boxes, raw_c2, residual_mode="not-a-mode")
 
 
 def test_half_precision_caps_do_not_depend_on_nextafter(

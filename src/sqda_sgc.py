@@ -125,14 +125,11 @@ class SQDASGCAdapter(nn.Module):
             nn.SiLU(),
             nn.Linear(128, 2 * gate_groups),
         )
-        self.semantic_projector = nn.Linear(dim, dim)
-        self.geometry_projector = nn.Linear(dim, dim)
-        self.agreement_query_norm = nn.LayerNorm(dim)
-        self.agreement_evidence_norm = nn.LayerNorm(dim)
-        self.agreement_gate = nn.Sequential(
-            nn.Linear(5 * dim + 5, 64),
+        self.fusion = nn.Linear(2 * dim, dim)
+        self.geometry_trust = nn.Sequential(
+            nn.Linear(5, 16),
             nn.SiLU(),
-            nn.Linear(64, 2),
+            nn.Linear(16, 1),
         )
 
         context_probability = self.config.context_init / self.config.context_cap
@@ -168,20 +165,12 @@ class SQDASGCAdapter(nn.Module):
             nn.init.zeros_(offset_head.weight)
             nn.init.zeros_(offset_head.bias)
         nn.init.zeros_(self.gate[-1].bias)
-        for projector in (self.semantic_projector, self.geometry_projector):
-            nn.init.normal_(projector.weight, mean=0.0, std=0.01)
-            nn.init.zeros_(projector.bias)
-        nn.init.normal_(self.agreement_gate[-1].weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.fusion.weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.fusion.bias)
+        nn.init.normal_(self.geometry_trust[-1].weight, mean=0.0, std=0.01)
         with torch.no_grad():
-            self.agreement_gate[-1].bias.copy_(
-                torch.tensor(
-                    [
-                        _inverse_sigmoid_probability(0.60),
-                        _inverse_sigmoid_probability(0.90),
-                    ],
-                    dtype=self.agreement_gate[-1].bias.dtype,
-                    device=self.agreement_gate[-1].bias.device,
-                )
+            self.geometry_trust[-1].bias.fill_(
+                _inverse_sigmoid_probability(0.90)
             )
 
     @staticmethod
@@ -392,8 +381,12 @@ class SQDASGCAdapter(nn.Module):
         raw_c2: Tensor,
         *,
         identity_override: bool = False,
+        residual_mode: str | None = None,
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        if not self.enabled or identity_override:
+        valid_modes = {"full", "semantic_only", "geometry_only", "identity"}
+        if residual_mode is not None and residual_mode not in valid_modes:
+            raise ValueError(f"unsupported residual_mode={residual_mode!r}")
+        if not self.enabled or identity_override or residual_mode == "identity":
             return object_queries, self._identity_diagnostics(object_queries)
         self._validate_inputs(object_queries, reference_boxes, raw_c2)
 
@@ -461,40 +454,65 @@ class SQDASGCAdapter(nn.Module):
         geometry_gate = self.expand_group_gate(group_gates[..., 1, :])
         semantic_evidence = semantic_modulation.unsqueeze(-1) * semantic_gate * semantic
         geometry_evidence = geometry_gate * geometry
-        semantic_projected = self.semantic_projector(semantic_evidence)
-        geometry_projected = self.geometry_projector(geometry_evidence)
-        query_direction = F.normalize(object_queries.detach(), dim=-1, eps=1e-6)
-        semantic_direction = (
-            semantic_projected * query_direction
-        ).sum(dim=-1, keepdim=True) * query_direction
-        geometry_direction = geometry_projected - (
-            geometry_projected * query_direction
-        ).sum(dim=-1, keepdim=True) * query_direction
-        agreement_query = self.agreement_query_norm(object_queries)
-        agreement_semantic = self.agreement_evidence_norm(semantic)
-        agreement_geometry = self.agreement_evidence_norm(geometry)
-        agreement_input = torch.cat(
+        semantic_residual = F.linear(
+            semantic_evidence,
+            self.fusion.weight[:, : self.config.hidden_dim],
+            self.fusion.bias,
+        )
+        geometry_residual = F.linear(
+            geometry_evidence,
+            self.fusion.weight[:, self.config.hidden_dim :],
+            None,
+        )
+        geometry_features = torch.stack(
             (
-                agreement_query,
-                agreement_semantic,
-                agreement_geometry,
-                agreement_semantic * agreement_geometry,
-                (agreement_semantic - agreement_geometry).abs(),
-                semantic_similarity.unsqueeze(-1),
-                geometry_similarity.unsqueeze(-1),
-                context_similarity.unsqueeze(-1),
-                log_size,
+                log_size[..., 0],
+                log_size[..., 1],
+                F.cosine_similarity(
+                    object_queries.detach(),
+                    geometry_residual.detach(),
+                    dim=-1,
+                    eps=1e-6,
+                ),
+                geometry_residual.detach().norm(dim=-1)
+                / object_queries.detach().norm(dim=-1).clamp_min(1e-6),
+                F.cosine_similarity(
+                    semantic_residual.detach(),
+                    geometry_residual.detach(),
+                    dim=-1,
+                    eps=1e-6,
+                ),
             ),
             dim=-1,
         )
-        agreement = self.agreement_gate(agreement_input).sigmoid()
-        semantic_budget = 0.95 + 0.05 * agreement[..., :1]
-        geometry_budget = 0.80 + 0.20 * agreement[..., 1:]
-        fused = semantic_budget * semantic_direction + geometry_budget * geometry_direction
+        if residual_mode == "full":
+            semantic_budget = torch.ones_like(log_size[..., :1])
+            geometry_budget = torch.ones_like(log_size[..., :1])
+            semantic_component = semantic_residual
+            geometry_component = geometry_residual
+            raw_fusion = self.fusion(torch.cat((semantic_evidence, geometry_evidence), dim=-1))
+        elif residual_mode == "semantic_only":
+            semantic_budget = torch.ones_like(log_size[..., :1])
+            geometry_budget = torch.zeros_like(log_size[..., :1])
+            semantic_component = semantic_residual
+            geometry_component = torch.zeros_like(geometry_residual)
+            raw_fusion = semantic_component
+        elif residual_mode == "geometry_only":
+            semantic_budget = torch.zeros_like(log_size[..., :1])
+            geometry_budget = torch.ones_like(log_size[..., :1])
+            semantic_component = torch.zeros_like(semantic_residual)
+            geometry_component = geometry_residual
+            raw_fusion = geometry_component
+        else:
+            semantic_budget = torch.ones_like(log_size[..., :1])
+            geometry_budget = 0.80 + 0.20 * self.geometry_trust(geometry_features).sigmoid()
+            semantic_component = semantic_residual
+            geometry_component = geometry_budget * geometry_residual
+            raw_fusion = semantic_component + geometry_component
         inverse_rms_bound = torch.rsqrt(
-            1.0 + fused.float().square().mean(dim=-1, keepdim=True)
-        ).to(dtype=fused.dtype)
-        fused = fused * inverse_rms_bound
+            1.0 + raw_fusion.float().square().mean(dim=-1, keepdim=True)
+        ).to(dtype=raw_fusion.dtype)
+        fused = raw_fusion * inverse_rms_bound
         writeback_validity = role_validity[..., :5].any(dim=-1)
         fused = fused * writeback_validity.unsqueeze(-1).to(dtype=fused.dtype)
         residual = self.layer_scale * fused
@@ -509,9 +527,12 @@ class SQDASGCAdapter(nn.Module):
             "semantic_similarity": semantic_similarity.detach(),
             "geometry_similarity": geometry_similarity.detach(),
             "context_similarity": context_similarity.detach(),
-            "query_direction": query_direction.detach(),
-            "semantic_direction": semantic_direction.detach(),
-            "geometry_direction": geometry_direction.detach(),
+            "geometry_features": geometry_features.detach(),
+            "semantic_component": semantic_component.detach(),
+            "geometry_component": geometry_component.detach(),
+            "raw_fusion": raw_fusion.detach(),
+            "pre_saturation_rms": raw_fusion.detach().float().square().mean(dim=-1).sqrt(),
+            "post_saturation_rms": fused.detach().float().square().mean(dim=-1).sqrt(),
             "semantic_budget": semantic_budget.detach(),
             "geometry_budget": geometry_budget.detach(),
             "writeback_valid": writeback_validity.detach(),

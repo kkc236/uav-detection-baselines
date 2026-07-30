@@ -26,7 +26,13 @@ def test_custom_model_exposes_native_loss_class_count() -> None:
 class _RecordingAdapter(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.recorded: tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool] | None = None
+        self.recorded: tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            bool,
+            str | None,
+        ] | None = None
 
     def forward(
         self,
@@ -35,8 +41,9 @@ class _RecordingAdapter(nn.Module):
         c2: torch.Tensor,
         *,
         identity_override: bool,
+        residual_mode: str | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        self.recorded = (queries, boxes, c2, identity_override)
+        self.recorded = (queries, boxes, c2, identity_override, residual_mode)
         return queries if identity_override else queries + 1.0, {"ok": torch.tensor(True)}
 
 
@@ -120,6 +127,23 @@ def test_adaptation_changes_only_native_query_embeddings() -> None:
     assert adapter.recorded is not None
     assert adapter.recorded[0].shape == (2, 300, 256)
     assert adapter.recorded[2] is raw_c2
+
+
+def test_adaptation_propagates_forward_local_diagnostic_mode() -> None:
+    adapter = _RecordingAdapter()
+    args, kwargs = _decoder_args(batch=1, prefix=0)
+    adapt_decoder_inputs(
+        adapter,
+        args,
+        kwargs,
+        torch.randn(1, 128, 40, 40),
+        query_count=300,
+        identity_override=False,
+        residual_mode="geometry_only",
+    )
+
+    assert adapter.recorded is not None
+    assert adapter.recorded[4] == "geometry_only"
 
 
 def test_adaptation_aligns_amp_c2_to_native_query_dtype() -> None:
