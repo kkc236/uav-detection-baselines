@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import torch
+from torch import nn
+
+from scripts.train_rtdetr_sqda_sgc import build_parser, build_settings
+from src.rtdetr_sqda_sgc import SQDASGCTrainer, build_sqda_optimizer, freeze_stock_model
+from src.sqda_sgc import SQDASGCAdapter
+
+
+class _ToyDetector(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(4, 8),
+            nn.BatchNorm1d(8),
+            nn.Linear(8, 4),
+        )
+        self.sqda_sgc = SQDASGCAdapter()
+
+
+def _parameter_ids(optimizer: torch.optim.Optimizer) -> set[int]:
+    return {
+        id(parameter)
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+
+def test_freeze_contract_and_module_only_optimizer() -> None:
+    detector = _ToyDetector()
+    freeze_stock_model(detector)
+    optimizer = build_sqda_optimizer(detector)
+
+    assert all(not parameter.requires_grad for parameter in detector.model.parameters())
+    assert all(parameter.requires_grad for parameter in detector.sqda_sgc.parameters())
+    assert _parameter_ids(optimizer) == {id(p) for p in detector.sqda_sgc.parameters()}
+    assert not (_parameter_ids(optimizer) & {id(p) for p in detector.model.parameters()})
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert all(group["lr"] == pytest.approx(1e-4) for group in optimizer.param_groups)
+    assert all(group["betas"] == (0.9, 0.999) for group in optimizer.param_groups)
+
+
+def test_optimizer_decay_groups_match_parameter_roles() -> None:
+    detector = _ToyDetector()
+    freeze_stock_model(detector)
+    optimizer = build_sqda_optimizer(detector)
+    groups = {group["param_group"]: group for group in optimizer.param_groups}
+
+    assert set(groups) == {"matrix", "no_decay"}
+    assert groups["matrix"]["weight_decay"] == pytest.approx(1e-4)
+    assert groups["no_decay"]["weight_decay"] == 0.0
+
+    matrix_ids = {id(p) for p in groups["matrix"]["params"]}
+    no_decay_ids = {id(p) for p in groups["no_decay"]["params"]}
+    for module_name, module in detector.sqda_sgc.named_modules():
+        for parameter_name, parameter in module.named_parameters(recurse=False):
+            full_name = f"{module_name}.{parameter_name}" if module_name else parameter_name
+            if isinstance(module, nn.Linear) and parameter_name == "weight":
+                assert id(parameter) in matrix_ids, full_name
+            else:
+                assert id(parameter) in no_decay_ids, full_name
+
+
+def test_one_step_changes_adapter_but_not_stock_parameters_or_buffers() -> None:
+    torch.manual_seed(17)
+    detector = _ToyDetector()
+    freeze_stock_model(detector)
+    optimizer = build_sqda_optimizer(detector)
+    stock_before = {
+        key: value.detach().clone()
+        for key, value in detector.model.state_dict().items()
+    }
+    adapter_before = {
+        key: value.detach().clone()
+        for key, value in detector.sqda_sgc.state_dict().items()
+    }
+
+    queries = torch.randn(1, 12, 256)
+    boxes = torch.rand(1, 12, 4)
+    c2 = torch.randn(1, 128, 16, 16)
+    enhanced, _ = detector.sqda_sgc(queries, boxes, c2)
+    enhanced.square().mean().backward()
+    torch.nn.utils.clip_grad_norm_(detector.sqda_sgc.parameters(), max_norm=0.1)
+    optimizer.step()
+
+    assert all(
+        torch.equal(value, stock_before[key])
+        for key, value in detector.model.state_dict().items()
+    )
+    assert any(
+        not torch.equal(value, adapter_before[key])
+        for key, value in detector.sqda_sgc.state_dict().items()
+    )
+    representative_branches = {
+        "point_offset_heads.0.weight",
+        "value_projector.0.weight",
+        "point_query.weight",
+        "edge_query.weight",
+        "reliability_projection.weight",
+        "gate.0.weight",
+        "fusion.weight",
+        "context_logit",
+        "layer_scale_logit",
+    }
+    named_parameters = dict(detector.sqda_sgc.named_parameters())
+    for name in representative_branches:
+        gradient = named_parameters[name].grad
+        assert gradient is not None, name
+        assert torch.isfinite(gradient).all(), name
+        assert torch.count_nonzero(gradient), name
+
+
+def test_trainer_optimizer_step_clips_only_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    detector = _ToyDetector()
+    freeze_stock_model(detector)
+    optimizer = build_sqda_optimizer(detector)
+    for parameter in detector.sqda_sgc.parameters():
+        parameter.grad = torch.ones_like(parameter)
+
+    trainer = SQDASGCTrainer.__new__(SQDASGCTrainer)
+    trainer.model = detector
+    trainer.optimizer = optimizer
+    trainer.scaler = torch.amp.GradScaler("cpu", enabled=False)
+    trainer.ema = None
+    recorded: dict[str, object] = {}
+    original_clip = torch.nn.utils.clip_grad_norm_
+
+    def recording_clip(parameters, max_norm, *args, **kwargs):
+        materialized = list(parameters)
+        recorded["ids"] = {id(parameter) for parameter in materialized}
+        recorded["max_norm"] = max_norm
+        return original_clip(materialized, max_norm, *args, **kwargs)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", recording_clip)
+    trainer.optimizer_step()
+
+    assert recorded["ids"] == {id(p) for p in detector.sqda_sgc.parameters()}
+    assert recorded["max_norm"] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("gate,epochs", [("g1", 3), ("g2", 10)])
+def test_formal_settings_are_frozen(
+    tmp_path: Path,
+    gate: str,
+    epochs: int,
+) -> None:
+    checkpoint = tmp_path / "baseline.pt"
+    data = tmp_path / "VisDrone.yaml"
+    args = build_parser().parse_args(
+        [
+            "--gate",
+            gate,
+            "--checkpoint",
+            str(checkpoint),
+            "--data",
+            str(data),
+            "--project",
+            str(tmp_path / "runs"),
+        ]
+    )
+    settings = build_settings(args)
+
+    assert settings["epochs"] == epochs
+    assert settings["seed"] == 0
+    assert settings["deterministic"] is True
+    assert settings["imgsz"] == 640
+    assert settings["batch"] == 8
+    assert settings["optimizer"] == "AdamW"
+    assert settings["lr0"] == pytest.approx(1e-4)
+    assert settings["lrf"] == 1.0
+    assert settings["momentum"] == 0.9
+    assert settings["weight_decay"] == pytest.approx(1e-4)
+    assert settings["warmup_epochs"] == 0.5
+    assert settings["warmup_bias_lr"] == 0.0
+    assert settings["cos_lr"] is False
+    assert settings["resume"] is False
+    assert settings["nms"] is False
+    assert settings["max_det"] == 300
+    assert settings["freeze"] == list(range(29))
+    assert settings["pretrained"] is False
+    assert settings["model"] == "rtdetr-l.yaml"
+
+
+def test_cli_does_not_expose_protocol_mutations() -> None:
+    options = {action.dest for action in build_parser()._actions}
+    assert not {
+        "epochs",
+        "seed",
+        "imgsz",
+        "batch",
+        "optimizer",
+        "lr0",
+        "resume",
+        "amp",
+        "max_det",
+    }.intersection(options)

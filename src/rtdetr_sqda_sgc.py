@@ -6,7 +6,10 @@ from typing import Any
 
 import torch
 from torch import Tensor, nn
+from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
+from ultralytics.utils import RANK
+from ultralytics.utils.torch_utils import unwrap_model
 
 from src.sqda_sgc import SQDASGCAdapter
 
@@ -230,3 +233,185 @@ def load_mature_baseline(
         "source_key": source_key,
         "stock_tensors": len(source_state),
     }
+
+
+def freeze_stock_model(model: nn.Module) -> None:
+    """Freeze every stock detector parameter while leaving SQDA-SGC trainable."""
+    stock = getattr(model, "model", None)
+    adapter = getattr(model, "sqda_sgc", None)
+    if not isinstance(stock, nn.Module) or not isinstance(adapter, SQDASGCAdapter):
+        raise TypeError("SQDA-SGC training requires '.model' stock layers and a '.sqda_sgc' adapter")
+    for parameter in stock.parameters():
+        parameter.requires_grad_(False)
+    for parameter in adapter.parameters():
+        parameter.requires_grad_(True)
+    for module in stock.modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            module.eval()
+
+
+def build_sqda_optimizer(model: nn.Module) -> torch.optim.AdamW:
+    """Build the exact module-only optimizer without Ultralytics decay scaling."""
+    unwrapped = unwrap_model(model)
+    adapter = getattr(unwrapped, "sqda_sgc", None)
+    if not isinstance(adapter, SQDASGCAdapter):
+        raise TypeError("optimizer target does not expose an SQDASGCAdapter")
+
+    matrix_parameters: list[nn.Parameter] = []
+    no_decay_parameters: list[nn.Parameter] = []
+    seen: set[int] = set()
+    for _module_name, module in adapter.named_modules():
+        for parameter_name, parameter in module.named_parameters(recurse=False):
+            if not parameter.requires_grad:
+                raise RuntimeError("an SQDA-SGC parameter was unexpectedly frozen")
+            if id(parameter) in seen:
+                raise RuntimeError("an SQDA-SGC parameter appeared in multiple optimizer groups")
+            seen.add(id(parameter))
+            target = (
+                matrix_parameters
+                if isinstance(module, nn.Linear) and parameter_name == "weight"
+                else no_decay_parameters
+            )
+            target.append(parameter)
+
+    expected = {id(parameter) for parameter in adapter.parameters()}
+    if seen != expected:
+        raise RuntimeError("optimizer grouping did not cover every SQDA-SGC parameter exactly once")
+    groups = [
+        {
+            "params": matrix_parameters,
+            "lr": 1e-4,
+            "betas": (0.9, 0.999),
+            "weight_decay": 1e-4,
+            "param_group": "matrix",
+        },
+        {
+            "params": no_decay_parameters,
+            "lr": 1e-4,
+            "betas": (0.9, 0.999),
+            "weight_decay": 0.0,
+            "param_group": "no_decay",
+        },
+    ]
+    return torch.optim.AdamW(groups)
+
+
+def assert_training_contract(model: nn.Module) -> None:
+    unwrapped = unwrap_model(model)
+    stock = getattr(unwrapped, "model", None)
+    adapter = getattr(unwrapped, "sqda_sgc", None)
+    if not isinstance(stock, nn.Module) or not isinstance(adapter, SQDASGCAdapter):
+        raise RuntimeError("model does not satisfy the SQDA-SGC training structure")
+    trainable_stock = [name for name, parameter in stock.named_parameters() if parameter.requires_grad]
+    frozen_adapter = [name for name, parameter in adapter.named_parameters() if not parameter.requires_grad]
+    if trainable_stock or frozen_adapter:
+        raise RuntimeError(
+            f"freeze contract violated: trainable_stock={trainable_stock[:5]}, "
+            f"frozen_adapter={frozen_adapter[:5]}"
+        )
+
+
+class SQDASGCTrainer(RTDETRTrainer):
+    """Frozen-stock RT-DETR trainer with an exact SQDA-SGC-only AdamW optimizer."""
+
+    def __init__(
+        self,
+        *args,
+        baseline_checkpoint: str | Path,
+        baseline_sha256: str = BASELINE_SHA256,
+        manifest_path: str | Path | None = None,
+        **kwargs,
+    ) -> None:
+        self.baseline_checkpoint = Path(baseline_checkpoint).expanduser().resolve()
+        self.baseline_sha256 = baseline_sha256.upper()
+        self.manifest_path = Path(manifest_path).resolve() if manifest_path else None
+        self.baseline_metadata: dict[str, Any] | None = None
+        self.last_module_gradient_norm: float | None = None
+        super().__init__(*args, **kwargs)
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | nn.Module | None = None,
+        verbose: bool = True,
+    ) -> SQDASGCDetectionModel:
+        if weights is not None:
+            raise RuntimeError("SQDA-SGC G1/G2 must start fresh from the immutable mature baseline")
+        model = SQDASGCDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if len(model.model) != 29:
+            raise RuntimeError(f"expected 29 stock RT-DETR layers, got {len(model.model)}")
+        self.baseline_metadata = load_mature_baseline(
+            model,
+            self.baseline_checkpoint,
+            expected_sha256=self.baseline_sha256,
+        )
+        freeze_stock_model(model)
+        self.args.freeze = list(range(len(model.model)))
+        self._update_manifest_with_model(model)
+        return model
+
+    def build_optimizer(
+        self,
+        model: nn.Module,
+        name: str = "AdamW",
+        lr: float = 1e-4,
+        momentum: float = 0.9,
+        decay: float = 1e-4,
+        iterations: float = 1e5,
+    ) -> torch.optim.AdamW:
+        del iterations
+        if name != "AdamW" or lr != 1e-4 or momentum != 0.9:
+            raise RuntimeError(
+                f"optimizer protocol changed: name={name}, lr={lr}, momentum={momentum}"
+            )
+        assert_training_contract(model)
+        return build_sqda_optimizer(model)
+
+    def optimizer_step(self) -> None:
+        self.scaler.unscale_(self.optimizer)
+        adapter = unwrap_model(self.model).sqda_sgc
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            adapter.parameters(),
+            max_norm=0.1,
+        )
+        self.last_module_gradient_norm = float(gradient_norm.detach().cpu())
+        if not torch.isfinite(gradient_norm):
+            raise RuntimeError("SQDA-SGC gradient norm became non-finite")
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad()
+        if self.ema:
+            self.ema.update(self.model)
+
+    def _update_manifest_with_model(self, model: SQDASGCDetectionModel) -> None:
+        if self.manifest_path is None:
+            return
+        import json
+
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["baseline"] = self.baseline_metadata
+        manifest["model"] = {
+            "stock_parameters": sum(parameter.numel() for parameter in model.model.parameters()),
+            "adapter_parameters": sum(parameter.numel() for parameter in model.sqda_sgc.parameters()),
+            "trainable_keys": [
+                f"sqda_sgc.{name}"
+                for name, parameter in model.sqda_sgc.named_parameters()
+                if parameter.requires_grad
+            ],
+            "frozen_stock_keys": [
+                f"model.{name}"
+                for name, parameter in model.model.named_parameters()
+                if not parameter.requires_grad
+            ],
+        }
+        temporary = self.manifest_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.replace(self.manifest_path)
