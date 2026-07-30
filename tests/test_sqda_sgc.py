@@ -186,6 +186,22 @@ def test_fusion_initialization_and_gate_layout() -> None:
         assert torch.all(values == values[..., :1])
 
 
+def test_half_precision_caps_do_not_depend_on_nextafter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = SQDASGCAdapter().half()
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("nextafter is unavailable for this device/dtype")
+
+    monkeypatch.setattr(torch, "nextafter", unavailable)
+
+    assert module.context_strength.dtype == torch.float16
+    assert 0 < module.context_strength < module.config.context_cap
+    assert module.layer_scale.dtype == torch.float16
+    assert 0 < module.layer_scale < module.config.residual_cap
+
+
 @pytest.mark.parametrize("enabled,identity_override", [(False, False), (True, True)])
 def test_identity_modes_are_bitwise_exact(enabled: bool, identity_override: bool) -> None:
     module = SQDASGCAdapter(enabled=enabled)

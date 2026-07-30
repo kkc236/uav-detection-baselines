@@ -145,13 +145,13 @@ class SQDASGCAdapter(nn.Module):
     @property
     def context_strength(self) -> Tensor:
         cap = self.context_logit.new_tensor(self.config.context_cap)
-        strict_cap = torch.nextafter(cap, cap.new_zeros(()))
+        strict_cap = cap * (1.0 - torch.finfo(cap.dtype).eps)
         return strict_cap * self.context_logit.sigmoid()
 
     @property
     def layer_scale(self) -> Tensor:
         cap = self.layer_scale_logit.new_tensor(self.config.residual_cap)
-        strict_cap = torch.nextafter(cap, cap.new_zeros(()))
+        strict_cap = cap * (1.0 - torch.finfo(cap.dtype).eps)
         return strict_cap * self.layer_scale_logit.sigmoid()
 
     def reset_parameters(self) -> None:
