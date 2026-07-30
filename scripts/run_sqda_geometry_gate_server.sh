@@ -3,7 +3,7 @@ set -euo pipefail
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export PYTHONHASHSEED=0
 
-gate="${1:?usage: run_sqda_geometry_gate_server.sh g1|g2|formal [token-file] [resume-from]}"
+gate="${1:?usage: run_sqda_geometry_gate_server.sh g1|g2|g2r1|formal [token-file] [resume-from]}"
 
 root="/root/data/uav"
 repo="$root/sqda-sgc"
@@ -19,9 +19,10 @@ case "$gate" in
   g1) run_name="sqda-geometry-smgt-g1-seed0-3ep"; sync_retain=3 ;;
   # G2 inventory needs epoch0 plus every epoch checkpoint to reject initial/best payloads.
   g2) run_name="sqda-geometry-smgt-g2-seed0-10ep"; sync_retain=10 ;;
+  g2r1) run_name="sqda-geometry-smgt-g2r1-seed0-10ep"; sync_retain=10 ;;
   formal) run_name="sqda-geometry-smgt-formal-seed0-100ep"; sync_retain=3 ;;
   *)
-    echo "gate must be g1, g2, or formal" >&2
+    echo "gate must be g1, g2, g2r1, or formal" >&2
     exit 2
     ;;
 esac
@@ -39,7 +40,7 @@ if [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(s
   echo "geometry G1 was not admitted by retained-G2 evidence; no training started." >&2
   exit 4
 fi
-if [[ "$gate" == "g2" ]]; then
+if [[ "$gate" == "g2" || "$gate" == "g2r1" ]]; then
   g1_inventory="$project/sqda-geometry-smgt-g1-seed0-3ep/evaluation-inventory/candidate-inventory.json"
   if [[ ! -f "$g1_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("g2_eligible_checkpoint"))).lower())' "$g1_inventory")" != "true" ]]; then
     echo "an SMGT G1 checkpoint within the bounded G2 feasibility tolerance is required before G2." >&2
@@ -47,7 +48,7 @@ if [[ "$gate" == "g2" ]]; then
   fi
 fi
 if [[ "$gate" == "formal" ]]; then
-  g2_inventory="$project/sqda-geometry-smgt-g2-seed0-10ep/evaluation-inventory/candidate-inventory.json"
+  g2_inventory="$project/sqda-geometry-smgt-g2r1-seed0-10ep/evaluation-inventory/candidate-inventory.json"
   if [[ ! -f "$g2_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("selected_checkpoint"))).lower())' "$g2_inventory")" != "true" ]]; then
     echo "a strict SMGT G2 selected checkpoint is required before formal training." >&2
     exit 5

@@ -11,7 +11,8 @@ it only encodes the already fixed protocol and its advancement condition.
 
 The existing `g1`/`g2` training CLI gains a `formal` stage with its own fresh
 run namespace and a fixed 100-epoch setting. The existing server launcher
-accepts `formal` only when the completed G2 inventory contains a non-empty
+accepts `formal` only when the completed, fully retained G2 retry inventory
+(`g2r1`) contains a non-empty
 `selected_checkpoint`; that field is written only by the strict all-metrics
 decision, whereas `g2_eligible_checkpoint` is deliberately insufficient.
 

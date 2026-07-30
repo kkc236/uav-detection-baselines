@@ -24,9 +24,10 @@ from ultralytics.utils.torch_utils import unwrap_model
 RUN_NAMES = {
     "g1": "sqda-geometry-smgt-g1-seed0-3ep",
     "g2": "sqda-geometry-smgt-g2-seed0-10ep",
+    "g2r1": "sqda-geometry-smgt-g2r1-seed0-10ep",
     "formal": "sqda-geometry-smgt-formal-seed0-100ep",
 }
-STAGE_EPOCHS = {"g1": 3, "g2": 10, "formal": 100}
+STAGE_EPOCHS = {"g1": 3, "g2": 10, "g2r1": 10, "formal": 100}
 
 
 def build_parser() -> argparse.ArgumentParser:
