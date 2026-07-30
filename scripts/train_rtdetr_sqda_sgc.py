@@ -153,6 +153,7 @@ def prepare_manifest(
     inherited_artifacts = {
         "g0-equivalence.json": args.project.expanduser().resolve() / "g0-equivalence.json",
         "top300-diagnostic.json": args.project.expanduser().resolve() / "top300-diagnostic.json",
+        "cuda-smoke.json": args.project.expanduser().resolve() / "cuda-smoke.json",
         "input-preflight.json": args.project.expanduser().resolve() / "input-preflight.json",
     }
     for name, source in inherited_artifacts.items():

@@ -34,6 +34,7 @@ LIGHTWEIGHT_ARTIFACTS = (
     "sqda_sgc_diagnostics.jsonl",
     "g0-equivalence.json",
     "top300-diagnostic.json",
+    "cuda-smoke.json",
     "input-preflight.json",
     "g1-console.log",
     "g2-console.log",
