@@ -14,7 +14,7 @@ def test_smgt_runs_use_a_fresh_namespace() -> None:
     }
 
 
-def test_smgt_runner_requires_the_inventory_selected_checkpoint_for_g2() -> None:
+def test_smgt_runner_requires_the_inventory_g2_feasibility_checkpoint() -> None:
     runner = (
         Path(__file__).resolve().parents[1]
         / "scripts"
@@ -23,7 +23,7 @@ def test_smgt_runner_requires_the_inventory_selected_checkpoint_for_g2() -> None
 
     assert "sqda-geometry-smgt-" in runner
     assert "candidate-inventory.json" in runner
-    assert "selected_checkpoint" in runner
+    assert "g2_eligible_checkpoint" in runner
     assert "smgt-${gate}-github-sync-status.json" in runner
     assert "sqda-smgt-${gate}-live" in runner
 

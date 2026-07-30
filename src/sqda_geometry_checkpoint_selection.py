@@ -93,3 +93,14 @@ def select_earliest_passing_candidate(
         if decision.get("passed") is True:
             return path
     return None
+
+
+def select_earliest_feasible_candidate(
+    evaluations: Sequence[tuple[Path, Mapping[str, Any]]],
+) -> Path | None:
+    """Return the earliest candidate allowed into the independent G2 check."""
+    for path, decision in evaluations:
+        feasibility = decision.get("g2_feasibility")
+        if isinstance(feasibility, Mapping) and feasibility.get("eligible") is True:
+            return path
+    return None

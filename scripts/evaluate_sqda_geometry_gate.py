@@ -27,11 +27,12 @@ from src.rtdetr_sqda_sgc import (
     sha256_file,
 )
 from src.sqda_geometry_checkpoint_selection import (
+    select_earliest_feasible_candidate,
     select_earliest_passing_candidate,
     select_trainable_candidates,
 )
 from src.sqda_error_audit import precision_recall_f1_curve, summarize_detection_errors
-from src.sqda_geometry_gate_decision import decide_g1_result
+from src.sqda_geometry_gate_decision import decide_g1_result, decide_g2_feasibility
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -153,6 +154,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         "trained_adapter": trained_metadata,
     }
     decision = decide_g1_result(full, candidate)
+    decision["g2_feasibility"] = decide_g2_feasibility(full, candidate)
     decision.update(
         {
             "candidate_checkpoint": str(candidate_checkpoint),
@@ -183,6 +185,7 @@ def run_checkpoint_inventory(args: argparse.Namespace) -> dict[str, Any]:
         decision = run_evaluation(child_args)
         records.append((checkpoint, decision))
     selected = select_earliest_passing_candidate(records)
+    g2_selected = select_earliest_feasible_candidate(records)
     summary = {
         "schema": 1,
         "training_signal": False,
@@ -192,12 +195,14 @@ def run_checkpoint_inventory(args: argparse.Namespace) -> dict[str, Any]:
                 "checkpoint": str(checkpoint),
                 "output": str(output / checkpoint.stem),
                 "passed": bool(decision["passed"]),
+                "g2_feasibility": decision["g2_feasibility"],
                 "criteria": decision["criteria"],
                 "deltas": decision["deltas"],
             }
             for checkpoint, decision in records
         ],
         "selected_checkpoint": str(selected) if selected is not None else None,
+        "g2_eligible_checkpoint": str(g2_selected) if g2_selected is not None else None,
     }
     _write_json(output / "candidate-inventory.json", summary)
     return summary

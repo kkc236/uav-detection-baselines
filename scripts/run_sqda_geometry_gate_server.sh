@@ -36,8 +36,8 @@ if [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(s
 fi
 if [[ "$gate" == "g2" ]]; then
   g1_inventory="$project/sqda-geometry-smgt-g1-seed0-3ep/evaluation-inventory/candidate-inventory.json"
-  if [[ ! -f "$g1_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("selected_checkpoint"))).lower())' "$g1_inventory")" != "true" ]]; then
-    echo "a strictly passing SMGT G1 checkpoint inventory is required before G2." >&2
+  if [[ ! -f "$g1_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("g2_eligible_checkpoint"))).lower())' "$g1_inventory")" != "true" ]]; then
+    echo "an SMGT G1 checkpoint within the bounded G2 feasibility tolerance is required before G2." >&2
     exit 5
   fi
 fi

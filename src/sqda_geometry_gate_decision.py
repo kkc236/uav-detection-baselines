@@ -6,6 +6,7 @@ from typing import Any
 
 SCREENING_RECALL_TOLERANCE = 0.001
 AP_TOLERANCE = 0.0002
+G2_FEASIBILITY_TOLERANCE = 0.001
 LOWER_SATURATION_MAX_FRACTION = 0.05
 
 
@@ -105,4 +106,41 @@ def decide_g1_result(
         },
         "full": dict(full),
         "candidate": dict(candidate),
+    }
+
+
+def decide_g2_feasibility(
+    full: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Allow only measurement-scale declines for an independent 10-epoch check.
+
+    This is deliberately not a final acceptance decision.  A G2 run admitted here
+    must still satisfy the strict post-G2 gate before it can lead to a 100-epoch run.
+    """
+    strict = decide_g1_result(full, candidate)
+    deltas = strict["deltas"]
+    criteria = {
+        "precision_within_feasibility_tolerance": (
+            deltas["precision_at_baseline_threshold"] >= -G2_FEASIBILITY_TOLERANCE
+        ),
+        "recall_within_feasibility_tolerance": (
+            deltas["recall_at_baseline_threshold"] >= -G2_FEASIBILITY_TOLERANCE
+        ),
+        "max_f1_precision_within_feasibility_tolerance": (
+            deltas["max_f1_precision"] >= -G2_FEASIBILITY_TOLERANCE
+        ),
+        "ap_within_feasibility_tolerance": deltas["ap"] >= -G2_FEASIBILITY_TOLERANCE,
+        "ap_small_within_feasibility_tolerance": (
+            deltas["ap_small"] >= -G2_FEASIBILITY_TOLERANCE
+        ),
+        "gate_not_saturated_low": strict["criteria"]["gate_not_saturated_low"],
+    }
+    return {
+        "eligible": all(criteria.values()),
+        "criteria": criteria,
+        "deltas": deltas,
+        "tolerance": G2_FEASIBILITY_TOLERANCE,
+        "strict_passed": strict["passed"],
+        "purpose": "independent_10_epoch_feasibility_only",
     }

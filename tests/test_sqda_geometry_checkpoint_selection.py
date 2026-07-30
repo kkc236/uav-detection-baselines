@@ -7,6 +7,7 @@ from torch import nn
 
 from src.sqda_geometry_checkpoint_selection import (
     select_earliest_passing_candidate,
+    select_earliest_feasible_candidate,
     select_trainable_candidates,
 )
 from src.sqda_sgc import SQDASGCAdapter
@@ -47,3 +48,17 @@ def test_checkpoint_inventory_selects_the_earliest_strictly_passing_snapshot(
         [(epoch1, {"passed": False}), (epoch2, {"passed": True})]
     ) == epoch2
     assert select_earliest_passing_candidate([(epoch1, {"passed": False})]) is None
+
+
+def test_checkpoint_inventory_selects_a_bounded_decline_for_g2_feasibility(
+    tmp_path: Path,
+) -> None:
+    epoch1 = tmp_path / "epoch1.pt"
+    epoch2 = tmp_path / "epoch2.pt"
+
+    assert select_earliest_feasible_candidate(
+        [
+            (epoch1, {"passed": False, "g2_feasibility": {"eligible": False}}),
+            (epoch2, {"passed": False, "g2_feasibility": {"eligible": True}}),
+        ]
+    ) == epoch2
