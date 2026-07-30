@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 495849252,
-    "asset_name": "sqda-smgt-g2r1-epoch-0002.pt",
-    "bytes": 71496891,
-    "sha256": "5cab849555db21b0fa359ade5471dcff1b16589e8dd09a0b29a8dd70c4ecf6cb"
+    "asset_id": 495855363,
+    "asset_name": "sqda-smgt-g2r1-epoch-0003.pt",
+    "bytes": 71497019,
+    "sha256": "e68a17c45fc57adddc2829e11979f2984f4ae88021671eab4ac7b4f5ae9a4d47"
   },
-  "completed_epoch": 2,
-  "published_at": "2026-07-30T20:50:09.340065+00:00",
+  "completed_epoch": 3,
+  "published_at": "2026-07-30T20:56:46.352594+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/sqda-smgt-g2r1-live",
   "run_name": "sqda-geometry-smgt-g2r1-seed0-10ep"
 }
