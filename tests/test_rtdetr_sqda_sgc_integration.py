@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from torch import nn
 from src.rtdetr_sqda_sgc import (
     SQDASGCDetectionModel,
     adapt_decoder_inputs,
+    load_inherited_sqda_adapter,
     load_mature_baseline,
     sha256_file,
 )
@@ -73,6 +75,39 @@ class _TinyDetection(nn.Module):
     def __init__(self, out_features: int = 4) -> None:
         super().__init__()
         self.model = nn.Sequential(nn.Linear(3, out_features))
+
+
+class _StateOnlyAdapter(nn.Module):
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        super().__init__()
+        self._state = OrderedDict(
+            (key, value.detach().clone()) for key, value in state.items()
+        )
+
+    def state_dict(self, *args, **kwargs):
+        del args, kwargs
+        return OrderedDict((key, value.detach().clone()) for key, value in self._state.items())
+
+
+class _TinySQDADetector(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Sequential(nn.Linear(3, 4))
+        self.sqda_sgc = SQDASGCAdapter()
+
+
+class _OldSQDADetector(nn.Module):
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        super().__init__()
+        self.sqda_sgc = _StateOnlyAdapter(state)
+
+
+def _old_g2_state(target: _TinySQDADetector) -> dict[str, torch.Tensor]:
+    return {
+        key: value.detach().clone()
+        for key, value in target.sqda_sgc.state_dict().items()
+        if not key.startswith("geometry_trust.")
+    }
 
 
 def _decoder_args(
@@ -289,3 +324,62 @@ def test_strict_mature_baseline_rejects_stock_shape_mismatch(tmp_path: Path) -> 
     torch.save({"model": _TinyDetection(out_features=5)}, checkpoint)
     with pytest.raises(RuntimeError, match="stock state"):
         load_mature_baseline(_TinyDetection(out_features=4), checkpoint)
+
+
+def test_inherited_adapter_loader_allows_only_new_geometry_trust_keys(tmp_path: Path) -> None:
+    torch.manual_seed(29)
+    target = _TinySQDADetector()
+    old_state = _old_g2_state(target)
+    checkpoint = tmp_path / "g2.pt"
+    torch.save({"ema": _OldSQDADetector(old_state)}, checkpoint)
+    expected_sha = sha256_file(checkpoint)
+    geometry_before = {
+        key: value.detach().clone()
+        for key, value in target.sqda_sgc.state_dict().items()
+        if key.startswith("geometry_trust.")
+    }
+
+    metadata = load_inherited_sqda_adapter(
+        target,
+        checkpoint,
+        expected_sha256=expected_sha,
+    )
+
+    assert metadata["sha256"] == expected_sha
+    assert metadata["source_key"] == "ema"
+    assert metadata["inherited_tensors"] == len(old_state)
+    target_state = target.sqda_sgc.state_dict()
+    assert all(torch.equal(target_state[key], value) for key, value in old_state.items())
+    assert all(torch.equal(target_state[key], value) for key, value in geometry_before.items())
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda state: state.__setitem__("unexpected.weight", torch.zeros(1)),
+            "unexpected",
+        ),
+        (
+            lambda state: state.pop("fusion.bias"),
+            "missing",
+        ),
+        (
+            lambda state: state.__setitem__("fusion.weight", torch.zeros(1, 1)),
+            "shape_mismatch",
+        ),
+    ],
+)
+def test_inherited_adapter_loader_rejects_any_non_gate_difference(
+    tmp_path: Path,
+    mutate,
+    message: str,
+) -> None:
+    target = _TinySQDADetector()
+    old_state = _old_g2_state(target)
+    mutate(old_state)
+    checkpoint = tmp_path / "bad-g2.pt"
+    torch.save({"model": _OldSQDADetector(old_state)}, checkpoint)
+
+    with pytest.raises(RuntimeError, match=message):
+        load_inherited_sqda_adapter(target, checkpoint)

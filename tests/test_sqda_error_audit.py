@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from src.sqda_error_audit import compare_error_summaries, summarize_detection_errors
+from src.sqda_error_audit import (
+    compare_error_summaries,
+    precision_recall_f1_curve,
+    summarize_detection_errors,
+)
 
 
 def _dataset(annotations: list[dict]) -> dict:
@@ -130,6 +134,43 @@ def test_error_audit_delta_never_converts_missing_means_to_numbers() -> None:
     assert delta["small"]["fn"] == -1
     assert delta["small"]["mean_tp_score"] == pytest.approx(0.1)
     assert delta["small"]["mean_fp_score"] is None
+
+
+def test_pr_curve_is_class_aware_and_selects_baseline_max_f1_threshold() -> None:
+    dataset = _dataset(
+        [
+            {
+                "id": 1,
+                "image_id": "frame",
+                "category_id": 1,
+                "bbox": [10.0, 10.0, 16.0, 16.0],
+                "area": 16.0**2,
+            }
+        ]
+    )
+    curve = precision_recall_f1_curve(
+        dataset,
+        [
+            {
+                "image_id": "frame",
+                "category_id": 2,
+                "bbox": [10.0, 10.0, 16.0, 16.0],
+                "score": 0.95,
+            },
+            {
+                "image_id": "frame",
+                "category_id": 1,
+                "bbox": [10.0, 10.0, 16.0, 16.0],
+                "score": 0.90,
+            },
+        ],
+    )
+
+    assert curve["ground_truth"] == 1
+    assert curve["points"][0]["precision"] == 0.0
+    assert curve["points"][1]["recall"] == 1.0
+    assert curve["best_f1"]["confidence_threshold"] == pytest.approx(0.90)
+    assert curve["best_f1"]["f1"] == pytest.approx(2.0 / 3.0)
 
 
 def test_error_audit_cli_writes_fixed_threshold_protocol_and_delta(tmp_path, monkeypatch) -> None:

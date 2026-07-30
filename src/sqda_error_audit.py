@@ -206,3 +206,88 @@ def compare_error_summaries(
                 else float(after_value) - float(before_value)
             )
     return result
+
+
+def precision_recall_f1_curve(
+    dataset: Mapping[str, Any],
+    predictions: Sequence[Mapping[str, Any]],
+    *,
+    iou_threshold: float = 0.50,
+) -> dict[str, Any]:
+    """Build the complete class-aware greedy P/R/F1 curve without threshold tuning."""
+    if not 0.0 <= iou_threshold <= 1.0:
+        raise ValueError("iou_threshold must lie in [0,1]")
+    image_ids = {image["id"] for image in dataset.get("images", [])}
+    category_ids = {category["id"] for category in dataset.get("categories", [])}
+    if not image_ids or not category_ids:
+        raise ValueError("dataset must contain images and categories")
+    ground_truth: dict[tuple[Any, Any], list[dict[str, Any]]] = defaultdict(list)
+    for annotation in dataset.get("annotations", []):
+        image_id, category_id = annotation.get("image_id"), annotation.get("category_id")
+        if image_id not in image_ids or category_id not in category_ids:
+            raise ValueError("annotation references an unknown image or category")
+        box = annotation.get("bbox")
+        if not isinstance(box, Sequence) or isinstance(box, (str, bytes)):
+            raise ValueError("annotation bbox must be a numeric sequence")
+        ground_truth[(image_id, category_id)].append(
+            {"bbox": [float(value) for value in box], "matched": False}
+        )
+
+    ranked_predictions = []
+    for prediction in predictions:
+        image_id, category_id, box, score = _validate_prediction(prediction)
+        if image_id not in image_ids or category_id not in category_ids:
+            raise ValueError("prediction references an unknown image or category")
+        ranked_predictions.append((score, image_id, category_id, box))
+    ranked_predictions.sort(key=lambda value: value[0], reverse=True)
+
+    true_positives = 0
+    false_positives = 0
+    total_ground_truth = sum(len(targets) for targets in ground_truth.values())
+    points: list[dict[str, float | int]] = []
+    for score, image_id, category_id, box in ranked_predictions:
+        targets = ground_truth[(image_id, category_id)]
+        best_index, best_iou = None, -1.0
+        for index, target in enumerate(targets):
+            if target["matched"]:
+                continue
+            iou = _iou_xywh(box, target["bbox"])
+            if iou > best_iou:
+                best_index, best_iou = index, iou
+        if best_index is not None and best_iou >= iou_threshold:
+            targets[best_index]["matched"] = True
+            true_positives += 1
+        else:
+            false_positives += 1
+        precision = true_positives / (true_positives + false_positives)
+        recall = true_positives / total_ground_truth if total_ground_truth else 0.0
+        f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+        points.append(
+            {
+                "confidence_threshold": score,
+                "tp": true_positives,
+                "fp": false_positives,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+            }
+        )
+    best = max(
+        points,
+        key=lambda point: (float(point["f1"]), float(point["confidence_threshold"])),
+        default={
+            "confidence_threshold": None,
+            "tp": 0,
+            "fp": 0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+        },
+    )
+    return {
+        "iou_threshold": iou_threshold,
+        "matching": "class-aware_score-descending_greedy",
+        "ground_truth": total_ground_truth,
+        "points": points,
+        "best_f1": best,
+    }
