@@ -244,6 +244,32 @@ def test_smgt_geometry_budget_is_monotone_in_reference_scale() -> None:
     assert budget[0, 1, 0] >= budget[0, 0, 0]
 
 
+def test_smgt_gates_only_the_semantic_orthogonal_geometry_component() -> None:
+    module = SQDASGCAdapter()
+    semantic = torch.tensor([[[3.0, 4.0, 0.0, 0.0]]])
+    geometry = torch.tensor([[[2.0, 0.0, 5.0, 0.0]]])
+    budget = torch.tensor([[[0.9]]])
+
+    parallel, orthogonal = module.split_geometry_residual(semantic, geometry)
+    proposal = semantic + parallel + budget * orthogonal
+    legacy = semantic + budget * geometry
+
+    assert torch.allclose((semantic * orthogonal).sum(dim=-1), torch.zeros(1, 1))
+    assert torch.allclose(parallel + orthogonal, geometry)
+    assert torch.allclose(proposal, legacy + (1.0 - budget) * parallel)
+
+
+def test_smgt_geometry_decomposition_keeps_geometry_when_semantic_is_zero() -> None:
+    module = SQDASGCAdapter()
+    semantic = torch.zeros(1, 1, 4)
+    geometry = torch.tensor([[[2.0, 0.0, 5.0, 0.0]]])
+
+    parallel, orthogonal = module.split_geometry_residual(semantic, geometry)
+
+    assert torch.equal(parallel, torch.zeros_like(geometry))
+    assert torch.equal(orthogonal, geometry)
+
+
 def test_full_counterfactual_uses_the_retained_fusion_module() -> None:
     module = SQDASGCAdapter()
     queries, boxes, raw_c2 = _inputs(batch=1, queries=5)

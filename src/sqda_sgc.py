@@ -204,6 +204,26 @@ class SQDASGCAdapter(nn.Module):
         budget, _scale = self.geometry_trust(agreement, log_size)
         return budget
 
+    @staticmethod
+    def split_geometry_residual(
+        semantic_residual: Tensor,
+        geometry_residual: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Split geometry evidence into semantic-aligned and semantic-orthogonal parts."""
+        if semantic_residual.shape != geometry_residual.shape:
+            raise ValueError("semantic and geometry residuals must have identical shapes")
+        semantic_float = semantic_residual.float()
+        geometry_float = geometry_residual.float()
+        semantic_energy = semantic_float.square().sum(dim=-1, keepdim=True)
+        projection = (semantic_float * geometry_float).sum(dim=-1, keepdim=True)
+        coefficient = torch.where(
+            semantic_energy > 1e-6,
+            projection / semantic_energy.clamp_min(1e-6),
+            torch.zeros_like(projection),
+        ).to(dtype=semantic_residual.dtype)
+        parallel = coefficient * semantic_residual
+        return parallel, geometry_residual - parallel
+
     def reset_parameters(self) -> None:
         nn.init.normal_(self.role_bias, mean=0.0, std=0.01)
         for offset_head in self.point_offset_heads:
@@ -526,6 +546,10 @@ class SQDASGCAdapter(nn.Module):
             ),
             dim=-1,
         )
+        geometry_parallel, geometry_orthogonal = self.split_geometry_residual(
+            semantic_residual,
+            geometry_residual,
+        )
         geometry_scale_coordinate = torch.zeros_like(log_size[..., :1])
         if residual_mode == "full":
             semantic_budget = torch.ones_like(log_size[..., :1])
@@ -552,7 +576,9 @@ class SQDASGCAdapter(nn.Module):
                 log_size,
             )
             semantic_component = semantic_residual
-            geometry_component = geometry_budget * geometry_residual
+            geometry_component = (
+                geometry_parallel + geometry_budget * geometry_orthogonal
+            )
             raw_fusion = semantic_component + geometry_component
         inverse_rms_bound = torch.rsqrt(
             1.0 + raw_fusion.float().square().mean(dim=-1, keepdim=True)
@@ -576,6 +602,8 @@ class SQDASGCAdapter(nn.Module):
             "geometry_scale_coordinate": geometry_scale_coordinate.detach(),
             "semantic_component": semantic_component.detach(),
             "geometry_component": geometry_component.detach(),
+            "geometry_parallel_component": geometry_parallel.detach(),
+            "geometry_orthogonal_component": geometry_orthogonal.detach(),
             "raw_fusion": raw_fusion.detach(),
             "pre_saturation_rms": raw_fusion.detach().float().square().mean(dim=-1).sqrt(),
             "post_saturation_rms": fused.detach().float().square().mean(dim=-1).sqrt(),

@@ -26,8 +26,19 @@ RUN_NAMES = {
     "g2": "sqda-geometry-smgt-g2-seed0-10ep",
     "g2r1": "sqda-geometry-smgt-g2r1-seed0-10ep",
     "formal": "sqda-geometry-smgt-formal-seed0-100ep",
+    "g1r": "sqda-geometry-smogt-g1r-seed0-3ep",
+    "g2r2": "sqda-geometry-smogt-g2r2-seed0-10ep",
+    "formalr": "sqda-geometry-smogt-formalr-seed0-100ep",
 }
-STAGE_EPOCHS = {"g1": 3, "g2": 10, "g2r1": 10, "formal": 100}
+STAGE_EPOCHS = {
+    "g1": 3,
+    "g2": 10,
+    "g2r1": 10,
+    "formal": 100,
+    "g1r": 3,
+    "g2r2": 10,
+    "formalr": 100,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -229,6 +240,8 @@ def record_epoch_diagnostics(trainer: SQDAGeometryTrustTrainer) -> None:
     for key in (
         "geometry_budget",
         "geometry_features",
+        "geometry_parallel_component",
+        "geometry_orthogonal_component",
         "pre_saturation_rms",
         "post_saturation_rms",
         "residual_norm",
