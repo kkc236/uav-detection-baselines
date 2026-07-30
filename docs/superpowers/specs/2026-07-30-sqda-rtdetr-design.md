@@ -1,7 +1,7 @@
-# SQDA-RTDETR 冻结设计规格
+# SQDA-P-RTDETR 效果优先冻结设计规格
 
 日期：2026-07-30
-状态：用户已批准，核心设计冻结
+状态：已纳入用户书面复核意见，等待最终复核
 目标模型：Ultralytics RT-DETR-L
 目标数据集：VisDrone2019-DET
 研发约束：单卡 RTX 4090/5090，seed 0，15 天内完成主实验
@@ -10,15 +10,15 @@
 
 创新点冻结为：
 
-**SQDA：Shadow-Query Detail Adapter**
+**SQDA-P：Performance-Oriented Shadow-Query Detail Adapter**
 
 中文名称：
 
-**影子查询细节适配器**
+**效果优先影子查询细节适配器**
 
-SQDA 是插在 RT-DETR encoder query selection 与 stock decoder 之间的可训练网络模块。模块保留原始 300 个 object queries，为每个 object query 在模块内部生成四个短寿命 shadow queries。Shadow queries 从 backbone 的 raw stride-4 C2 高分辨率特征中读取局部细节，经语义一致性门控后，以有界、零初始化的残差回注原 object query。
+SQDA-P 是插在 RT-DETR encoder query selection 与 stock decoder 之间的可训练网络模块。模块保留原始 300 个 object queries，为每个 object query 在模块内部生成五个短寿命 shadow queries：一个中心 shadow 和四个象限 shadow。Shadow queries 作为真实的 attention queries，从 backbone 的 raw stride-4 C2 高分辨率特征中读取局部细节，经 query-conditioned 聚合和通道级一致性门控后，以有界小增益残差回注原 object query。
 
-Shadow queries 不进入最终预测集、不参加 Hungarian matching、不独立输出检测框。SQDA 输出仍是与 baseline 同形状的 300 个 object queries；原 decoder、检测头、损失函数和推理后处理保持不变。
+Shadow queries 不进入最终预测集、不参加 Hungarian matching、不独立输出检测框。SQDA-P 输出仍是与 baseline 同形状的 300 个 object queries；原 decoder、检测头、损失函数和推理后处理保持不变。
 
 本设计明确不是：
 
@@ -34,9 +34,9 @@ Shadow queries 不进入最终预测集、不参加 Hungarian matching、不独�
 
 RT-DETR 从 P3/P4/P5 编码特征中选择高质量 object queries，但无人机图像中的微小目标可能在 stride-8 及更低分辨率特征中丢失局部结构。直接把 raw C2 作为 P2 融入整个 neck 会把大量道路纹理、建筑边缘和背景高频噪声传播到所有位置，存在 Precision 下降风险。
 
-本文统一把 backbone 的 stride-4 输出称为 `raw C2`。SQDA 不构造常规 neck P2，也不在 raw C2 上增加检测头。
+本文统一把 backbone 的 stride-4 输出称为 `raw C2`。SQDA-P 不构造常规 neck P2，也不在 raw C2 上增加检测头。
 
-SQDA 采用另一种连接规则：
+SQDA-P 采用另一种连接规则：
 
 > 由已经选出的 object query 主动生成局部 shadow queries，仅在其参考框邻域读取 C2 细节；高分辨率证据只有与原 query 语义一致时才允许回注。
 
@@ -55,15 +55,15 @@ SQDA 采用另一种连接规则：
 
 `docs/AB_VENUE_50_PAPER_NOVELTY_AUDIT_2026-07-30.md`
 
-SQDA 选择 query-decoder 交界，原因是该位置既符合 DETR 研究的主流创新落点，又能避免再次提出普通 FPN/P2 融合模块。
+SQDA-P 选择 query-decoder 交界，原因是该位置既符合 DETR 研究的主流创新落点，又能避免再次提出普通 FPN/P2 融合模块。
 
 与最接近工作的差异冻结如下：
 
-- QueryDet：通过低分辨率位置稀疏启动高分辨率检测计算；SQDA 不启动新的高分辨率检测头，而是把局部细节回注原 DETR query。
-- DQ-DETR：根据密度预测改变 query 数量和位置；SQDA 不预测密度，最终 query 数量固定为 300。
-- EASE-DETR：建模 leading/trailing query 竞争；SQDA 不判断 leading/trailing，不抑制任何原 query。
-- DDQ：生成密集 queries 并筛选 distinct queries；SQDA 的 shadow queries 只作为内部特征读取器，不进入匹配和预测集。
-- RT-DETR：从 encoder 特征中选择低不确定性 query；SQDA 在选择之后为这些 queries 补充 query-conditioned 高分辨率证据。
+- QueryDet：通过低分辨率位置稀疏启动高分辨率检测计算；SQDA-P 不启动新的高分辨率检测头，而是把局部细节回注原 DETR query。
+- DQ-DETR：根据密度预测改变 query 数量和位置；SQDA-P 不预测密度，最终 query 数量固定为 300。
+- EASE-DETR：建模 leading/trailing query 竞争；SQDA-P 不判断 leading/trailing，不抑制任何原 query。
+- DDQ：生成密集 queries 并筛选 distinct queries；SQDA-P 的 shadow queries 只作为内部特征读取器，不进入匹配和预测集。
+- RT-DETR：从 encoder 特征中选择低不确定性 query；SQDA-P 在选择之后为这些 queries 补充 query-conditioned 高分辨率证据。
 
 论文不得声称“全球首个 shadow query”。允许的主张是：
 
@@ -79,12 +79,12 @@ Backbone
     |---------------- C2, stride 4 --------------------|
     |                                                   |
     v                                                   v
-C3/C4/C5 -> Hybrid Encoder -> Query Selection      C2 Detail Projection
+C3/C4/C5 -> Hybrid Encoder -> Query Selection      raw C2
                                   |                     |
                          300 object queries             |
                          300 reference boxes            |
                                   |                     |
-                                  -------- SQDA ---------
+                                  ------- SQDA-P --------
                                            |
                                   enhanced 300 queries
                                            |
@@ -99,9 +99,9 @@ Ultralytics 当前 `RTDETRDecoder.forward()` 在调用 `_get_decoder_input()` �
 - `refer_bbox`：decoder reference boxes；
 - `enc_bboxes` 和 `enc_scores`：encoder top-k 输出。
 
-SQDA 的调用位置冻结在 `_get_decoder_input()` 之后、`self.decoder(...)` 之前。
+SQDA-P 的调用位置冻结在 `_get_decoder_input()` 之后、`self.decoder(...)` 之前。
 
-训练阶段可能包含 denoising queries。SQDA 只处理最后 300 个 object queries；denoising queries 保持逐元素不变，并在 SQDA 输出后按原顺序拼回。
+训练阶段如存在 denoising queries，SQDA-P 仍只处理最后 300 个 object queries；denoising queries 保持逐元素不变，并在 SQDA-P 输出后按原顺序拼回。
 
 ## 5. 顶层模块接口
 
@@ -111,9 +111,10 @@ class ShadowQueryDetailAdapter(nn.Module):
         self,
         detail_channels: int,
         hidden_dim: int = 256,
-        num_shadows: int = 4,
+        num_shadows: int = 5,
         points_per_shadow: int = 4,
         residual_cap: float = 0.25,
+        residual_init: float = 1e-3,
         enabled: bool = True,
     ) -> None:
         ...
@@ -123,6 +124,8 @@ class ShadowQueryDetailAdapter(nn.Module):
         object_queries: Tensor,      # [B, 300, 256]
         reference_boxes: Tensor,     # [B, 300, 4], normalized cxcywh
         c2_feature: Tensor,          # [B, C2, H/4, W/4]
+        *,
+        identity_override: bool = False,  # test-only; never exposed by result CLI
     ) -> tuple[Tensor, dict]:
         ...
 ```
@@ -130,134 +133,205 @@ class ShadowQueryDetailAdapter(nn.Module):
 输出：
 
 - `enhanced_queries`：`[B, 300, 256]`，供 stock decoder 使用；
-- `diagnostics`：shadow offsets、sampling validity、gate mean/std、residual norm 和 scale-bin 统计，仅用于训练诊断，不影响预测。
+- `diagnostics`：shadow offsets、point attention、shadow attention、sampling validity、channel-gate mean/std、residual scale、residual norm 和 scale-bin 统计，仅用于训练诊断，不影响预测。
 
 接口不接收预测框列表、NMS 输出或推理阈值。
 
 ## 6. 内部组件
 
-### 6.1 C2DetailProjection
+### 6.1 SampledC2Projector
 
-职责：把 backbone raw C2 特征投影到 decoder hidden dimension，并增加最小局部语义变换。
+职责：先在 backbone raw C2 上执行稀疏、可微采样，再把采样到的低维特征投影到 decoder hidden dimension。禁止先把整张 C2 投影成 256 通道。
 
-```text
-C2
- -> Conv 1x1, C2 -> 256
- -> GroupNorm
- -> SiLU
- -> Depthwise Conv 3x3
- -> Conv 1x1, 256 -> 256
- -> GroupNorm
-```
-
-使用 GroupNorm 而不是 BatchNorm，避免冻结 baseline 时引入新的 running-buffer 漂移。
-
-输出：
+对每个采样点：
 
 \[
-F_2\in\mathbb{R}^{B\times256\times H_2\times W_2}.
-\]
-
-### 6.2 ShadowQueryGenerator
-
-每个原 query 生成四个 shadow queries：
-
-\[
-S_i=\operatorname{reshape}(W_s\operatorname{LN}(q_i)),
-\qquad
-S_i\in\mathbb{R}^{4\times256}.
-\]
-
-四个 shadow queries 分别带有左上、右上、左下、右下的可学习 quadrant embedding。它们共享父 query 的 reference box，但拥有独立的 bounded sampling-offset head。
-
-Shadow queries 是内部张量，不注册为全局 learnable query bank。
-
-### 6.3 QueryConditionedDetailSampler
-
-每个 shadow query 预测四个二维采样偏移和对应注意力权重：
-
-\[
-\Delta p_{ikm}
+\bar z_i^{k,m}
 =
-r_i\odot\tanh(W_{\Delta}s_i^k),
+\operatorname{GridSample}(C_2,p_i^{k,m}),
 \]
 
 \[
-a_{ikm}
+z_i^{k,m}
 =
-\operatorname{softmax}_m(W_a s_i^k),
+W_{v2}\operatorname{SiLU}
+\left(
+\operatorname{LN}(W_{v1}\bar z_i^{k,m})
+\right),
 \]
 
 其中：
 
-- \(i\) 为父 query；
-- \(k\in\{1,2,3,4\}\) 为 shadow query；
-- \(m\in\{1,2,3,4\}\) 为每个 shadow 的采样点；
-- \(r_i\) 由 reference box 的宽高和 C2 的单像素尺寸共同确定。
-
-为了避免 tiny box 的四个 shadow 点退化到同一位置，水平和垂直基础半径冻结为：
-
 \[
-r_i^x=\max(0.25w_i,\;1/W_2),
+W_{v1}: C_2\rightarrow128,
 \qquad
-r_i^y=\max(0.25h_i,\;1/H_2).
+W_{v2}:128\rightarrow256.
 \]
 
-采样坐标裁剪到归一化图像范围。越界点设置 validity mask，其注意力权重在 softmax 前置为负无穷。
+该顺序把投影计算从整张 stride-4 特征图缩小到每张图的 \(300\times5\times4=6000\) 个采样点。LayerNorm 不维护 running buffers，冻结 baseline 时不会产生 BatchNorm 漂移。
 
-高分辨率证据为：
+### 6.2 ShadowQueryGenerator
 
-\[
-e_i^k
-=
-\sum_m a_{ikm}\,
-\operatorname{GridSample}(F_2,p_{ikm}).
-\]
-
-### 6.4 ShadowEvidenceAggregator
-
-四个 shadow evidence 与父 query 做局部交互：
+每个原 query 生成五个 shadow queries：
 
 \[
-\widetilde e_i^k
+s_i^k
 =
-\operatorname{MHA}
+\operatorname{LN}
 \left(
-s_i^k,
-[q_i,e_i^1,e_i^2,e_i^3,e_i^4]
+W_sq_i+e_k+W_b\phi(b_i)
+\right),
+\qquad
+k=1,\ldots,5.
+\]
+
+\(\phi(b_i)\) 编码 normalized \(cx,cy,w,h,\log w,\log h\)，其中 \(w,h\) 在取对数前截断到不小于 \(10^{-6}\)。五个固定角色为：
+
+\[
+\Delta_k\in
+\{
+(0,0),
+(-\rho,-\rho),
+(\rho,-\rho),
+(-\rho,\rho),
+(\rho,\rho)
+\},
+\qquad
+\rho=0.2.
+\]
+
+第一个 shadow 负责中心主体，后四个分别负责左上、右上、左下、右下局部。Shadow queries 是依赖当前 object query 和 reference box 动态生成的内部张量，不注册为全局 learnable query bank。
+
+### 6.3 QueryConditionedDetailSampler
+
+每个 shadow query 读取四个采样点。点模板为：
+
+\[
+\epsilon_m
+\in
+\{
+(-0.5,-0.5),
+(0.5,-0.5),
+(-0.5,0.5),
+(0.5,0.5)
+\}.
+\]
+
+可学习偏移为：
+
+\[
+\delta_i^{k,m}
+=
+0.1\tanh
+\left(
+W_p^m s_i^k
 \right).
 \]
 
-随后用共享 MLP 聚合为一个父 query detail vector：
+基础局部尺度保留一个 C2 cell 的下限：
+
+\[
+r_i^x=\max(0.2w_i,\;1/W_2),
+\qquad
+r_i^y=\max(0.2h_i,\;1/H_2).
+\]
+
+最终采样坐标：
+
+\[
+p_i^{k,m}
+=
+c_i
++
+(w_i,h_i)\odot\Delta_k
++
+(r_i^x,r_i^y)\odot
+\left(
+0.5\epsilon_m+\delta_i^{k,m}
+\right).
+\]
+
+采样坐标保持连续可微。越界点不先裁剪到边界，而是生成 validity mask；无效点的注意力 logit 置为负无穷，避免多个越界点折叠到同一边缘像素。如果同一 shadow 的四个点全部无效，则该 shadow evidence 直接置零并标记为无效，禁止对四个负无穷执行 softmax。
+
+每个 shadow 自身作为 attention query：
+
+\[
+\ell_i^{k,m}
+=
+\frac{
+(W_qs_i^k)^\top(W_kz_i^{k,m})
+}{
+\sqrt{256}
+},
+\]
+
+\[
+a_i^{k,m}
+=
+\operatorname{softmax}_m(\ell_i^{k,m}),
+\]
+
+\[
+d_i^k
+=
+\sum_{m=1}^{4}
+a_i^{k,m}z_i^{k,m}.
+\]
+
+禁止退化为由父 query \(q_i\) 直接计算五个 shadow 的点注意力；否则不同 shadow 只剩几何采样差异。
+
+### 6.4 QueryConditionedShadowAggregator
+
+五个 shadow 不做直接拼接。父 query 对五个 shadow evidence 计算竞争权重：
+
+\[
+\beta_i^k
+=
+\operatorname{softmax}_k
+\left(
+\frac{
+(W_qq_i)^\top(W_dd_i^k)
+}{
+\sqrt{256}
+}
+\right),
+\]
 
 \[
 d_i
 =
-W_d[\widetilde e_i^1;\widetilde e_i^2;
-\widetilde e_i^3;\widetilde e_i^4].
+\sum_{k=1}^{5}
+\beta_i^kd_i^k.
 \]
 
-该注意力只在同一父 query 的五个 token 内计算，不在 300 个 object queries 之间建立新的全局注意力。
+中心和象限 shadow 的选择完全由当前 query-evidence 一致性决定，不使用类别阈值或人工 tiny/large 分支。Shadow softmax 会屏蔽上一阶段标记为无效的 shadow；若五个 shadow 全部无效，则 \(d_i=0\)，最终残差也必须为零。该聚合只在同一父 query 的五个 shadow 内计算，不在 300 个 object queries 之间增加全局注意力。
 
-### 6.5 SemanticConsistencyGate
+### 6.5 ChannelwiseConsistencyGate
 
-Gate 接收原 query、detail vector 和连续尺度编码：
+Gate 接收原 query、聚合 detail vector、逐通道交互和连续尺度编码：
 
 \[
 z_i=
-[\operatorname{LN}(q_i),
+[
+\operatorname{LN}(q_i),
 \operatorname{LN}(d_i),
 \operatorname{LN}(q_i)\odot\operatorname{LN}(d_i),
-\operatorname{MLP}_{scale}(\log w_i,\log h_i)].
+\operatorname{MLP}_{scale}(\log w_i,\log h_i)
+].
 \]
 
 \[
-g_i
+\mathbf g_i
 =
-\sigma(\operatorname{MLP}_{gate}(z_i)).
+\sigma
+\left(
+\operatorname{MLP}_{gate}(z_i)
+\right),
+\qquad
+\mathbf g_i\in\mathbb{R}^{256}.
 \]
 
-\(g_i\) 为每个 query 一个标量。该 gate 不使用人工 tiny 阈值，不根据最终分类置信度筛选 query。
+尺度只作为 gate 输入，不作为硬乘法，也不强制 medium/large queries 的 gate 接近零。通道级 gate 允许纹理、边缘、形状和背景抑制通道独立选择。Gate 不根据最终分类置信度筛选 query。
 
 ### 6.6 IdentitySafeResidual
 
@@ -268,33 +342,55 @@ q_i'
 =
 q_i
 +
-\alpha_i\tanh(W_od_i),
+\alpha\,
+\mathbf g_i\odot
+\tanh(W_od_i).
 \]
 
+残差幅度冻结为正值、有界的可学习标量：
+
 \[
-\alpha_i
+\alpha
 =
-\alpha_{\max}g_i,
+\alpha_{\max}\sigma(a),
 \qquad
 \alpha_{\max}=0.25.
 \]
 
-`W_o.weight` 和 `W_o.bias` 必须零初始化。因此在初始化状态：
+正式训练初始化：
 
 \[
-q_i'=q_i
+\alpha_{\mathrm{train-init}}=10^{-3},
+\qquad
+W_o\sim\mathcal N(0,0.01^2),
+\qquad
+b_o=0.
 \]
 
-逐元素成立。
+实现中：
+
+\[
+a_{\mathrm{init}}
+=
+\operatorname{logit}
+\left(
+\frac{10^{-3}}{0.25}
+\right)
+\approx-5.517.
+\]
+
+因此 shadow generator、采样器、point attention、shadow aggregation 和 channel gate 从第一次反向传播开始都能获得非零梯度。G0 恒等性通过测试态 `identity_override=True` 强制 \(\alpha=0\) 完成；该开关不用于正式训练、验证或论文结果。
 
 `enabled=False` 时直接返回输入 object queries，不执行 detail branch，并要求输出 tensor 逐元素等于输入。
+
+效果优先版暂不引入双分支增强/抑制残差。该扩展会同时增加两个 channel gates 和符号耦合，扩大 15 天主实验的搜索空间；只有单残差版本通过 G2 后才允许作为论文外的后续研究。
 
 ## 7. RT-DETR 集成边界
 
 集成使用专用 decoder wrapper，而不是修改预测后处理：
 
 ```python
-class SQDARTDETRDecoder(RTDETRDecoder):
+class SQDAPRTDETRDecoder(RTDETRDecoder):
     def forward(self, x, batch=None):
         c2_feature = x[0]
         encoder_features = x[1:]
@@ -309,7 +405,7 @@ class SQDARTDETRDecoder(RTDETRDecoder):
         object_queries = embed[:, dn_count:]
         object_boxes = refer_bbox[:, dn_count:].sigmoid()
 
-        object_queries, diagnostics = self.sqda(
+        object_queries, diagnostics = self.sqda_p(
             object_queries,
             object_boxes,
             c2_feature,
@@ -323,12 +419,12 @@ class SQDARTDETRDecoder(RTDETRDecoder):
 
 - `encoder_features` 的内容和顺序与 stock RT-DETR-L 完全相同；
 - C2 不进入 `_get_encoder_input()`，因此不把 baseline 的三层 encoder 改成四层；
-- SQDA 不修改 `refer_bbox`；
-- SQDA 不修改 denoising queries；
-- SQDA 不修改 `attn_mask`；
-- SQDA 不修改 encoder scores、decoder heads、postprocess 或 validator；
-- 训练和推理调用相同的 SQDA forward；
-- SQDA 参数必须进入 optimizer、state dict 和 checkpoint。
+- SQDA-P 不修改 `refer_bbox`；
+- SQDA-P 不修改 denoising queries；
+- SQDA-P 不修改 `attn_mask`；
+- SQDA-P 不修改 encoder scores、decoder heads、postprocess 或 validator；
+- 训练和推理调用相同的 SQDA-P forward；
+- SQDA-P 参数必须进入 optimizer、state dict 和 checkpoint。
 
 ## 8. 优化协议
 
@@ -336,8 +432,9 @@ class SQDARTDETRDecoder(RTDETRDecoder):
 
 - 加载与 baseline 完全相同的 mature RT-DETR-L checkpoint；
 - baseline 所有参数逐项复制；
-- SQDA 新增层使用常规初始化；
-- `IdentitySafeResidual.W_o` 严格零初始化；
+- SQDA-P 除输出投影外的新层使用常规初始化；
+- `IdentitySafeResidual.W_o` 使用标准差 0.01 的零均值正态初始化，bias 为零；
+- learnable residual scale 初始化为 \(10^{-3}\)，并通过 sigmoid 参数化限制在 \((0,0.25)\)；
 - 主实验不加载此前任何候选模块权重。
 
 ### 8.2 Phase G0：恒等性审计
@@ -345,12 +442,13 @@ class SQDARTDETRDecoder(RTDETRDecoder):
 不训练，执行以下检查：
 
 1. `enabled=False` 时 object query 输出与输入逐元素相等；
-2. `enabled=True` 且零初始化时 enhanced query 与输入逐元素相等；
+2. `enabled=True`、`identity_override=True` 时 enhanced query 与输入逐元素相等；
 3. native validator 的 Precision、Recall、mAP50、mAP50-95 与 baseline 一致；
 4. decoder 原生预测 tensor 的 shape、顺序和数值一致；
 5. denoising queries、reference boxes 和 encoder outputs 一致；
-6. SQDA 参数出现在 `state_dict()`；
-7. 两个 optimizer steps 后，各子模块获得有限且非零的梯度。
+6. SQDA-P 参数出现在 `state_dict()`；
+7. 正式训练设置 `identity_override=False` 且 \(\alpha=10^{-3}\) 时，一次 optimizer step 后各子模块获得有限且非零的梯度；
+8. `identity_override` 不得由正式 train/val/predict CLI 暴露，避免把它变成结果选择开关。
 
 若 native validator 任一主指标不能复现 baseline，G0 失败，禁止进入训练。
 
@@ -365,7 +463,7 @@ class SQDARTDETRDecoder(RTDETRDecoder):
 - stock classification and box heads；
 - baseline normalization parameters and buffers。
 
-仅训练 SQDA。
+仅训练 SQDA-P。
 
 协议：
 
@@ -383,7 +481,7 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 
 只有 G1 通过成功门槛才进入 G2。
 
-正式训练继续冻结 baseline，只训练 SQDA 10 epochs。选择 checkpoint 时先执行四项非下降硬约束，再在合格 checkpoint 中选择 mAP50-95 最高者。
+正式训练继续冻结 baseline，只训练 SQDA-P 10 epochs。选择 checkpoint 时先执行四项非下降硬约束，再在合格 checkpoint 中选择 mAP50-95 最高者。
 
 “解冻 decoder 最后两层”只允许作为附加消融，不作为主方法结果；它不得替代冻结 baseline 的主实验。
 
@@ -430,17 +528,17 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 
 冻结五组：
 
-| 实验 | C2 detail | Shadow queries | Consistency gate | Zero-init residual |
+| 实验 | Sparse raw-C2 | Shadow queries | Channel gate | Small-gain residual |
 |---|:---:|:---:|:---:|:---:|
 | Baseline |  |  |  |  |
-| Direct C2 residual | ✓ |  |  | ✓ |
+| Direct sampled-C2 residual | ✓ |  |  | ✓ |
 | Single center shadow | ✓ | 1 | ✓ | ✓ |
-| Four shadows without gate | ✓ | 4 |  | ✓ |
-| Full SQDA | ✓ | 4 | ✓ | ✓ |
+| Five shadows without gate | ✓ | 5 |  | ✓ |
+| Full SQDA-P | ✓ | 5 | ✓ | ✓ |
 
 附加机制审计：
 
-- SQDA enabled 但 residual 强制为零；
+- SQDA-P enabled 但通过 identity override 将 residual 强制为零；
 - shadow sampling 可视化；
 - gate 按 tiny/small/medium/large 尺度分桶统计；
 - query residual norm 分布；
@@ -453,23 +551,24 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 ### 11.1 单元测试
 
 - 输入输出 shape 和 dtype；
-- `num_shadows=4` 的 tensor 维度；
+- `num_shadows=5`、`points_per_shadow=4` 和每图 6000 点的 tensor 维度；
 - 归一化坐标与 C2 grid 坐标转换；
 - 图像边缘 sampling validity mask；
+- 单个 shadow 全部越界和五个 shadow 全部越界时无 NaN、残差为零；
 - tiny box 最小一个 C2 cell 的采样半径；
 - gate 输出范围；
 - residual cap；
 - enabled/off 恒等性；
-- zero-init 恒等性；
+- identity override 恒等性；
 - denoising/object query split 和重组顺序。
 
 ### 11.2 集成测试
 
-- SQDA module 注册在模型树中；
+- SQDA-P module 注册在模型树中；
 - 参数进入 optimizer；
 - 参数进入 checkpoint 并能严格 reload；
-- stock RT-DETR loss 可以对 SQDA 反向传播；
-- 两步更新后所有预期子模块有梯度；
+- stock RT-DETR loss 可以对 SQDA-P 反向传播；
+- 一次反向传播后所有预期子模块有有限且非零的梯度；
 - baseline 参数在 G1 前后逐项不变；
 - native train/val/predict 模式均能运行；
 - batch 中无 GT 时训练不崩溃；
@@ -490,7 +589,7 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 
 ### 12.2 Precision 下降
 
-优先检查 consistency gate 是否失效、C2 detail 是否被背景纹理主导。只允许一次结构审计；不得通过改变推理置信度阈值掩盖。
+优先检查 channelwise consistency gate 是否失效、raw-C2 detail 是否被背景纹理主导。只允许一次结构审计；不得通过改变推理置信度阈值掩盖。
 
 ### 12.3 Recall 下降
 
@@ -502,11 +601,11 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 
 ### 12.5 G1 无有效提升
 
-若四项主指标不下降但所有指标提升均小于 0.2 个百分点，判定证据不足。完成一次 full SQDA 与 single-center shadow 的对照后仍无提升，则停止 SQDA，不进入 10-epoch 正式训练。
+若四项主指标不下降但所有指标提升均小于 0.2 个百分点，判定证据不足。完成一次 full SQDA-P 与 single-center shadow 的对照后仍无提升，则停止 SQDA-P，不进入 10-epoch 正式训练。
 
 ### 12.6 任一主指标下降
 
-若没有 checkpoint 同时满足四项非下降，SQDA 判定失败。不得用多 seed 平均、修改验证阈值或只报告有利指标绕过。
+若没有 checkpoint 同时满足四项非下降，SQDA-P 判定失败。不得用多 seed 平均、修改验证阈值或只报告有利指标绕过。
 
 ## 13. 15 天交付节奏
 
@@ -524,10 +623,10 @@ G1 是主成功筛查。主设计不依赖解冻 baseline 参数才能成立。
 
 ## 14. 完成定义
 
-SQDA 只有同时满足以下条件才可作为论文网络模块：
+SQDA-P 只有同时满足以下条件才可作为论文网络模块：
 
 1. G0 native validator 与 baseline 一致；
-2. SQDA 参数进入 forward、optimizer、state dict 和 checkpoint；
+2. SQDA-P 参数进入 forward、optimizer、state dict 和 checkpoint；
 3. 模块从 stock detection loss 获得梯度；
 4. 训练和推理使用同一 forward；
 5. 最终仍为原生 300-query 预测集；
@@ -537,7 +636,7 @@ SQDA 只有同时满足以下条件才可作为论文网络模块：
 9. 论文如实报告失败案例、延迟和适用边界；
 10. 所有结果可由配置、checkpoint、日志、哈希和 git commit 复核。
 
-未满足任一条时，不得宣称 SQDA 已验证成功。
+未满足任一条时，不得宣称 SQDA-P 已验证成功。
 
 ## 15. 主要参考边界
 
