@@ -425,12 +425,17 @@ class SQDASGCAdapter(nn.Module):
             ),
             dim=-1,
         )
-        group_gates = self.gate(gate_input).sigmoid()
-        group_gates = group_gates.view(
-            *group_gates.shape[:-1],
+        group_gate_logits = self.gate(gate_input)
+        group_gate_logits = group_gate_logits.view(
+            *group_gate_logits.shape[:-1],
             2,
             self.config.gate_groups,
         )
+        group_gates = torch.softmax(
+            group_gate_logits,
+            dim=-2,
+            dtype=torch.float32,
+        ).to(dtype=group_gate_logits.dtype)
         semantic_gate = self.expand_group_gate(group_gates[..., 0, :])
         geometry_gate = self.expand_group_gate(group_gates[..., 1, :])
         fusion_input = torch.cat(
@@ -441,6 +446,10 @@ class SQDASGCAdapter(nn.Module):
             dim=-1,
         )
         fused = self.fusion(fusion_input)
+        inverse_rms_bound = torch.rsqrt(
+            1.0 + fused.float().square().mean(dim=-1, keepdim=True)
+        ).to(dtype=fused.dtype)
+        fused = fused * inverse_rms_bound
         writeback_validity = role_validity[..., :5].any(dim=-1)
         fused = fused * writeback_validity.unsqueeze(-1).to(dtype=fused.dtype)
         residual = self.layer_scale * fused

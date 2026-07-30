@@ -179,11 +179,27 @@ def test_fusion_initialization_and_gate_layout() -> None:
 
     queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
     _, diagnostics = module(queries, boxes, raw_c2)
+    assert torch.allclose(
+        diagnostics["group_gates"].sum(dim=-2),
+        torch.ones_like(diagnostics["group_gates"][:, :, 0]),
+    )
     expanded = module.expand_group_gate(diagnostics["group_gates"][:, :, 0])
     assert expanded.shape == (1, 4, 256)
     for group in range(16):
         values = expanded[..., group * 16 : (group + 1) * 16]
         assert torch.all(values == values[..., :1])
+
+
+def test_residual_rms_is_bounded_by_layer_scale() -> None:
+    module = SQDASGCAdapter()
+    with torch.no_grad():
+        module.fusion.weight.fill_(100.0)
+    queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
+
+    _, diagnostics = module(queries, boxes, raw_c2)
+
+    maximum_norm = module.layer_scale * math.sqrt(module.config.hidden_dim)
+    assert torch.all(diagnostics["residual_norm"] <= maximum_norm + 1e-6)
 
 
 def test_half_precision_caps_do_not_depend_on_nextafter(
