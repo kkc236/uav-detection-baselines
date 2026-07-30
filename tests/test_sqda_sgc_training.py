@@ -127,6 +127,25 @@ def test_geometry_trust_step_changes_only_the_new_gate() -> None:
         assert torch.count_nonzero(gradient), name
 
 
+def test_geometry_optimizer_reasserts_freeze_after_ultralytics_reenables_adapter() -> None:
+    detector = _ToyDetector()
+    freeze_inherited_sqda(detector)
+    for parameter in detector.sqda_sgc.parameters():
+        parameter.requires_grad_(True)  # mirrors BaseTrainer._setup_train's fallback branch
+
+    optimizer = build_geometry_trust_optimizer(detector)
+
+    assert_geometry_trust_contract(detector)
+    assert _parameter_ids(optimizer) == {
+        id(parameter) for parameter in detector.sqda_sgc.geometry_trust.parameters()
+    }
+    assert all(
+        not parameter.requires_grad
+        for name, parameter in detector.sqda_sgc.named_parameters()
+        if not name.startswith("geometry_trust.")
+    )
+
+
 def test_optimizer_decay_groups_match_parameter_roles() -> None:
     detector = _ToyDetector()
     freeze_stock_model(detector)

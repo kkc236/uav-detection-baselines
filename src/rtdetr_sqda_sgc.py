@@ -465,6 +465,7 @@ def build_sqda_optimizer(model: nn.Module) -> torch.optim.AdamW:
 def build_geometry_trust_optimizer(model: nn.Module) -> torch.optim.AdamW:
     """Build the exact AdamW optimizer over only the new geometry-trust MLP."""
     unwrapped = unwrap_model(model)
+    freeze_inherited_sqda(unwrapped)
     assert_geometry_trust_contract(unwrapped)
     adapter = getattr(unwrapped, "sqda_sgc", None)
     if not isinstance(adapter, SQDASGCAdapter):
@@ -777,7 +778,6 @@ class SQDAGeometryTrustTrainer(SQDASGCTrainer):
             raise RuntimeError(
                 f"geometry-gate optimizer protocol changed: name={name}, lr={lr}, momentum={momentum}"
             )
-        assert_geometry_trust_contract(model)
         return build_geometry_trust_optimizer(model)
 
     def optimizer_step(self) -> None:
