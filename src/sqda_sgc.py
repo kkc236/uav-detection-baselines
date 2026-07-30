@@ -123,7 +123,9 @@ class SQDASGCAdapter(nn.Module):
         self.gate = nn.Sequential(
             nn.Linear(5 * dim + 4, 128),
             nn.SiLU(),
-            nn.Linear(128, 2 * gate_groups),
+            # Per group: semantic detail, geometric boundary, or preserve the
+            # stock query without writing either route.
+            nn.Linear(128, 3 * gate_groups),
         )
         self.fusion = nn.Linear(2 * dim, dim)
 
@@ -428,7 +430,7 @@ class SQDASGCAdapter(nn.Module):
         group_gate_logits = self.gate(gate_input)
         group_gate_logits = group_gate_logits.view(
             *group_gate_logits.shape[:-1],
-            2,
+            3,
             self.config.gate_groups,
         )
         group_gates = torch.softmax(
@@ -436,6 +438,11 @@ class SQDASGCAdapter(nn.Module):
             dim=-2,
             dtype=torch.float32,
         ).to(dtype=group_gate_logits.dtype)
+        gate_probabilities = group_gates.float()
+        group_gate_confidence = gate_probabilities.max(dim=-2).values
+        group_gate_entropy = -(
+            gate_probabilities.clamp_min(1e-12).log() * gate_probabilities
+        ).sum(dim=-2) / math.log(3.0)
         semantic_gate = self.expand_group_gate(group_gates[..., 0, :])
         geometry_gate = self.expand_group_gate(group_gates[..., 1, :])
         fusion_input = torch.cat(
@@ -445,27 +452,47 @@ class SQDASGCAdapter(nn.Module):
             ),
             dim=-1,
         )
-        fused = self.fusion(fusion_input)
+        fused = self.fusion(fusion_input).float()
+
+        # Only add detail in the complement of the mature stock query. This
+        # prevents the adapter from directly amplifying or erasing its frozen
+        # semantic direction while leaving a full (D-1)-dimensional trainable
+        # subspace for fine-grained evidence.
+        stock_query = object_queries.detach().float()
+        stock_energy = stock_query.square().sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        parallel = (fused * stock_query).sum(dim=-1, keepdim=True) / stock_energy
+        fused = fused - parallel * stock_query
         inverse_rms_bound = torch.rsqrt(
-            1.0 + fused.float().square().mean(dim=-1, keepdim=True)
-        ).to(dtype=fused.dtype)
+            1.0 + fused.square().mean(dim=-1, keepdim=True)
+        )
         fused = fused * inverse_rms_bound
         writeback_validity = role_validity[..., :5].any(dim=-1)
         fused = fused * writeback_validity.unsqueeze(-1).to(dtype=fused.dtype)
-        residual = self.layer_scale * fused
+        residual_float = self.layer_scale.float() * fused
+        residual = residual_float.to(dtype=object_queries.dtype)
         enhanced = object_queries + residual
+        residual_query_cosine = F.cosine_similarity(
+            residual_float,
+            stock_query,
+            dim=-1,
+            eps=1e-12,
+        ).abs()
 
         diagnostics = {
             "sampling_validity": role_validity.detach(),
             "point_attention": point_attention.detach(),
             "edge_attention": edge_attention.detach(),
             "group_gates": group_gates.detach(),
+            "group_gate_confidence": group_gate_confidence.detach(),
+            "group_gate_entropy": group_gate_entropy.detach(),
+            "no_write_gate": group_gates[..., 2, :].detach(),
             "context_reliability": semantic_modulation.detach(),
             "semantic_similarity": semantic_similarity.detach(),
             "geometry_similarity": geometry_similarity.detach(),
             "context_similarity": context_similarity.detach(),
             "writeback_valid": writeback_validity.detach(),
             "residual_norm": residual.detach().norm(dim=-1),
+            "residual_query_cosine_abs_max": residual_query_cosine.detach().max(),
             "layer_scale": self.layer_scale.detach(),
             "identity_override": torch.zeros(
                 (),

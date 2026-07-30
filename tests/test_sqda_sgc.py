@@ -103,7 +103,10 @@ def test_forward_shape_dtype_diagnostics_and_reference_detach() -> None:
     assert diagnostics["sampling_validity"].shape == (2, 300, 6)
     assert diagnostics["point_attention"].shape == (2, 300, 20)
     assert diagnostics["edge_attention"].shape == (2, 300, 4)
-    assert diagnostics["group_gates"].shape == (2, 300, 2, 16)
+    assert diagnostics["group_gates"].shape == (2, 300, 3, 16)
+    assert diagnostics["group_gate_confidence"].shape == (2, 300, 16)
+    assert diagnostics["group_gate_entropy"].shape == (2, 300, 16)
+    assert torch.all((diagnostics["group_gate_entropy"] >= 0) & (diagnostics["group_gate_entropy"] <= 1))
     assert diagnostics["context_reliability"].shape == (2, 300)
     assert all(not value.requires_grad for value in diagnostics.values() if torch.is_tensor(value))
 
@@ -172,7 +175,7 @@ def test_context_is_read_only_and_not_part_of_fusion_projection() -> None:
 
 def test_fusion_initialization_and_gate_layout() -> None:
     module = SQDASGCAdapter()
-    assert module.gate[-1].out_features == 32
+    assert module.gate[-1].out_features == 48
     assert torch.count_nonzero(module.gate[-1].bias) == 0
     assert module.gate[0].in_features == 5 * 256 + 4
     assert module.fusion.weight.std().item() == pytest.approx(0.01, rel=0.15)
@@ -183,6 +186,9 @@ def test_fusion_initialization_and_gate_layout() -> None:
         diagnostics["group_gates"].sum(dim=-2),
         torch.ones_like(diagnostics["group_gates"][:, :, 0]),
     )
+    assert torch.all(
+        diagnostics["group_gates"][..., 2, :] > 0
+    ), "the learned no-write route must remain available"
     expanded = module.expand_group_gate(diagnostics["group_gates"][:, :, 0])
     assert expanded.shape == (1, 4, 256)
     for group in range(16):
@@ -200,6 +206,21 @@ def test_residual_rms_is_bounded_by_layer_scale() -> None:
 
     maximum_norm = module.layer_scale * math.sqrt(module.config.hidden_dim)
     assert torch.all(diagnostics["residual_norm"] <= maximum_norm + 1e-6)
+
+
+def test_writeback_residual_is_complementary_to_the_stock_query() -> None:
+    module = SQDASGCAdapter()
+    queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
+
+    output, diagnostics = module(queries, boxes, raw_c2)
+
+    residual = output - queries
+    cosine_numerator = (residual.float() * queries.detach().float()).sum(dim=-1)
+    cosine_denominator = (
+        residual.float().norm(dim=-1) * queries.detach().float().norm(dim=-1)
+    ).clamp_min(1e-12)
+    assert torch.all((cosine_numerator / cosine_denominator).abs() < 5e-4)
+    assert diagnostics["residual_query_cosine_abs_max"].item() < 1e-5
 
 
 def test_half_precision_caps_do_not_depend_on_nextafter(

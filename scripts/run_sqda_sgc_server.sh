@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-gate="${1:?usage: run_sqda_sgc_server.sh g1|g1r|g2 [token-file]}"
-if [[ "$gate" != "g1" && "$gate" != "g1r" && "$gate" != "g2" ]]; then
-  echo "gate must be g1, g1r, or g2" >&2
+gate="${1:?usage: run_sqda_sgc_server.sh g1|g1r|g1s|g2 [token-file]}"
+if [[ "$gate" != "g1" && "$gate" != "g1r" && "$gate" != "g1s" && "$gate" != "g2" ]]; then
+  echo "gate must be g1, g1r, g1s, or g2" >&2
   exit 2
 fi
 
@@ -19,6 +19,7 @@ branch="codex/sqda-sgc"
 case "$gate" in
   g1) run_name="sqda-sgc-g1-seed0-3ep" ;;
   g1r) run_name="sqda-sgc-g1r-seed0-3ep" ;;
+  g1s) run_name="sqda-sgc-g1s-seed0-3ep" ;;
   g2) run_name="sqda-sgc-g2-seed0-10ep" ;;
 esac
 retain=3
