@@ -1426,6 +1426,59 @@ artifacts/acr-eg-live-final-r1/predictions-acr-eg.jsonl.gz
 
 已独立从两份预测文件重新计算：548 条记录、548 个唯一且同序 image id、全部指标与 `evaluation.json` 精确一致、三个证据文件 checksum 精确一致。
 
+### 16.2 2026-07-30 Ultralytics 8.4.90 原生验证（已完成，未通过）
+
+这一验证补齐了 `Precision`、`Recall`、`AP50`、`AP75` 和 `mAP50-95`。它不使用 SBR 聚合公式，而是让两路输出统一进入 Ultralytics 8.4.90 的 `RTDETRValidator.postprocess()`、`update_metrics()` 和 `DetMetrics`。
+
+原生验证先发现并拒绝了一次数据管线错误：初版 r1 复用了 GCMV 诊断数据集，导致 Mature Baseline 的原生 mAP50-95 只有 `0.179023`，无法复现训练记录 `0.24170`，因此 r1 只保留为调试证据，不得用于论文结论。最终 r2 使用 stock `RTDETRDataset` 生成全局图，并仅为 ACR-EG 额外读取四个局部视图。自动测试证明 paired dataset 的全局图、GT 框和类别与 stock dataset 逐项一致。
+
+冻结身份与协议：
+
+```text
+Ultralytics = 8.4.90
+VisDrone val = 548 images
+dataset signature = A9A0C00DC640BCAAEFE9360F5E3B55382E74E169B5AEEF15EB1F0AE2A571228A
+imgsz = 640
+batch = 1
+workers = 0
+AMP = True
+conf = 0.001
+max_det = 300
+NMS = False
+
+Baseline SHA256 = 54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B
+ACR-EG SHA256 = 66E0B8D27706CDA594BE657B20BFD01CAA536D90B7EA0A05EDC2FEEC11C6E2B4
+ACR-EG model type = ACREGDetectionModel
+ACR-EG checkpoint epoch = 99
+```
+
+| Ultralytics 原生指标 | Mature Baseline | ACR-EG | ACR-EG − Baseline |
+|---|---:|---:|---:|
+| Precision | 0.511452 | 0.362703 | **-0.148749** |
+| Recall | 0.435000 | 0.342102 | **-0.092898** |
+| AP50 | 0.414487 | 0.274295 | **-0.140192** |
+| AP75 | 0.239399 | 0.127001 | **-0.112397** |
+| mAP50-95 | 0.241803 | 0.141146 | **-0.100657** |
+
+Baseline 的 `0.241803` 与既有训练记录 `0.24170` 一致，说明最终原生验证管线已经复现 Baseline。严格结论是：
+
+```text
+ACR-EG 在 SBR 口径下有正增益；
+ACR-EG 在 Ultralytics 原生口径下没有超过 Baseline；
+当前 epoch-100 ACR-EG checkpoint 未通过论文主指标。
+```
+
+本机 RTX 4070 Laptop GPU 计时为 Baseline `96.986 ms/image`、ACR-EG `391.903 ms/image`，约 `4.04×`。该计时不可冒充 RTX 4090 延迟。
+
+原生验证证据：
+
+```text
+artifacts/acr-eg-ultralytics-native-final-r2/evaluation.json
+  SHA256 = ABE78110092D1B437E8E8AC661C5685F4C32AF5F49E6EB45CC22C14E55F9D1C5
+
+docs/evidence/gcte-acr-eg-ultralytics-native-final.json
+```
+
 还必须补 matched continuation control：
 
 ```text
@@ -1470,6 +1523,8 @@ same continuation epochs
 [x] live 548 图 evaluator 完成
 [x] Global-relative 指标和延迟已输出
 [x] 结果、protocol、两路预测与 SHA evidence 已推送到 `codex/gcte-rtdetr-g0`
+[x] Ultralytics 8.4.90 原生五指标验证完成，Baseline 已复现
+[ ] ACR-EG 超过原生 Baseline（当前未通过）
 ```
 
 ---
@@ -1486,11 +1541,14 @@ same continuation epochs
 - checkpoint 是 `ACREGDetectionModel`，包含 48 个 ACR-EG 相关 state keys；
 - live 548 图 SBR 评测相对 Mature Baseline 的 mAP50-95 提升 `+0.041758`；
 - live SBR 的 tiny、medium、large 指标全部提升；
+- Ultralytics 8.4.90 原生验证已经完成，并复现 Baseline `mAP50-95=0.241803`；
+- 当前 ACR-EG 原生 `mAP50-95=0.141146`，没有通过原生主指标；
 - RTX 4070 Laptop 上 ACR-EG 平均延迟为 `402.765 ms/image`，约为单视图 Baseline 的 `3.746×`。
 
 现在仍禁止：
 
 - 把 SBR mAP `0.240556` 冒充 Ultralytics 原生 COCO-style mAP；
+- 声称当前 epoch-100 ACR-EG checkpoint 在 Ultralytics 原生 Precision、Recall、AP50、AP75 或 mAP50-95 上超过 Baseline；
 - 把 RTX 4070 Laptop 延迟冒充 RTX 4090 延迟；
 - 在 matched continuation control 完成前，把全部差值严格归因为模块本身；
 - `best.pt` 是验证集最优；
