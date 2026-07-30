@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 495989603,
-    "asset_name": "sqda-smogt-g2r2-epoch-0006.pt",
-    "bytes": 72726841,
-    "sha256": "9b3a349c2b7bd28b53a0d7136d6e7a9b2dc32d9700b77756c413bd4235ac4435"
+    "asset_id": 495998979,
+    "asset_name": "sqda-smogt-g2r2-epoch-0007.pt",
+    "bytes": 72726969,
+    "sha256": "856045e8254b6e603e5142e7d752a7fbecdde454deca31537bb7ade6a46ffbb9"
   },
-  "completed_epoch": 6,
-  "published_at": "2026-07-30T23:29:27.717769+00:00",
+  "completed_epoch": 7,
+  "published_at": "2026-07-30T23:36:54.564236+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/sqda-smogt-g2r2-live",
   "run_name": "sqda-geometry-smogt-g2r2-seed0-10ep"
 }
