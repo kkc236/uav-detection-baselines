@@ -49,6 +49,19 @@ def test_smgt_runner_requires_strict_g2_selection_before_formal_training() -> No
     assert "sqda-smgt-${gate}-live" in runner
 
 
+def test_smgt_g2_sync_retains_every_epoch_snapshot_for_inventory() -> None:
+    runner = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_sqda_geometry_gate_server.sh"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        'g2) run_name="sqda-geometry-smgt-g2-seed0-10ep"; sync_retain=10 ;;'
+    ) in runner
+    assert '--retain "$sync_retain"' in runner
+
+
 @pytest.mark.parametrize(
     ("gate", "epochs"), [("g1", 3), ("g2", 10), ("formal", 100)]
 )

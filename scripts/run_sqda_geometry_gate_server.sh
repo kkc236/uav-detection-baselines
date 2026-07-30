@@ -16,9 +16,10 @@ token_file="${2:-/root/.config/sqda-sgc/github-token}"
 branch="codex/sqda-sgc"
 admission="$project/geometry-branch-diagnosis/g1-admission.json"
 case "$gate" in
-  g1) run_name="sqda-geometry-smgt-g1-seed0-3ep" ;;
-  g2) run_name="sqda-geometry-smgt-g2-seed0-10ep" ;;
-  formal) run_name="sqda-geometry-smgt-formal-seed0-100ep" ;;
+  g1) run_name="sqda-geometry-smgt-g1-seed0-3ep"; sync_retain=3 ;;
+  # G2 inventory needs epoch0 plus every epoch checkpoint to reject initial/best payloads.
+  g2) run_name="sqda-geometry-smgt-g2-seed0-10ep"; sync_retain=10 ;;
+  formal) run_name="sqda-geometry-smgt-formal-seed0-100ep"; sync_retain=3 ;;
   *)
     echo "gate must be g1, g2, or formal" >&2
     exit 2
@@ -111,7 +112,7 @@ if [[ -z "$sync_pid" ]]; then
     --results-branch sqda-geometry-gate-results \
     --results-repo "$root/sqda-geometry-gate-results" \
     --run-name "$run_name" \
-    --retain 3 \
+    --retain "$sync_retain" \
     --asset-prefix "sqda-smgt-${gate}" \
     --release-name "SQDA SMGT ${gate^^} RTX 4090" \
     --release-body "Frozen inherited SQDA adapter; only the scale-monotone geometry trust module is trainable." \
