@@ -70,6 +70,8 @@ Replace fusion.weight in representative_branches with:
 "agreement_gate.2.weight",
 ~~~
 
+Keep the existing stock-state equality assertion unchanged. Replace all obsolete fusion-specific tests: assert both projectors are `Linear(256, 256)` with zero bias; assert their initialization standard deviation is approximately `0.01`; and fill both projector weights with `100.0` in the RMS-bound test. Retain every current group-gate assertion.
+
 - [ ] **Step 4: Prove RED**
 
 ~~~powershell
@@ -257,7 +259,7 @@ RUN_NAMES = {
 }
 ~~~
 
-Persist budgets mean/max; persist directions through norm(dim=-1) mean/max. Preserve all prior diagnostics and epoch clamp. In Bash retain source checkout at /root/data/uav/sqda-sgc but use /root/data/uav/runs/sqda-abdr, /root/.config/sqda-abdr/github-token, sqda-abdr-<gate>-live, sqda-abdr-results and sqda-abdr-<gate> asset prefix. The continuation script reads sqda-abdr-g2-seed0-10ep/final-gate-decision.json and still demands strict_pass=true.
+Persist budgets mean/max; persist directions through norm(dim=-1) mean/max. Preserve all prior diagnostics and epoch clamp. In Bash retain source checkout at /root/data/uav/sqda-sgc and the existing authorized token path /root/.config/sqda-sgc/github-token, but use /root/data/uav/runs/sqda-abdr, sqda-abdr-<gate>-live, sqda-abdr-results and sqda-abdr-<gate> asset prefix. The continuation script reads sqda-abdr-g2-seed0-10ep/final-gate-decision.json and still demands strict_pass=true.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -322,4 +324,3 @@ Any NaN/Inf, frozen audit failure, or lower Precision, Recall, mAP50 or mAP50-95
 - Covers dual budgets, directional decomposition, initialization, diagnostics, audit, isolated staging, G0, AMP and strict gating.
 - Does not change loss, query number/order, Top-300, decoder, NMS, input resolution, optimizer, routing, extra attention or post-processing.
 - Production/test identifiers are consistent: semantic_projector, geometry_projector, agreement_gate, semantic_budget and geometry_budget.
-
