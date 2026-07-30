@@ -87,6 +87,7 @@ class SQDASGCDetectionModel(RTDETRDetectionModel):
         verbose: bool = True,
     ) -> None:
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+        self.nc = int(self.yaml["nc"])
         head = self.model[-1]
         query_count = int(getattr(head, "num_queries", -1))
         hidden_dim = int(getattr(head, "hidden_dim", -1))

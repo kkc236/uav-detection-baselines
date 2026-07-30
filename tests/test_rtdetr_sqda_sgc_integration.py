@@ -15,6 +15,14 @@ from src.rtdetr_sqda_sgc import (
 from src.sqda_sgc import SQDASGCAdapter
 
 
+def test_custom_model_exposes_native_loss_class_count() -> None:
+    model = SQDASGCDetectionModel("rtdetr-l.yaml", nc=10, verbose=False)
+
+    assert model.nc == 10
+    criterion = model.init_criterion()
+    assert criterion.nc == 10
+
+
 class _RecordingAdapter(nn.Module):
     def __init__(self) -> None:
         super().__init__()
