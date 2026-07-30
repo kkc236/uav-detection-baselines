@@ -1,16 +1,16 @@
 {
   "best_fitness": 0.24173,
-  "completed_epoch": 1,
-  "fitness": 0.24173,
+  "completed_epoch": 2,
+  "fitness": 0.24164,
   "gate": "g1",
   "metrics": {
-    "metrics/mAP50(B)": 0.41424,
-    "metrics/mAP50-95(B)": 0.24173,
-    "metrics/precision(B)": 0.51119,
-    "metrics/recall(B)": 0.43526,
-    "val/cls_loss": 0.51536,
-    "val/giou_loss": 0.70933,
-    "val/l1_loss": 0.07296
+    "metrics/mAP50(B)": 0.41413,
+    "metrics/mAP50-95(B)": 0.24164,
+    "metrics/precision(B)": 0.51094,
+    "metrics/recall(B)": 0.43529,
+    "val/cls_loss": 0.51531,
+    "val/giou_loss": 0.70937,
+    "val/l1_loss": 0.07299
   },
   "target_epochs": 3
 }
