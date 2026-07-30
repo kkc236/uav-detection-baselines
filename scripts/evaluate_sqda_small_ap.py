@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
@@ -116,16 +117,34 @@ def evaluate_predictions(dataset: dict, predictions_path: str | Path) -> dict:
     evaluator.evaluate()
     evaluator.accumulate()
     evaluator.summarize()
+
+    precision = evaluator.eval["precision"]
+    recall = evaluator.eval["recall"]
+
+    def mean_valid(values) -> float:
+        valid = values[values > -1]
+        return float(np.mean(valid)) if valid.size else -1.0
+
+    iou50 = int(np.flatnonzero(np.isclose(evaluator.params.iouThrs, 0.50))[0])
+    iou75 = int(np.flatnonzero(np.isclose(evaluator.params.iouThrs, 0.75))[0])
+    max_det_index = len(evaluator.params.maxDets) - 1
+
+    def average_precision(area_index: int, iou_index: int | slice = slice(None)) -> float:
+        return mean_valid(precision[iou_index, :, :, area_index, max_det_index])
+
+    def average_recall(area_index: int) -> float:
+        return mean_valid(recall[:, :, area_index, max_det_index])
+
     return {
-        "ap": float(evaluator.stats[0]),
-        "ap50": float(evaluator.stats[1]),
-        "ap75": float(evaluator.stats[2]),
-        "ap_small": float(evaluator.stats[3]),
-        "ap_medium": float(evaluator.stats[4]),
-        "ap_large": float(evaluator.stats[5]),
-        "ar_small": float(evaluator.stats[9]),
-        "ar_medium": float(evaluator.stats[10]),
-        "ar_large": float(evaluator.stats[11]),
+        "ap": average_precision(0),
+        "ap50": average_precision(0, iou50),
+        "ap75": average_precision(0, iou75),
+        "ap_small": average_precision(1),
+        "ap_medium": average_precision(2),
+        "ap_large": average_precision(3),
+        "ar_small": average_recall(1),
+        "ar_medium": average_recall(2),
+        "ar_large": average_recall(3),
         "max_dets": int(evaluator.params.maxDets[-1]),
     }
 

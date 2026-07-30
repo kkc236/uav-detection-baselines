@@ -38,4 +38,5 @@ def test_small_ap_uses_original_image_area_and_max_det_300(tmp_path) -> None:
 
     assert dataset["annotations"][0]["area"] == pytest.approx(100.0)
     assert metrics["max_dets"] == 300
+    assert metrics["ap"] == pytest.approx(1.0)
     assert metrics["ap_small"] == pytest.approx(1.0)
