@@ -122,6 +122,27 @@ def test_adaptation_changes_only_native_query_embeddings() -> None:
     assert adapter.recorded[2] is raw_c2
 
 
+def test_adaptation_aligns_amp_c2_to_native_query_dtype() -> None:
+    adapter = _RecordingAdapter()
+    args, kwargs = _decoder_args(batch=1, prefix=0)
+    raw_c2 = torch.randn(1, 128, 40, 40, dtype=torch.float16)
+
+    output_args, _, _, _ = adapt_decoder_inputs(
+        adapter,
+        args,
+        kwargs,
+        raw_c2,
+        query_count=300,
+        identity_override=False,
+    )
+
+    assert adapter.recorded is not None
+    assert adapter.recorded[0].dtype == torch.float32
+    assert adapter.recorded[2].dtype == adapter.recorded[0].dtype
+    assert raw_c2.dtype == torch.float16
+    assert output_args[0].dtype == args[0].dtype
+
+
 def test_identity_override_is_bitwise_exact_with_denoising_prefix() -> None:
     adapter = SQDASGCAdapter()
     args, kwargs = _decoder_args(batch=1, prefix=17)

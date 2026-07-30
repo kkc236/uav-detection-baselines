@@ -55,10 +55,11 @@ def adapt_decoder_inputs(
 
     native_queries = embed[:, -query_count:, :]
     reference_boxes = refer_bbox[:, -query_count:, :].sigmoid().detach()
+    adapter_c2 = raw_c2.to(dtype=native_queries.dtype)
     enhanced_queries, diagnostics = adapter(
         native_queries,
         reference_boxes,
-        raw_c2,
+        adapter_c2,
         identity_override=identity_override,
     )
     if enhanced_queries.shape != native_queries.shape:
