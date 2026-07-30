@@ -219,6 +219,35 @@ def test_formal_settings_are_frozen(
     assert MATCHED_AMP_GROWTH_INTERVAL == 2**31 - 1
 
 
+def test_resume_and_target_epoch_controls_are_explicit_and_relocatable(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "baseline.pt"
+    data = tmp_path / "VisDrone.yaml"
+    resume = tmp_path / "runs" / "sqda-sgc-g2" / "weights" / "epoch4.pt"
+    args = build_parser().parse_args(
+        [
+            "--gate",
+            "formal",
+            "--checkpoint",
+            str(checkpoint),
+            "--data",
+            str(data),
+            "--project",
+            str(tmp_path / "runs"),
+            "--resume-from",
+            str(resume),
+            "--target-epochs",
+            "100",
+        ]
+    )
+    settings = build_settings(args)
+
+    assert settings["epochs"] == 100
+    assert settings["resume"] == str(resume.resolve())
+    assert settings["name"] == "sqda-sgc-formal-seed0-100ep"
+
+
 def test_cli_does_not_expose_protocol_mutations() -> None:
     options = {action.dest for action in build_parser()._actions}
     assert not {

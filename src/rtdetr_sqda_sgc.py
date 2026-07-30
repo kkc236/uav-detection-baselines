@@ -333,14 +333,35 @@ class SQDASGCTrainer(RTDETRTrainer):
         self.last_module_gradient_norm: float | None = None
         super().__init__(*args, **kwargs)
 
+    def check_resume(self, overrides: dict) -> None:
+        requested_epochs = overrides.get("epochs")
+        requested_project = overrides.get("project")
+        requested_name = overrides.get("name")
+        requested_exist_ok = overrides.get("exist_ok")
+        super().check_resume(overrides)
+        if self.resume:
+            # Ultralytics restores the checkpoint's original run identity and
+            # epoch budget. Restore explicit values so crash recovery resumes
+            # in place, while a passed G2 can continue in a separate formal run.
+            if requested_epochs is not None:
+                self.args.epochs = requested_epochs
+            if requested_project is not None:
+                self.args.project = requested_project
+            if requested_name is not None:
+                self.args.name = requested_name
+            if requested_exist_ok is not None:
+                self.args.exist_ok = requested_exist_ok
+
     def get_model(
         self,
         cfg: dict | str | None = None,
         weights: str | nn.Module | None = None,
         verbose: bool = True,
     ) -> SQDASGCDetectionModel:
-        if weights is not None:
-            raise RuntimeError("SQDA-SGC G1/G2 must start fresh from the immutable mature baseline")
+        if weights is not None and not isinstance(weights, SQDASGCDetectionModel):
+            raise RuntimeError(
+                "SQDA-SGC resume checkpoint must contain SQDASGCDetectionModel weights"
+            )
         model = SQDASGCDetectionModel(
             cfg or "rtdetr-l.yaml",
             nc=self.data["nc"],
@@ -354,6 +375,11 @@ class SQDASGCTrainer(RTDETRTrainer):
             self.baseline_checkpoint,
             expected_sha256=self.baseline_sha256,
         )
+        if weights is not None:
+            source_adapter = getattr(weights, "sqda_sgc", None)
+            if source_adapter is None:
+                raise RuntimeError("SQDA-SGC resume checkpoint is missing adapter weights")
+            model.sqda_sgc.load_state_dict(source_adapter.state_dict(), strict=True)
         freeze_stock_model(model)
         self.args.freeze = list(range(len(model.model)))
         self._update_manifest_with_model(model)

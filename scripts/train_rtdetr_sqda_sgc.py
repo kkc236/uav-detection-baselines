@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.checkpoint_recovery import validate_checkpoint
 from src.rtdetr_sqda_sgc import BASELINE_SHA256, SQDASGCTrainer, sha256_file
 from ultralytics.utils.torch_utils import unwrap_model
 
@@ -21,6 +22,7 @@ RUN_NAMES = {
     "g1": "sqda-sgc-g1-seed0-3ep",
     "g1r": "sqda-sgc-g1r-seed0-3ep",
     "g2": "sqda-sgc-g2-seed0-10ep",
+    "formal": "sqda-sgc-formal-seed0-100ep",
 }
 
 
@@ -28,12 +30,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a pre-registered frozen-stock SQDA-SGC RT-DETR-L gate."
     )
-    parser.add_argument("--gate", choices=("g1", "g1r", "g2"), required=True)
+    parser.add_argument("--gate", choices=("g1", "g1r", "g2", "formal"), required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--target-epochs", type=int)
     return parser
 
 
@@ -41,7 +45,15 @@ def build_settings(args: argparse.Namespace) -> dict:
     return {
         "model": "rtdetr-l.yaml",
         "data": str(args.data.expanduser().resolve()),
-        "epochs": 10 if args.gate == "g2" else 3,
+        "epochs": (
+            args.target_epochs
+            if args.target_epochs is not None
+            else 100
+            if args.gate == "formal"
+            else 10
+            if args.gate == "g2"
+            else 3
+        ),
         "imgsz": 640,
         "batch": 8,
         "workers": args.workers,
@@ -50,7 +62,11 @@ def build_settings(args: argparse.Namespace) -> dict:
         "name": RUN_NAMES[args.gate],
         "exist_ok": True,
         "pretrained": False,
-        "resume": False,
+        "resume": (
+            str(args.resume_from.expanduser().resolve())
+            if args.resume_from is not None
+            else False
+        ),
         "cache": False,
         "amp": True,
         "deterministic": True,
@@ -119,11 +135,34 @@ def prepare_manifest(
             f"baseline SHA256 mismatch: expected {BASELINE_SHA256}, got {actual_baseline_sha}"
         )
 
+    resume_from = args.resume_from.expanduser().resolve() if args.resume_from else None
+    if resume_from is not None:
+        valid, reason = validate_checkpoint(resume_from)
+        if not valid:
+            raise ValueError(f"resume checkpoint is not valid: {resume_from} ({reason})")
+
     run_dir = args.project.expanduser().resolve() / RUN_NAMES[args.gate]
     if run_dir.exists() and any(run_dir.iterdir()):
-        raise FileExistsError(
-            f"refusing to overwrite non-empty pre-registered run directory: {run_dir}"
+        if resume_from is None:
+            raise FileExistsError(
+                f"refusing to overwrite non-empty pre-registered run directory: {run_dir}"
+            )
+        manifest_path = run_dir / "run-manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"resume run is missing its manifest: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("gate") != args.gate:
+            raise ValueError("resume gate does not match the existing run manifest")
+        if manifest.get("baseline", {}).get("sha256") != actual_baseline_sha:
+            raise ValueError("resume baseline SHA256 does not match the existing run")
+        manifest["resume_from"] = str(resume_from)
+        manifest["resume_checkpoint_sha256"] = sha256_file(resume_from)
+        manifest["resume_updated_utc"] = datetime.now(timezone.utc).isoformat()
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
         )
+        return manifest_path
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "run-manifest.json"
     packages = {}
