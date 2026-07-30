@@ -106,6 +106,7 @@ def test_forward_shape_dtype_diagnostics_and_reference_detach() -> None:
     assert diagnostics["group_gates"].shape == (2, 300, 2, 16)
     assert diagnostics["context_reliability"].shape == (2, 300)
     assert diagnostics["geometry_features"].shape == (2, 300, 5)
+    assert diagnostics["geometry_scale_coordinate"].shape == (2, 300, 1)
     assert diagnostics["semantic_component"].shape == (2, 300, 256)
     assert diagnostics["geometry_component"].shape == (2, 300, 256)
     assert diagnostics["raw_fusion"].shape == (2, 300, 256)
@@ -186,12 +187,13 @@ def test_geometry_trust_initialization_and_group_gate_layout() -> None:
     assert module.gate[-1].out_features == 32
     assert torch.count_nonzero(module.gate[-1].bias) == 0
     assert module.gate[0].in_features == 5 * 256 + 4
-    assert module.geometry_trust[0].in_features == 5
-    assert module.geometry_trust[-1].out_features == 1
-    assert module.geometry_trust[-1].bias.item() == pytest.approx(
+    assert module.geometry_trust.agreement[0].in_features == 3
+    assert module.geometry_trust.agreement[-1].out_features == 1
+    assert module.geometry_trust.agreement[-1].bias.item() == pytest.approx(
         math.log(0.90 / 0.10), abs=1e-6
     )
-    assert module.geometry_trust[-1].weight.std().item() == pytest.approx(0.01, rel=0.35)
+    assert module.geometry_trust.agreement[-1].weight.std().item() == pytest.approx(0.01, rel=0.35)
+    assert module.geometry_trust.scale_slope.item() == pytest.approx(0.20, abs=1e-6)
 
     queries, boxes, raw_c2 = _inputs(batch=1, queries=4)
     _, diagnostics = module(queries, boxes, raw_c2)
@@ -228,6 +230,18 @@ def test_geometry_trust_gate_starts_near_one_and_has_strict_bounds() -> None:
     assert torch.all((geometry_budget > 0.80) & (geometry_budget < 1.0))
     assert torch.equal(semantic_budget, torch.ones_like(semantic_budget))
     assert geometry_budget.mean().item() == pytest.approx(0.98, abs=0.01)
+
+
+def test_smgt_geometry_budget_is_monotone_in_reference_scale() -> None:
+    module = SQDASGCAdapter()
+    agreement = torch.zeros(1, 2, 3)
+    log_size = torch.tensor([[[-4.0, -4.0], [-1.5, -1.5]]])
+
+    budget = module.geometry_trust_budget(agreement, log_size)
+
+    assert budget.shape == (1, 2, 1)
+    assert torch.all((budget > 0.80) & (budget < 1.0))
+    assert budget[0, 1, 0] >= budget[0, 0, 0]
 
 
 def test_full_counterfactual_uses_the_retained_fusion_module() -> None:

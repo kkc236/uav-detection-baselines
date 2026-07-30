@@ -19,7 +19,7 @@ data="$root/protocols/tsgr-p2-e1/source-VisDrone-full.yaml"
 token_file="${2:-/root/.config/sqda-sgc/github-token}"
 branch="codex/sqda-sgc"
 admission="$project/geometry-branch-diagnosis/g1-admission.json"
-run_name="sqda-geometry-gate-$gate-seed0-$([[ "$gate" == "g1" ]] && echo 3 || echo 10)ep"
+run_name="sqda-geometry-smgt-$gate-seed0-$([[ "$gate" == "g1" ]] && echo 3 || echo 10)ep"
 run_dir="$project/$run_name"
 pending_log="$project/.${gate}-console.pending.log"
 sync_log="$project/${gate}-github-sync.log"
@@ -35,9 +35,9 @@ if [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(s
   exit 4
 fi
 if [[ "$gate" == "g2" ]]; then
-  g1_decision="$project/sqda-geometry-gate-g1-seed0-3ep/final-gate-decision.json"
-  if [[ ! -f "$g1_decision" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1]))["passed"])).lower())' "$g1_decision")" != "true" ]]; then
-    echo "a passed G1 final decision is required before G2." >&2
+  g1_inventory="$project/sqda-geometry-smgt-g1-seed0-3ep/evaluation-inventory/candidate-inventory.json"
+  if [[ ! -f "$g1_inventory" ]] || [[ "$("$venv/bin/python" -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1])).get("selected_checkpoint"))).lower())' "$g1_inventory")" != "true" ]]; then
+    echo "a strictly passing SMGT G1 checkpoint inventory is required before G2." >&2
     exit 5
   fi
 fi

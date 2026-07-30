@@ -205,8 +205,9 @@ def test_one_step_changes_adapter_but_not_stock_parameters_or_buffers() -> None:
         "reliability_projection.weight",
         "gate.0.weight",
         "fusion.weight",
-        "geometry_trust.0.weight",
-        "geometry_trust.2.weight",
+        "geometry_trust.agreement.0.weight",
+        "geometry_trust.agreement.2.weight",
+        "geometry_trust.scale_slope_raw",
         "context_logit",
         "layer_scale_logit",
     }

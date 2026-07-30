@@ -1,8 +1,29 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts.train_rtdetr_sqda_geometry_gate import RUN_NAMES, build_parser, build_settings
+
+
+def test_smgt_runs_use_a_fresh_namespace() -> None:
+    assert RUN_NAMES == {
+        "g1": "sqda-geometry-smgt-g1-seed0-3ep",
+        "g2": "sqda-geometry-smgt-g2-seed0-10ep",
+    }
+
+
+def test_smgt_runner_requires_the_inventory_selected_checkpoint_for_g2() -> None:
+    runner = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_sqda_geometry_gate_server.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "sqda-geometry-smgt-" in runner
+    assert "candidate-inventory.json" in runner
+    assert "selected_checkpoint" in runner
 
 
 @pytest.mark.parametrize(("gate", "epochs"), [("g1", 3), ("g2", 10)])
@@ -72,3 +93,29 @@ def test_post_g1_evaluation_cli_is_fixed_to_the_frozen_protocol() -> None:
         "output",
     }.issubset(options)
     assert not {"epochs", "optimizer", "lr0", "mode", "threshold"}.intersection(options)
+
+
+def test_post_g1_evaluation_cli_accepts_an_updated_checkpoint_inventory(tmp_path) -> None:
+    from scripts.evaluate_sqda_geometry_gate import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--checkpoint",
+            str(tmp_path / "baseline.pt"),
+            "--weights-dir",
+            str(tmp_path / "weights"),
+            "--diagnosis",
+            str(tmp_path / "diagnosis.json"),
+            "--data",
+            str(tmp_path / "VisDrone.yaml"),
+            "--images",
+            str(tmp_path / "images"),
+            "--labels",
+            str(tmp_path / "labels"),
+            "--output",
+            str(tmp_path / "evaluation"),
+        ]
+    )
+
+    assert args.candidate_checkpoint is None
+    assert args.weights_dir == tmp_path / "weights"

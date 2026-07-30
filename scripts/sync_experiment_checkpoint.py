@@ -44,6 +44,7 @@ LIGHTWEIGHT_ARTIFACTS = (
     "exact-manual-validation.log",
     "frozen-stock-audit.json",
     "final-gate-decision.json",
+    "evaluation-inventory/candidate-inventory.json",
     "input-preflight.json",
     "g1-console.log",
     "g2-console.log",
@@ -84,10 +85,11 @@ def collect_lightweight_artifacts(
     target = Path(destination)
     target.mkdir(parents=True, exist_ok=True)
     copied: list[Path] = []
-    for name in LIGHTWEIGHT_ARTIFACTS:
-        source_path = source / name
+    for relative_name in LIGHTWEIGHT_ARTIFACTS:
+        source_path = source / relative_name
         if source_path.is_file():
-            destination_path = target / name
+            destination_path = target / relative_name
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, destination_path)
             copied.append(destination_path)
     manifest_path = target / "latest.json"

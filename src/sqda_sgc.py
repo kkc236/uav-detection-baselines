@@ -44,6 +44,45 @@ def _inverse_sigmoid_probability(probability: float) -> float:
     return math.log(probability / (1.0 - probability))
 
 
+class ScaleMonotoneGeometryTrust(nn.Module):
+    """Bounded geometry trust with a non-decreasing reference-scale prior."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.agreement = nn.Sequential(
+            nn.Linear(3, 16),
+            nn.SiLU(),
+            nn.Linear(16, 1),
+        )
+        self.scale_slope_raw = nn.Parameter(
+            torch.tensor(math.log(math.expm1(0.20)), dtype=torch.float32)
+        )
+        self.register_buffer(
+            "scale_anchor",
+            torch.tensor(math.log((32.0 / 640.0) ** 2), dtype=torch.float32),
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.agreement[-1].weight, mean=0.0, std=0.01)
+        with torch.no_grad():
+            self.agreement[-1].bias.fill_(_inverse_sigmoid_probability(0.90))
+
+    @property
+    def scale_slope(self) -> Tensor:
+        return F.softplus(self.scale_slope_raw)
+
+    def forward(self, agreement: Tensor, log_size: Tensor) -> tuple[Tensor, Tensor]:
+        if agreement.shape[:-1] != log_size.shape[:-1]:
+            raise ValueError("agreement and log_size must share leading dimensions")
+        if agreement.shape[-1] != 3 or log_size.shape[-1] != 2:
+            raise ValueError("SMGT requires agreement[..., 3] and log_size[..., 2]")
+        log_area = log_size.sum(dim=-1, keepdim=True)
+        scale = torch.sigmoid(log_area - self.scale_anchor.to(dtype=log_area.dtype))
+        logit = self.agreement(agreement) + self.scale_slope.to(dtype=agreement.dtype) * scale
+        return 0.80 + 0.20 * logit.sigmoid(), scale
+
+
 def _masked_softmax(scores: Tensor, valid: Tensor, dim: int) -> Tensor:
     """Softmax that is exactly zero when every entry is invalid."""
     if scores.shape != valid.shape:
@@ -126,11 +165,7 @@ class SQDASGCAdapter(nn.Module):
             nn.Linear(128, 2 * gate_groups),
         )
         self.fusion = nn.Linear(2 * dim, dim)
-        self.geometry_trust = nn.Sequential(
-            nn.Linear(5, 16),
-            nn.SiLU(),
-            nn.Linear(16, 1),
-        )
+        self.geometry_trust = ScaleMonotoneGeometryTrust()
 
         context_probability = self.config.context_init / self.config.context_cap
         residual_probability = self.config.residual_init / self.config.residual_cap
@@ -159,6 +194,16 @@ class SQDASGCAdapter(nn.Module):
         strict_cap = cap * (1.0 - torch.finfo(cap.dtype).eps)
         return strict_cap * self.layer_scale_logit.sigmoid()
 
+    @property
+    def geometry_agreement(self) -> nn.Sequential:
+        """Expose the SMGT agreement branch without duplicate state keys."""
+        return self.geometry_trust.agreement
+
+    def geometry_trust_budget(self, agreement: Tensor, log_size: Tensor) -> Tensor:
+        """Return the bounded SMGT geometry budget for per-query evidence."""
+        budget, _scale = self.geometry_trust(agreement, log_size)
+        return budget
+
     def reset_parameters(self) -> None:
         nn.init.normal_(self.role_bias, mean=0.0, std=0.01)
         for offset_head in self.point_offset_heads:
@@ -167,11 +212,7 @@ class SQDASGCAdapter(nn.Module):
         nn.init.zeros_(self.gate[-1].bias)
         nn.init.normal_(self.fusion.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.fusion.bias)
-        nn.init.normal_(self.geometry_trust[-1].weight, mean=0.0, std=0.01)
-        with torch.no_grad():
-            self.geometry_trust[-1].bias.fill_(
-                _inverse_sigmoid_probability(0.90)
-            )
+        self.geometry_trust.reset_parameters()
 
     @staticmethod
     def box_sine_encoding(boxes: Tensor) -> Tensor:
@@ -485,6 +526,7 @@ class SQDASGCAdapter(nn.Module):
             ),
             dim=-1,
         )
+        geometry_scale_coordinate = torch.zeros_like(log_size[..., :1])
         if residual_mode == "full":
             semantic_budget = torch.ones_like(log_size[..., :1])
             geometry_budget = torch.ones_like(log_size[..., :1])
@@ -505,7 +547,10 @@ class SQDASGCAdapter(nn.Module):
             raw_fusion = geometry_component
         else:
             semantic_budget = torch.ones_like(log_size[..., :1])
-            geometry_budget = 0.80 + 0.20 * self.geometry_trust(geometry_features).sigmoid()
+            geometry_budget, geometry_scale_coordinate = self.geometry_trust(
+                geometry_features[..., 2:],
+                log_size,
+            )
             semantic_component = semantic_residual
             geometry_component = geometry_budget * geometry_residual
             raw_fusion = semantic_component + geometry_component
@@ -528,6 +573,7 @@ class SQDASGCAdapter(nn.Module):
             "geometry_similarity": geometry_similarity.detach(),
             "context_similarity": context_similarity.detach(),
             "geometry_features": geometry_features.detach(),
+            "geometry_scale_coordinate": geometry_scale_coordinate.detach(),
             "semantic_component": semantic_component.detach(),
             "geometry_component": geometry_component.detach(),
             "raw_fusion": raw_fusion.detach(),

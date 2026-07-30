@@ -26,6 +26,10 @@ from src.rtdetr_sqda_sgc import (
     load_trained_geometry_adapter,
     sha256_file,
 )
+from src.sqda_geometry_checkpoint_selection import (
+    select_earliest_passing_candidate,
+    select_trainable_candidates,
+)
 from src.sqda_error_audit import precision_recall_f1_curve, summarize_detection_errors
 from src.sqda_geometry_gate_decision import decide_g1_result
 
@@ -35,7 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Evaluate a completed SQDA geometry-gate G1 against frozen retained-G2 evidence."
     )
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--candidate-checkpoint", type=Path, required=True)
+    parser.add_argument("--candidate-checkpoint", type=Path)
+    parser.add_argument("--weights-dir", type=Path)
     parser.add_argument("--diagnosis", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--images", type=Path, required=True)
@@ -50,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     baseline = args.checkpoint.expanduser().resolve()
+    if args.candidate_checkpoint is None:
+        raise ValueError("single-checkpoint evaluation requires --candidate-checkpoint")
     candidate_checkpoint = args.candidate_checkpoint.expanduser().resolve()
     diagnosis_path = args.diagnosis.expanduser().resolve()
     data_yaml = args.data.expanduser().resolve()
@@ -159,9 +166,49 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     return decision
 
 
+def run_checkpoint_inventory(args: argparse.Namespace) -> dict[str, Any]:
+    """Evaluate every actual SMGT update and select only a strictly passing snapshot."""
+    if args.weights_dir is None:
+        raise ValueError("checkpoint inventory requires --weights-dir")
+    candidates = select_trainable_candidates(args.weights_dir)
+    if not candidates:
+        raise RuntimeError("checkpoint inventory contains no updated SMGT snapshots")
+    output = args.output.expanduser().resolve()
+    records: list[tuple[Path, dict[str, Any]]] = []
+    for checkpoint in candidates:
+        child_args = argparse.Namespace(**vars(args))
+        child_args.candidate_checkpoint = checkpoint
+        child_args.weights_dir = None
+        child_args.output = output / checkpoint.stem
+        decision = run_evaluation(child_args)
+        records.append((checkpoint, decision))
+    selected = select_earliest_passing_candidate(records)
+    summary = {
+        "schema": 1,
+        "training_signal": False,
+        "weights_dir": str(args.weights_dir.expanduser().resolve()),
+        "candidates": [
+            {
+                "checkpoint": str(checkpoint),
+                "output": str(output / checkpoint.stem),
+                "passed": bool(decision["passed"]),
+                "criteria": decision["criteria"],
+                "deltas": decision["deltas"],
+            }
+            for checkpoint, decision in records
+        ],
+        "selected_checkpoint": str(selected) if selected is not None else None,
+    }
+    _write_json(output / "candidate-inventory.json", summary)
+    return summary
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    print(json.dumps(run_evaluation(args), indent=2, sort_keys=True))
+    if (args.candidate_checkpoint is None) == (args.weights_dir is None):
+        raise ValueError("provide exactly one of --candidate-checkpoint or --weights-dir")
+    runner = run_checkpoint_inventory if args.weights_dir is not None else run_evaluation
+    print(json.dumps(runner(args), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

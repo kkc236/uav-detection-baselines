@@ -22,8 +22,8 @@ from ultralytics.utils.torch_utils import unwrap_model
 
 
 RUN_NAMES = {
-    "g1": "sqda-geometry-gate-g1-seed0-3ep",
-    "g2": "sqda-geometry-gate-g2-seed0-10ep",
+    "g1": "sqda-geometry-smgt-g1-seed0-3ep",
+    "g2": "sqda-geometry-smgt-g2-seed0-10ep",
 }
 
 
