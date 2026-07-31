@@ -13,6 +13,24 @@ from src.cshc import CSHCRTDDETRDecoder, SparseCandidates
 from src.rtdetr_cshc import CSHCDetectionModel
 
 
+def resolve_cshc_decoder(model: Any, decoder_type: type = CSHCRTDDETRDecoder):
+    """Find the final CSHC decoder through the optional framework wrapper used by Validator."""
+    current = model
+    for _ in range(4):
+        layers = getattr(current, "model", None)
+        if layers is None or layers is current:
+            break
+        try:
+            final_layer = layers[-1]
+        except (TypeError, KeyError, IndexError):
+            current = layers
+            continue
+        if isinstance(final_layer, decoder_type):
+            return final_layer
+        current = layers
+    raise TypeError("coverage export requires a final CSHCRTDDETRDecoder")
+
+
 def load_frozen_ledger(path: str | Path) -> list[dict[str, Any]]:
     """Load the immutable BQP image ledger without treating its old 7.43% gate as a CSHC metric."""
     rows: list[dict[str, Any]] = []
@@ -158,10 +176,7 @@ def build_coverage_validator(ledger: list[dict[str, Any]]):
             return dataset
 
         def init_metrics(self, model) -> None:
-            decoder = model.model[-1]
-            if not isinstance(decoder, CSHCRTDDETRDecoder):
-                raise TypeError("coverage export requires CSHCRTDDETRDecoder")
-            self.decoder = decoder
+            self.decoder = resolve_cshc_decoder(model)
 
         def update_metrics(self, preds, batch) -> None:
             del preds

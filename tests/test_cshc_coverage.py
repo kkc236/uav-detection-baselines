@@ -46,3 +46,15 @@ def test_export_records_use_only_frozen_misses_and_pre_top300_c2_candidates():
         {"image_id": "a.jpg", "class_id": 0, "box": [0.15, 0.15, 0.25, 0.25]},
         {"image_id": "a.jpg", "class_id": 2, "box": [0.65, 0.15, 0.85, 0.35]},
     ]
+
+
+def test_validator_decoder_resolution_accepts_a_single_framework_wrapper():
+    from src.cshc_coverage import resolve_cshc_decoder
+
+    class InnerModel:
+        model = ["not-the-decoder", "cshc-decoder"]
+
+    class Wrapper:
+        model = InnerModel()
+
+    assert resolve_cshc_decoder(Wrapper(), decoder_type=str) == "cshc-decoder"
