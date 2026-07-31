@@ -71,6 +71,7 @@ class LPRDeformableTransformerDecoder(nn.Module):
         num_layers: int,
         eval_idx: int,
         max_logit_delta: float = 0.5,
+        private_seed: int = 3407,
     ) -> None:
         super().__init__()
         self.layers = layers
@@ -80,7 +81,7 @@ class LPRDeformableTransformerDecoder(nn.Module):
         self.lpr_refiners = nn.ModuleList(
             LocalizationPriorRefiner(
                 hidden_dim,
-                seed=3407 + index,
+                seed=private_seed + index,
                 max_logit_delta=max_logit_delta,
             )
             for index in range(num_layers)
@@ -91,6 +92,7 @@ class LPRDeformableTransformerDecoder(nn.Module):
         cls,
         stock: nn.Module,
         max_logit_delta: float = 0.5,
+        private_seed: int = 3407,
     ) -> "LPRDeformableTransformerDecoder":
         """Wrap an existing decoder while reusing its exact decoder layers."""
         return cls(
@@ -99,6 +101,7 @@ class LPRDeformableTransformerDecoder(nn.Module):
             num_layers=stock.num_layers,
             eval_idx=stock.eval_idx,
             max_logit_delta=max_logit_delta,
+            private_seed=private_seed,
         )
 
     def forward(

@@ -4,7 +4,7 @@ import torch
 from ultralytics.nn.tasks import RTDETRDetectionModel
 
 from src.lpr_head import LPRDeformableTransformerDecoder
-from src.rtdetr_lpr import LPRRTDETRDetectionModel, LPRTrainer
+from src.rtdetr_lpr import FixedPairedControlTrainer, LPRRTDETRDetectionModel, LPRTrainer
 
 
 def test_lpr_model_replaces_only_decoder_container() -> None:
@@ -50,8 +50,38 @@ def test_lpr_trainer_constructs_custom_model() -> None:
     trainer = object.__new__(LPRTrainer)
     trainer.data = {"nc": 3, "channels": 3}
     trainer.max_logit_delta = 0.5
+    trainer.experiment_seed = 0
+    trainer.initial_state_path = None
 
     model = trainer.get_model("rtdetr-l.yaml", weights=None, verbose=False)
 
     assert isinstance(model, LPRRTDETRDetectionModel)
     assert isinstance(model.model[-1].decoder, LPRDeformableTransformerDecoder)
+
+
+def test_seed_specific_lpr_private_state_preserves_public_initialization() -> None:
+    torch.manual_seed(7)
+    stock = RTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)
+    torch.manual_seed(7)
+    first = LPRRTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False, lpr_seed=10_007)
+    torch.manual_seed(7)
+    second = LPRRTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False, lpr_seed=10_008)
+
+    stock_state = stock.state_dict()
+    first_state = first.state_dict()
+    second_state = second.state_dict()
+    for name, value in stock_state.items():
+        assert torch.equal(first_state[name], value)
+        assert torch.equal(second_state[name], value)
+    private = [name for name in first_state if "lpr_refiners" in name and not name.endswith(".alpha")]
+    assert any(not torch.equal(first_state[name], second_state[name]) for name in private)
+
+
+def test_control_trainer_constructs_stock_model() -> None:
+    trainer = object.__new__(FixedPairedControlTrainer)
+    trainer.data = {"nc": 3, "channels": 3}
+    trainer.initial_state_path = None
+
+    model = trainer.get_model("rtdetr-l.yaml", weights=None, verbose=False)
+
+    assert type(model) is RTDETRDetectionModel
