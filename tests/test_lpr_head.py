@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import torch
+from torch import nn
+from ultralytics.nn.modules.transformer import DeformableTransformerDecoder
 
-from src.lpr_head import LocalizationPriorRefiner, box_geometry_prior
+from src.lpr_head import LPRDeformableTransformerDecoder, LocalizationPriorRefiner, box_geometry_prior
 
 
 def test_geometry_prior_is_finite_for_tiny_boxes() -> None:
@@ -51,3 +53,103 @@ def test_refiner_construction_does_not_advance_global_rng() -> None:
     actual = torch.rand(4)
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+class _RecordingLayer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.references: list[torch.Tensor] = []
+
+    def forward(
+        self,
+        embed: torch.Tensor,
+        refer_bbox: torch.Tensor,
+        feats: torch.Tensor,
+        shapes: list,
+        padding_mask: torch.Tensor | None,
+        attn_mask: torch.Tensor | None,
+        query_pos: torch.Tensor,
+    ) -> torch.Tensor:
+        del feats, shapes, padding_mask, attn_mask
+        self.references.append(refer_bbox.detach().clone())
+        return embed + query_pos
+
+
+def _decoder_fixture() -> tuple[
+    DeformableTransformerDecoder,
+    torch.Tensor,
+    torch.Tensor,
+    list[int],
+    nn.ModuleList,
+    nn.ModuleList,
+    nn.Module,
+]:
+    torch.manual_seed(23)
+    stock = DeformableTransformerDecoder(hidden_dim=4, decoder_layer=_RecordingLayer(), num_layers=3)
+    embed = torch.randn(2, 5, 4)
+    refer_bbox = torch.randn(2, 5, 4)
+    feats = torch.empty(0)
+    bbox_head = nn.ModuleList(nn.Linear(4, 4) for _ in range(3))
+    score_head = nn.ModuleList(nn.Linear(4, 2) for _ in range(3))
+    return stock, embed, refer_bbox, [], bbox_head, score_head, nn.Identity()
+
+
+def _recorded_references(decoder: nn.Module) -> list[torch.Tensor]:
+    return [layer.references[-1] for layer in decoder.layers]
+
+
+def _clear_references(decoder: nn.Module) -> None:
+    for layer in decoder.layers:
+        layer.references.clear()
+
+
+def test_lpr_decoder_zero_gate_matches_stock_and_reference_trajectory() -> None:
+    stock, embed, refer_bbox, shapes, bbox_head, score_head, pos_mlp = _decoder_fixture()
+    stock.train()
+    stock_boxes, stock_scores = stock(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+    stock_references = _recorded_references(stock)
+    _clear_references(stock)
+
+    lpr = LPRDeformableTransformerDecoder.from_stock(stock)
+    lpr.train()
+    lpr_boxes, lpr_scores = lpr(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+
+    assert torch.equal(lpr_boxes, stock_boxes)
+    assert torch.equal(lpr_scores, stock_scores)
+    assert len(lpr.lpr_refiners) == stock.num_layers
+    for expected, actual in zip(stock_references, _recorded_references(lpr)):
+        assert torch.equal(actual, expected)
+
+
+def test_lpr_decoder_changes_output_without_changing_reference_trajectory() -> None:
+    stock, embed, refer_bbox, shapes, bbox_head, score_head, pos_mlp = _decoder_fixture()
+    stock.train()
+    stock_boxes, _ = stock(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+    stock_references = _recorded_references(stock)
+    _clear_references(stock)
+
+    lpr = LPRDeformableTransformerDecoder.from_stock(stock)
+    lpr.lpr_refiners[-1].alpha.data.fill_(0.2)
+    lpr.train()
+    lpr_boxes, _ = lpr(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+
+    assert torch.equal(lpr_boxes[:-1], stock_boxes[:-1])
+    assert not torch.equal(lpr_boxes[-1], stock_boxes[-1])
+    for expected, actual in zip(stock_references, _recorded_references(lpr)):
+        assert torch.equal(actual, expected)
+
+
+def test_lpr_decoder_zero_gate_matches_stock_in_evaluation() -> None:
+    stock, embed, refer_bbox, shapes, bbox_head, score_head, pos_mlp = _decoder_fixture()
+    stock.eval()
+    stock_boxes, stock_scores = stock(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+    stock_references = _recorded_references(stock)
+    _clear_references(stock)
+
+    lpr = LPRDeformableTransformerDecoder.from_stock(stock).eval()
+    lpr_boxes, lpr_scores = lpr(embed, refer_bbox, torch.empty(0), shapes, bbox_head, score_head, pos_mlp)
+
+    assert torch.equal(lpr_boxes, stock_boxes)
+    assert torch.equal(lpr_scores, stock_scores)
+    for expected, actual in zip(stock_references, _recorded_references(lpr)):
+        assert torch.equal(actual, expected)
