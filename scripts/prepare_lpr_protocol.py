@@ -18,7 +18,9 @@ sys.path.insert(0, str(ROOT))
 
 from src.lpr_protocol import (
     CATEGORY_NAMES,
+    EXPECTED_COMMON_FINGERPRINTS,
     EXPECTED_DATASET_SHA256,
+    EXPECTED_SOURCE_SHA256,
     EXPECTED_SUBSET_SHA256,
     build_initial_state,
     category_mapping_sha256,
@@ -27,6 +29,7 @@ from src.lpr_protocol import (
     environment_violations,
     file_sha256,
     select_hashed_subset,
+    source_violations,
     subset_signature,
 )
 from src.rtdetr_lpr import LPRRTDETRDetectionModel
@@ -159,12 +162,21 @@ def prepare_protocol(dataset_root: Path, output_dir: Path, *, seed: int) -> dict
     violations = environment_violations(environment)
     if violations:
         raise ValueError(f"environment does not match frozen authority: {violations}")
+    source_drift = source_violations()
+    if source_drift:
+        raise ValueError(f"Ultralytics source does not match frozen authority: {source_drift}")
     dataset = dataset_signature(dataset_root)
     data_files = prepare_data_files(dataset_root, output_dir)
     validate_data_authority(dataset, data_files["subset"])
 
     state_path = Path(output_dir).resolve() / f"initial-state-seed{seed}.pt"
     artifact = create_initial_state_artifact(seed=seed)
+    expected_common = EXPECTED_COMMON_FINGERPRINTS[seed]
+    if artifact["fingerprints"]["common"] != expected_common:
+        raise ValueError(
+            f"common initial state is not the Linux authority for seed {seed}: "
+            f"expected={expected_common}, actual={artifact['fingerprints']['common']}"
+        )
     artifact["metadata"].update(
         {
             "dataset": dataset,
@@ -187,6 +199,7 @@ def prepare_protocol(dataset_root: Path, output_dir: Path, *, seed: int) -> dict
         },
         "category_mapping_sha256": category_mapping_sha256(CATEGORY_NAMES),
         "environment": environment,
+        "source_sha256": EXPECTED_SOURCE_SHA256,
         "data": {
             "screen": {
                 "path": str(data_files["screen_data_path"]),

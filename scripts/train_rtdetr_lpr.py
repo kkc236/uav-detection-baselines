@@ -19,10 +19,13 @@ from src.lpr_head import LocalizationPriorRefiner
 from src.checkpoint_recovery import validate_checkpoint
 from src.lpr_protocol import (
     EXPECTED_DATASET_SHA256,
+    EXPECTED_SOURCE_SHA256,
     EXPECTED_SUBSET_SHA256,
     current_environment,
     dataset_signature,
     environment_violations,
+    source_violations,
+    validate_initial_state_authority,
 )
 from src.rtdetr_lpr import FixedPairedControlTrainer, LPRTrainer
 
@@ -97,6 +100,12 @@ def validate_launch_authority(
         raise ValueError(f"environment does not match frozen authority: {violations}")
     if int(manifest.get("seed", -1)) != args.seed:
         raise ValueError(f"protocol seed mismatch: expected {args.seed}, got {manifest.get('seed')}")
+    source_drift = source_violations()
+    if source_drift or manifest.get("source_sha256") != EXPECTED_SOURCE_SHA256:
+        raise ValueError(
+            f"Ultralytics source does not match frozen authority: "
+            f"manifest={manifest.get('source_sha256')}, current={source_drift}"
+        )
     expected_dataset = {"file_count": 14038, "sha256": EXPECTED_DATASET_SHA256}
     if manifest.get("dataset") != expected_dataset or current_dataset != expected_dataset:
         raise ValueError(
@@ -184,6 +193,17 @@ def _unwrap_model(model):
 def _lpr_refiners(trainer) -> list[LocalizationPriorRefiner]:
     model = _unwrap_model(trainer.model)
     return [module for module in model.modules() if isinstance(module, LocalizationPriorRefiner)]
+
+
+def validate_runtime_model(trainer) -> None:
+    model = _unwrap_model(trainer.model)
+    head = model.model[-1]
+    if int(getattr(head, "nc", -1)) != 10:
+        raise RuntimeError(f"paired RT-DETR head must have 10 classes, got {getattr(head, 'nc', None)}")
+    if int(getattr(head, "num_queries", -1)) != 300:
+        raise RuntimeError(
+            f"paired RT-DETR head must have exactly 300 queries, got {getattr(head, 'num_queries', None)}"
+        )
 
 
 def reset_peak_memory(_trainer) -> None:
@@ -284,9 +304,12 @@ def main() -> None:
     environment = current_environment()
     current_dataset = dataset_signature(Path(authority["dataset_root"]))
     validate_launch_authority(args, authority, environment, current_dataset)
+    validate_initial_state_authority(
+        args.initial_state,
+        seed=args.seed,
+        manifest_record=authority.get("initial_state", {}),
+    )
     validate_resume_authority(args, authority, environment)
-    if not args.initial_state.is_file():
-        raise FileNotFoundError(f"missing paired initial state: {args.initial_state}")
 
     trainer_kwargs = {
         "overrides": build_settings(args, authority),
@@ -303,6 +326,7 @@ def main() -> None:
         trainer.add_callback("on_train_epoch_end", capture_lpr_epoch_state)
         trainer.add_callback("on_fit_epoch_end", write_lpr_diagnostics)
         trainer.add_callback("teardown", remove_lpr_gradient_hooks)
+    trainer.add_callback("on_train_start", validate_runtime_model)
     trainer.add_callback(
         "on_train_start",
         lambda current: write_protocol_manifest(current, authority, args, environment),

@@ -6,17 +6,22 @@ import torch
 
 from src.lpr_protocol import (
     CATEGORY_NAMES,
+    EXPECTED_COMMON_FINGERPRINTS,
     EXPECTED_DATASET_SHA256,
     EXPECTED_ENVIRONMENT,
+    EXPECTED_SOURCE_SHA256,
     EXPECTED_SUBSET_SHA256,
     build_initial_state,
     category_mapping_sha256,
     dataset_signature,
     environment_violations,
+    file_sha256,
     load_initial_state,
     select_hashed_subset,
+    source_violations,
     state_fingerprint,
     subset_signature,
+    validate_initial_state_authority,
 )
 
 
@@ -33,6 +38,20 @@ def test_frozen_authority_constants_match_strict_contract() -> None:
         "ultralytics": "8.4.90",
     }
     assert len(CATEGORY_NAMES) == 10
+    assert EXPECTED_COMMON_FINGERPRINTS == {
+        0: "0B968046FDC89BE5A31581C81F7335A9742BC422503428113637B1CC829F0FA0",
+        1: "A73D3A57F5DCF3F62FA4B30329C32204E3A74BC57AA4FFEE577873D14F0A3D65",
+        2: "1CCA2D745106F949268B3978722A415439623376D01C1D188B1450C6230AF1B2",
+    }
+    assert EXPECTED_SOURCE_SHA256 == {
+        "head.py": "5701116D86881827AC9E1E7462DFAA44C33937BD68E23324763459685729E06F",
+        "tasks.py": "B00935C1851BB9CEA240985704C12E654E68B369F6C59DE20E45FA295CB79B92",
+        "rtdetr-l.yaml": "85716F626769CB5DDF00D59FCF6CAFB5814AAD196328100BDC7C93306F650E83",
+    }
+
+
+def test_installed_ultralytics_sources_match_frozen_authority() -> None:
+    assert source_violations() == {}
 
 
 def test_hash_selected_subset_is_order_independent_and_signed(tmp_path) -> None:
@@ -123,3 +142,27 @@ def test_initial_state_preserves_common_state_and_detects_corruption() -> None:
         assert "fingerprint" in str(error)
     else:
         raise AssertionError("corrupted initial state was accepted")
+
+
+def test_initial_state_authority_requires_linux_common_fingerprint_and_file_hash(tmp_path, monkeypatch) -> None:
+    common = {"model.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3)}
+    method = {**common, "model.decoder.lpr_refiners.0.alpha": torch.tensor(0.0)}
+    artifact = build_initial_state(common, method, metadata={"seed": 0})
+    path = tmp_path / "initial-state-seed0.pt"
+    torch.save(artifact, path)
+    monkeypatch.setitem(EXPECTED_COMMON_FINGERPRINTS, 0, artifact["fingerprints"]["common"])
+    record = {
+        "path": str(path),
+        "sha256": file_sha256(path),
+        "fingerprints": artifact["fingerprints"],
+    }
+
+    validate_initial_state_authority(path, seed=0, manifest_record=record)
+
+    record["sha256"] = "BAD"
+    try:
+        validate_initial_state_authority(path, seed=0, manifest_record=record)
+    except ValueError as error:
+        assert "file SHA" in str(error)
+    else:
+        raise AssertionError("changed initial-state file hash was accepted")

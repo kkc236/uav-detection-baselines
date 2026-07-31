@@ -14,10 +14,16 @@ from scripts.train_rtdetr_lpr import (
     capture_lpr_epoch_state,
     validate_launch_authority,
     validate_resume_authority,
+    validate_runtime_model,
     write_lpr_diagnostics,
 )
 from src.lpr_head import LocalizationPriorRefiner
-from src.lpr_protocol import EXPECTED_DATASET_SHA256, EXPECTED_ENVIRONMENT, EXPECTED_SUBSET_SHA256
+from src.lpr_protocol import (
+    EXPECTED_DATASET_SHA256,
+    EXPECTED_ENVIRONMENT,
+    EXPECTED_SOURCE_SHA256,
+    EXPECTED_SUBSET_SHA256,
+)
 
 
 def _manifest(tmp_path, *, seed=0):
@@ -25,6 +31,7 @@ def _manifest(tmp_path, *, seed=0):
     initial_state.touch()
     return {
         "seed": seed,
+        "source_sha256": EXPECTED_SOURCE_SHA256,
         "dataset": {"file_count": 14038, "sha256": EXPECTED_DATASET_SHA256},
         "subset": {"count": 647, "fraction": 0.10, "sha256": EXPECTED_SUBSET_SHA256},
         "data": {
@@ -192,6 +199,17 @@ def test_help_renders_paired_options() -> None:
     assert "--variant" in help_text
     assert "--stage" in help_text
     assert "--protocol-manifest" in help_text
+
+
+def test_runtime_model_requires_ten_classes_and_300_queries() -> None:
+    head = SimpleNamespace(nc=10, num_queries=300)
+    trainer = SimpleNamespace(model=SimpleNamespace(model=[head]))
+
+    validate_runtime_model(trainer)
+
+    head.num_queries = 299
+    with pytest.raises(RuntimeError, match="300 queries"):
+        validate_runtime_model(trainer)
 
 
 def test_epoch_diagnostics_write_one_complete_jsonl_record(tmp_path) -> None:

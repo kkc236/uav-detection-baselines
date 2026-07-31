@@ -15,6 +15,16 @@ import torch
 
 EXPECTED_DATASET_SHA256 = "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
 EXPECTED_SUBSET_SHA256 = "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0"
+EXPECTED_COMMON_FINGERPRINTS = {
+    0: "0B968046FDC89BE5A31581C81F7335A9742BC422503428113637B1CC829F0FA0",
+    1: "A73D3A57F5DCF3F62FA4B30329C32204E3A74BC57AA4FFEE577873D14F0A3D65",
+    2: "1CCA2D745106F949268B3978722A415439623376D01C1D188B1450C6230AF1B2",
+}
+EXPECTED_SOURCE_SHA256 = {
+    "head.py": "5701116D86881827AC9E1E7462DFAA44C33937BD68E23324763459685729E06F",
+    "tasks.py": "B00935C1851BB9CEA240985704C12E654E68B369F6C59DE20E45FA295CB79B92",
+    "rtdetr-l.yaml": "85716F626769CB5DDF00D59FCF6CAFB5814AAD196328100BDC7C93306F650E83",
+}
 EXPECTED_ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 4090",
     "driver": "550.142",
@@ -83,6 +93,32 @@ def _file_sha256(path: Path) -> str:
 def file_sha256(path: Path) -> str:
     """Return an uppercase streaming SHA-256 for a protocol artifact."""
     return _file_sha256(Path(path))
+
+
+def ultralytics_source_paths() -> dict[str, Path]:
+    import ultralytics
+
+    root = Path(ultralytics.__file__).resolve().parent
+    return {
+        "head.py": root / "nn" / "modules" / "head.py",
+        "tasks.py": root / "nn" / "tasks.py",
+        "rtdetr-l.yaml": root / "cfg" / "models" / "rt-detr" / "rtdetr-l.yaml",
+    }
+
+
+def source_violations(paths: Mapping[str, Path] | None = None) -> dict[str, dict[str, Any]]:
+    actual_paths = dict(paths or ultralytics_source_paths())
+    violations = {}
+    for name, expected in EXPECTED_SOURCE_SHA256.items():
+        path = actual_paths.get(name)
+        actual = file_sha256(path) if path is not None and Path(path).is_file() else None
+        if actual != expected:
+            violations[name] = {
+                "expected": expected,
+                "actual": actual,
+                "path": str(path) if path is not None else None,
+            }
+    return violations
 
 
 def dataset_signature(dataset_root: Path) -> dict[str, int | str]:
@@ -213,3 +249,40 @@ def load_initial_state(model, artifact: Mapping[str, Any], *, variant: str) -> N
         unexpected = sorted(set(expected) - model_names)
         raise ValueError(f"initial-state keys do not match model: missing={missing[:5]}, unexpected={unexpected[:5]}")
     model.load_state_dict(expected, strict=True)
+
+
+def validate_initial_state_authority(
+    path: str | Path,
+    *,
+    seed: int,
+    manifest_record: Mapping[str, Any],
+) -> dict[str, Any]:
+    state_path = Path(path).resolve()
+    if state_path != Path(manifest_record.get("path", "")).resolve():
+        raise ValueError("initial-state path does not match protocol manifest")
+    if not state_path.is_file():
+        raise FileNotFoundError(f"missing paired initial state: {state_path}")
+    actual_file_sha = file_sha256(state_path)
+    if actual_file_sha != manifest_record.get("sha256"):
+        raise ValueError(
+            f"initial-state file SHA mismatch: expected={manifest_record.get('sha256')}, actual={actual_file_sha}"
+        )
+    artifact = torch.load(state_path, map_location="cpu", weights_only=False)
+    if not isinstance(artifact, dict) or artifact.get("format_version") != 1:
+        raise ValueError("initial-state artifact format is invalid")
+    if artifact.get("metadata", {}).get("seed") != seed:
+        raise ValueError("initial-state seed does not match paired arm")
+    fingerprints = artifact.get("fingerprints", {})
+    if fingerprints != manifest_record.get("fingerprints"):
+        raise ValueError("initial-state fingerprints do not match protocol manifest")
+    if state_fingerprint(artifact.get("common_state", {})) != fingerprints.get("common"):
+        raise ValueError("common initial-state fingerprint mismatch")
+    if state_fingerprint(artifact.get("lpr_state", {})) != fingerprints.get("lpr"):
+        raise ValueError("LPR initial-state fingerprint mismatch")
+    expected_common = EXPECTED_COMMON_FINGERPRINTS.get(seed)
+    if fingerprints.get("common") != expected_common:
+        raise ValueError(
+            f"common initial-state is not the Linux authority for seed {seed}: "
+            f"expected={expected_common}, actual={fingerprints.get('common')}"
+        )
+    return artifact
