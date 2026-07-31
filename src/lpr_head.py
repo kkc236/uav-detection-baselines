@@ -44,11 +44,17 @@ class LocalizationPriorRefiner(nn.Module):
 
         self.alpha = nn.Parameter(torch.zeros(()))
         self.max_logit_delta = float(max_logit_delta)
+        self.last_residual_mean: torch.Tensor | None = None
+        self.last_residual_max: torch.Tensor | None = None
 
     def forward(self, hidden: torch.Tensor, stock_boxes: torch.Tensor) -> torch.Tensor:
         geometry = self.geometry_path(box_geometry_prior(stock_boxes).to(hidden.dtype))
         features = torch.cat((self.query_path(hidden), geometry), dim=-1)
         residual = torch.tanh(self.residual_head(features))
+        if self.training:
+            detached_residual = residual.detach().abs()
+            self.last_residual_mean = detached_residual.mean()
+            self.last_residual_max = detached_residual.max()
         stock_logits = torch.logit(stock_boxes.clamp(1e-6, 1 - 1e-6))
         candidate = torch.sigmoid(stock_logits + self.max_logit_delta * residual)
         gate = 0.5 * torch.tanh(self.alpha)

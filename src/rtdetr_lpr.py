@@ -44,6 +44,8 @@ class LPRTrainer(RTDETRTrainer):
         super().check_resume(overrides)
         if self.resume:
             apply_resume_runtime_overrides(self.args, overrides)
+            if "epochs" in overrides:
+                self.args.epochs = int(overrides["epochs"])
 
     def get_model(self, cfg: dict | str | None = None, weights: str | None = None, verbose: bool = True):
         model = LPRRTDETRDetectionModel(
