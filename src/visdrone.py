@@ -105,8 +105,13 @@ def convert_split(dataset_dir: Path, split: str) -> None:
             converted_ignore = convert_visdrone_ignore_row(line, image_width=width, image_height=height)
             if converted_ignore is not None:
                 ignore_rows.append(converted_ignore)
-        (target_labels / annotation_path.name).write_text("\n".join(rows), encoding="utf-8")
-        (target_ignore_labels / annotation_path.name).write_text("\n".join(ignore_rows), encoding="utf-8")
+        # The frozen matched-baseline dataset was materialized with CRLF label
+        # separators. Write bytes explicitly so Linux and Windows reproduce the
+        # authoritative semantic and validation signatures exactly.
+        (target_labels / annotation_path.name).write_bytes("\r\n".join(rows).encode("utf-8"))
+        (target_ignore_labels / annotation_path.name).write_bytes(
+            "\r\n".join(ignore_rows).encode("utf-8")
+        )
 
 
 def prepare_visdrone(dataset_dir: Path, splits: tuple[str, ...] = ("train", "val", "test")) -> None:
