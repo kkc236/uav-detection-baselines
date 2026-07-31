@@ -67,6 +67,59 @@ def test_setup_installs_fixed_amp128_scaler(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_resume_continues_valid_optimizer_evidence_sequence(monkeypatch, tmp_path) -> None:
+    records = [
+        {
+            "optimizer_attempt": attempt,
+            "amp_scale_before": 128.0,
+            "amp_scale_after": 128.0,
+            "amp_step_skipped": False,
+            "gradient_norm_finite": True,
+        }
+        for attempt in (1, 2)
+    ]
+    evidence = tmp_path / "optimizer-evidence.jsonl"
+    evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    monkeypatch.setattr("src.rtdetr_lpr.RTDETRTrainer._setup_train", lambda self: None)
+    monkeypatch.setattr("src.rtdetr_lpr.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("src.rtdetr_lpr.torch.amp.GradScaler", lambda *args, **kwargs: _FakeScaler())
+    trainer = object.__new__(LPRTrainer)
+    trainer.amp = True
+    trainer.save_dir = tmp_path
+    trainer.resume = True
+
+    trainer._setup_train()
+
+    assert trainer.optimizer_attempt == 2
+
+
+def test_resume_rejects_invalid_optimizer_evidence(monkeypatch, tmp_path) -> None:
+    (tmp_path / "optimizer-evidence.jsonl").write_text(
+        json.dumps(
+            {
+                "optimizer_attempt": 1,
+                "amp_scale_before": 128.0,
+                "amp_scale_after": 64.0,
+                "amp_step_skipped": True,
+                "gradient_norm_finite": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.rtdetr_lpr.RTDETRTrainer._setup_train", lambda self: None)
+    monkeypatch.setattr("src.rtdetr_lpr.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("src.rtdetr_lpr.torch.amp.GradScaler", lambda *args, **kwargs: _FakeScaler())
+    trainer = object.__new__(LPRTrainer)
+    trainer.amp = True
+    trainer.save_dir = tmp_path
+    trainer.resume = True
+
+    with pytest.raises(ValueError, match="optimizer evidence"):
+        trainer._setup_train()
+
+
 class _FakeScaler:
     def __init__(self, after: float = 128.0) -> None:
         self.scale = 128.0

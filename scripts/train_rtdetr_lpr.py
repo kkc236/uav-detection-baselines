@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.lpr_head import LocalizationPriorRefiner
+from src.checkpoint_recovery import validate_checkpoint
 from src.lpr_protocol import (
     EXPECTED_DATASET_SHA256,
     EXPECTED_SUBSET_SHA256,
@@ -107,6 +108,44 @@ def validate_launch_authority(
     expected_state = Path(manifest.get("initial_state", {}).get("path", "")).resolve()
     if args.initial_state.resolve() != expected_state:
         raise ValueError("initial-state path does not match paired protocol manifest")
+
+
+def validate_resume_authority(
+    args: argparse.Namespace,
+    authority: dict,
+    environment: dict,
+) -> None:
+    """Reject checkpoints from a different paired arm or scientific protocol."""
+    if args.resume is None:
+        return
+    if args.preflight:
+        raise ValueError("preflight may not resume a scientific checkpoint")
+    checkpoint = args.resume.resolve()
+    valid, reason = validate_checkpoint(checkpoint)
+    if not valid:
+        raise ValueError(f"resume checkpoint is invalid: {reason}")
+    if checkpoint.parent.name != "weights":
+        raise ValueError("resume checkpoint must be inside its run weights directory")
+    runtime_path = checkpoint.parent.parent / "lpr_protocol.json"
+    if not runtime_path.is_file():
+        raise ValueError(f"resume protocol manifest is missing: {runtime_path}")
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    expected = {
+        "protocol": FROZEN_PROTOCOL,
+        "authority": authority,
+        "environment": environment,
+        "variant": args.variant,
+        "stage": args.stage,
+        "seed": args.seed,
+        "epochs": 10 if args.stage == "screen" else 100,
+        "initial_state": str(args.initial_state.resolve()),
+    }
+    for field, value in expected.items():
+        if runtime.get(field) != value:
+            raise ValueError(
+                f"resume {field} does not match frozen authority: "
+                f"expected={value!r}, actual={runtime.get(field)!r}"
+            )
 
 
 def build_settings(args: argparse.Namespace, manifest: dict) -> dict:
@@ -245,6 +284,7 @@ def main() -> None:
     environment = current_environment()
     current_dataset = dataset_signature(Path(authority["dataset_root"]))
     validate_launch_authority(args, authority, environment, current_dataset)
+    validate_resume_authority(args, authority, environment)
     if not args.initial_state.is_file():
         raise FileNotFoundError(f"missing paired initial state: {args.initial_state}")
 

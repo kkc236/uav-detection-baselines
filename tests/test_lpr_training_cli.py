@@ -8,10 +8,12 @@ import torch
 from torch import nn
 
 from scripts.train_rtdetr_lpr import (
+    FROZEN_PROTOCOL,
     build_parser,
     build_settings,
     capture_lpr_epoch_state,
     validate_launch_authority,
+    validate_resume_authority,
     write_lpr_diagnostics,
 )
 from src.lpr_head import LocalizationPriorRefiner
@@ -87,6 +89,62 @@ def test_formal_is_fresh_100_epoch_full_data(tmp_path) -> None:
     assert settings["epochs"] == 100
     assert settings["data"] == manifest["data"]["formal"]["path"]
     assert "resume" not in settings
+
+
+def _write_resume_run(tmp_path, args, manifest, **changes):
+    run = tmp_path / "resume-run"
+    weights = run / "weights"
+    weights.mkdir(parents=True)
+    checkpoint = weights / "last.pt"
+    torch.save({"epoch": 3, "optimizer": {}, "model": {}}, checkpoint)
+    runtime = {
+        "protocol": FROZEN_PROTOCOL,
+        "authority": manifest,
+        "environment": dict(EXPECTED_ENVIRONMENT),
+        "variant": args.variant,
+        "stage": args.stage,
+        "seed": args.seed,
+        "epochs": 10,
+        "initial_state": str(args.initial_state.resolve()),
+    }
+    runtime.update(changes)
+    (run / "lpr_protocol.json").write_text(json.dumps(runtime), encoding="utf-8")
+    args.resume = checkpoint
+    return checkpoint
+
+
+def test_resume_accepts_only_same_arm_and_protocol(tmp_path) -> None:
+    args, manifest = _args(tmp_path)
+    _write_resume_run(tmp_path, args, manifest)
+
+    validate_resume_authority(args, manifest, dict(EXPECTED_ENVIRONMENT))
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"variant": "control"}, "variant"),
+        ({"stage": "formal"}, "stage"),
+        ({"seed": 1}, "seed"),
+        ({"protocol": {**FROZEN_PROTOCOL, "mosaic": 0.0}}, "protocol"),
+    ),
+)
+def test_resume_rejects_arm_or_protocol_drift(tmp_path, changes, message) -> None:
+    args, manifest = _args(tmp_path)
+    _write_resume_run(tmp_path, args, manifest, **changes)
+
+    with pytest.raises(ValueError, match=message):
+        validate_resume_authority(args, manifest, dict(EXPECTED_ENVIRONMENT))
+
+
+def test_formal_cannot_resume_screen_checkpoint(tmp_path) -> None:
+    args, manifest = _args(tmp_path)
+    checkpoint = _write_resume_run(tmp_path, args, manifest)
+    args.stage = "formal"
+    args.resume = checkpoint
+
+    with pytest.raises(ValueError, match="stage"):
+        validate_resume_authority(args, manifest, dict(EXPECTED_ENVIRONMENT))
 
 
 @pytest.mark.parametrize(

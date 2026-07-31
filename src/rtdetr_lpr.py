@@ -46,6 +46,32 @@ class FixedPairedProtocolMixin:
     controlled_amp_scale = 128.0
     controlled_amp_growth_interval = 2**31 - 1
 
+    def _resume_optimizer_attempt(self) -> int:
+        path = self.optimizer_evidence_path
+        if not path.exists():
+            if self.resume:
+                raise ValueError(f"resume optimizer evidence is missing: {path}")
+            return 0
+        if not self.resume:
+            raise FileExistsError(f"refusing to append changed optimizer evidence: {path}")
+        try:
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"resume optimizer evidence is unreadable: {path}") from error
+        if not records:
+            raise ValueError(f"resume optimizer evidence is empty: {path}")
+        for attempt, record in enumerate(records, start=1):
+            valid = (
+                record.get("optimizer_attempt") == attempt
+                and record.get("amp_scale_before") == self.controlled_amp_scale
+                and record.get("amp_scale_after") == self.controlled_amp_scale
+                and record.get("amp_step_skipped") is False
+                and record.get("gradient_norm_finite") is True
+            )
+            if not valid:
+                raise ValueError(f"resume optimizer evidence is invalid at attempt {attempt}: {path}")
+        return len(records)
+
     def _setup_train(self):
         super()._setup_train()
         if not bool(self.amp) or not torch.cuda.is_available():
@@ -58,10 +84,8 @@ class FixedPairedProtocolMixin:
         )
         if float(self.scaler.get_scale()) != self.controlled_amp_scale:
             raise RuntimeError("fixed AMP scale initialization failed")
-        self.optimizer_attempt = 0
         self.optimizer_evidence_path = Path(self.save_dir) / "optimizer-evidence.jsonl"
-        if self.optimizer_evidence_path.exists() and not self.resume:
-            raise FileExistsError(f"refusing to append changed optimizer evidence: {self.optimizer_evidence_path}")
+        self.optimizer_attempt = self._resume_optimizer_attempt()
 
     def build_optimizer(self, model, name="MuSGD", lr=0.01, momentum=0.937, decay=0.0005, iterations=1e5):
         actual = {"name": name, "lr": lr, "momentum": momentum, "decay": decay}
