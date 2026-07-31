@@ -1,0 +1,42 @@
+# RT-DETR-L with CSHC: sparse C2 candidate tokens injected before stock Top-300 query selection.
+nc: 80
+scales:
+  l: [1.00, 1.00, 1024]
+
+backbone:
+  - [-1, 1, HGStem, [32, 48]]
+  - [-1, 6, HGBlock, [48, 128, 3]]
+  - [-1, 1, DWConv, [128, 3, 2, 1, False]]
+  - [-1, 6, HGBlock, [96, 512, 3]]
+  - [-1, 1, DWConv, [512, 3, 2, 1, False]]
+  - [-1, 6, HGBlock, [192, 1024, 5, True, False]]
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]]
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]]
+  - [-1, 1, DWConv, [1024, 3, 2, 1, False]]
+  - [-1, 6, HGBlock, [384, 2048, 5, True, False]]
+
+head:
+  - [-1, 1, Conv, [256, 1, 1, null, 1, 1, False]]
+  - [-1, 1, AIFI, [1024, 8]]
+  - [-1, 1, Conv, [256, 1, 1]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [7, 1, Conv, [256, 1, 1, null, 1, 1, False]]
+  - [[-2, -1], 1, Concat, [1]]
+  - [-1, 3, RepC3, [256]]
+  - [-1, 1, Conv, [256, 1, 1]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [3, 1, Conv, [256, 1, 1, null, 1, 1, False]]
+  - [[18, 19], 1, Concat, [1]]
+  - [-1, 3, RepC3, [256]] # 21: stock F3
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 17], 1, Concat, [1]]
+  - [-1, 3, RepC3, [256]] # 24: stock F4
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 12], 1, Concat, [1]]
+  - [-1, 3, RepC3, [256]] # 27: stock F5
+  - [21, 1, DySample, [256, 2, 4]] # stride-8 F3 -> stride-4
+  - [1, 1, Conv, [64, 1, 1, null, 1, 1, False]] # project stride-4 C2
+  - [[28, 29], 1, Concat, [1]]
+  - [-1, 1, C2CandidateFusion, [320, 320]]
+  - [-1, 1, Conv, [64, 1, 1]] # sparse C2 candidate feature
+  - [[32, 21, 24, 27], 1, RTDETRDecoder, [nc, 512, 0.025]]
