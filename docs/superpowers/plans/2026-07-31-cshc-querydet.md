@@ -323,6 +323,25 @@ Run: `python -m pytest tests/test_cshc_coverage.py tests/test_cshc_training.py -
 
 Expected: `2 passed`.
 
+### Task 5a: Export C2 candidates against the frozen BQP ledger
+
+**Files:**
+- Create: `src/cshc_coverage.py`
+- Create: `scripts/export_cshc_coverage_candidates.py`
+- Modify: `tests/test_cshc_coverage.py`
+
+- [x] **Step 1: Write failing tests for converting only frozen non-covered GT indices and only pre-Top-300 C2 candidates into normalized, class-aware xyxy records.**
+
+- [x] **Step 2: Run the extended coverage test and verify RED.**
+
+- [x] **Step 3: Implement a custom RT-DETR validator that filters to the 647 ledger image names, receives the validator's exact transformed targets, and exports all 512 C2 candidates before combined query selection.**
+
+The exporter must load the CSHC checkpoint into the repository-owned model class, preserve the frozen ledger identity, and reject an image/name/GT-index mismatch. It must never collect final decoder boxes or apply final post-processing.
+
+- [x] **Step 4: Run the extended coverage test and verify GREEN.**
+
+- [ ] **Step 5: Execute the exporter remotely before running the existing class-aware one-to-one audit.**
+
 ### Task 6: Verify locally, then use the GPU only for gated execution
 
 **Files:**
