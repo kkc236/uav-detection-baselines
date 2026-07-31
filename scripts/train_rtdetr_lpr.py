@@ -263,11 +263,14 @@ def _map75(trainer) -> float:
 
 
 def write_lpr_diagnostics(trainer) -> None:
+    epoch = int(trainer.epoch + 1)
+    if epoch > int(trainer.args.epochs):
+        return
     state = getattr(trainer, "_lpr_epoch_state", None)
     if state is None:
         raise RuntimeError("LPR epoch state was not captured before validation")
     record = {
-        "epoch": int(trainer.epoch + 1),
+        "epoch": epoch,
         "map75": _map75(trainer),
         **state,
         "cuda_peak_mib": (

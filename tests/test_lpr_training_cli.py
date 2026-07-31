@@ -221,6 +221,7 @@ def test_epoch_diagnostics_write_one_complete_jsonl_record(tmp_path) -> None:
     trainer = SimpleNamespace(
         model=model,
         epoch=0,
+        args=SimpleNamespace(epochs=10),
         batch_size=8,
         amp=True,
         save_dir=tmp_path,
@@ -239,3 +240,16 @@ def test_epoch_diagnostics_write_one_complete_jsonl_record(tmp_path) -> None:
     assert record["residual_max"] == pytest.approx(0.45)
     assert record["lpr_grad_norm"] == pytest.approx(0.5)
     assert "cuda_peak_mib" in record
+
+
+def test_epoch_diagnostics_skip_post_fit_validation(tmp_path) -> None:
+    trainer = SimpleNamespace(
+        epoch=10,
+        args=SimpleNamespace(epochs=10),
+        save_dir=tmp_path,
+        _lpr_epoch_state={},
+    )
+
+    write_lpr_diagnostics(trainer)
+
+    assert not (tmp_path / "lpr_diagnostics.jsonl").exists()

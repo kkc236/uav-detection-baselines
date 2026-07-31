@@ -122,3 +122,35 @@ def test_manifest_parser_requires_ten_rows_and_145_fixed_amp_attempts(tmp_path) 
     assert report["passed"]
     assert set(report["pairs"]) == {"0", "1", "2"}
     assert all(pair["delta"]["final_map"] > 0 for pair in report["pairs"].values())
+
+
+def test_manifest_parser_ignores_only_known_post_fit_diagnostic(tmp_path) -> None:
+    pairs = {}
+    for seed in (0, 1, 2):
+        control = tmp_path / f"control-{seed}"
+        method = tmp_path / f"lpr-{seed}"
+        _write_run(control, [0.01] * 10, [0.3] * 10, [1.5] * 10, lpr=False)
+        _write_run(method, [0.011] * 10, [0.29] * 10, [1.4] * 10, lpr=True)
+        diagnostic = method / "lpr_diagnostics.jsonl"
+        with diagnostic.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "epoch": 11,
+                        "map75": 0.0,
+                        "gates": [0.001] * 6,
+                        "residual_mean": 0.1,
+                        "residual_max": 0.4,
+                        "lpr_grad_norm": 0.03,
+                        "cuda_peak_mib": 9000,
+                    }
+                )
+                + "\n"
+            )
+        pairs[str(seed)] = {"control": str(control), "lpr": str(method)}
+    manifest = tmp_path / "pairs-post-fit.json"
+    manifest.write_text(json.dumps({"pairs": pairs}), encoding="utf-8")
+
+    report = evaluate_pairs_manifest(manifest)
+
+    assert report["passed"]

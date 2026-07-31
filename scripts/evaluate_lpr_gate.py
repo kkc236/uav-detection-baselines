@@ -128,6 +128,16 @@ def _optimizer_valid(records: list[dict]) -> bool:
     )
 
 
+def _training_diagnostics(records: list[dict], run: Path) -> list[dict]:
+    expected = list(range(1, EXPECTED_SCREEN_EPOCHS + 1))
+    epochs = [record.get("epoch") for record in records]
+    if epochs == expected:
+        return records
+    if epochs == [*expected, EXPECTED_SCREEN_EPOCHS + 1]:
+        return records[:EXPECTED_SCREEN_EPOCHS]
+    raise ValueError(f"LPR diagnostics must contain training epochs 1-10 only: {run}; epochs={epochs}")
+
+
 def load_arm(run_path: str | Path, *, lpr: bool) -> ArmScreenMetrics:
     run = Path(run_path).resolve()
     rows = _read_csv(run / "results.csv")
@@ -140,9 +150,7 @@ def load_arm(run_path: str | Path, *, lpr: bool) -> ArmScreenMetrics:
     diagnostic_values = []
     gate_active = True
     if lpr:
-        diagnostics = _read_jsonl(run / "lpr_diagnostics.jsonl")
-        if len(diagnostics) != EXPECTED_SCREEN_EPOCHS:
-            raise ValueError(f"LPR screen arm must contain exactly 10 diagnostic rows: {run}")
+        diagnostics = _training_diagnostics(_read_jsonl(run / "lpr_diagnostics.jsonl"), run)
         diagnostic_values = [
             float(value)
             for record in diagnostics
