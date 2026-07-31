@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
+import sys
 from pathlib import Path
 
+from ultralytics.nn.tasks import RTDETRDetectionModel
+
+from scripts.benchmark_lpr import parameter_counts
 from src.rtdetr_btdse import BTDSEDetectionModel
 from src.rtdetr_ioqc_sa import IOQCSADetectionModel
+from src.rtdetr_lpr import LPRRTDETRDetectionModel
 from src.rtdetr_vsf_rmr import VSFRMRDetectionModel
 
 
@@ -54,4 +60,38 @@ def test_three_innovations_have_distinct_loss_contracts():
     assert tuple(vsf.loss_names[-2:]) == ("vsf_local_loss", "vsf_global_loss")
     assert tuple(btdse.loss_names[-2:]) == ("background_loss", "saliency_loss")
     assert tuple(ioqc.loss_names[-2:]) == ("ioqc_comp_loss", "ioqc_align_loss")
+
+
+def test_lpr_adds_parameters_only_inside_decoder_refiners() -> None:
+    stock = RTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)
+    lpr = LPRRTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)
+    stock_names = set(stock.state_dict())
+    lpr_names = set(lpr.state_dict())
+    added = lpr_names - stock_names
+    names = module_names(lpr)
+
+    assert added
+    assert all("decoder.lpr_refiners" in name for name in added)
+    assert not (stock_names - lpr_names)
+    assert names.isdisjoint({"BTDSE", "VSFRMR", "P3SamplingProbe", "NWD"})
+    assert not hasattr(lpr, "ioqc_probe")
+
+    stock_counts = parameter_counts(stock)
+    lpr_counts = parameter_counts(lpr)
+    added_parameter_count = sum(lpr.state_dict()[name].numel() for name in added)
+    assert lpr_counts["total"] - stock_counts["total"] == added_parameter_count
+    assert 100 * added_parameter_count / stock_counts["total"] < 1.0
+
+
+def test_benchmark_script_runs_as_a_direct_cli() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "benchmark_lpr.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--output" in result.stdout
 
