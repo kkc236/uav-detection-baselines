@@ -80,6 +80,11 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+def file_sha256(path: Path) -> str:
+    """Return an uppercase streaming SHA-256 for a protocol artifact."""
+    return _file_sha256(Path(path))
+
+
 def dataset_signature(dataset_root: Path) -> dict[str, int | str]:
     dataset_root = Path(dataset_root).resolve()
     files = sorted(
@@ -100,9 +105,9 @@ def dataset_signature(dataset_root: Path) -> dict[str, int | str]:
 
 def category_mapping_sha256(names: Mapping[int, str] | Sequence[str]) -> str:
     if isinstance(names, Mapping):
-        normalized = [names[index] for index in sorted(names)]
+        normalized = {int(index): names[index] for index in sorted(names)}
     else:
-        normalized = list(names)
+        normalized = {index: name for index, name in enumerate(names)}
     payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return sha256(payload).hexdigest().upper()
 

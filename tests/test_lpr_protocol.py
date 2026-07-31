@@ -70,6 +70,7 @@ def test_category_mapping_hash_is_stable_for_mapping_or_sequence() -> None:
     mapping = {index: name for index, name in enumerate(CATEGORY_NAMES)}
 
     assert category_mapping_sha256(mapping) == category_mapping_sha256(list(CATEGORY_NAMES))
+    assert category_mapping_sha256(mapping) == "1455A1F5D9FA9988799815B36CF2CE6D5044B5BD7CAD7CC614D6B5E5059EF2A6"
 
 
 def test_environment_gate_reports_each_protocol_drift() -> None:
