@@ -1,0 +1,378 @@
+{
+  "candidates": [
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch1.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": true,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 5.662038688142301e-05,
+        "ap_small": 9.644209118747638e-05,
+        "max_f1_precision": -0.0016044286118930273,
+        "precision_at_baseline_threshold": 1.0240821711304804e-05,
+        "recall_at_baseline_threshold": 2.580045924815977e-05
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": false,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 5.662038688142301e-05,
+          "ap_small": 9.644209118747638e-05,
+          "max_f1_precision": -0.0016044286118930273,
+          "precision_at_baseline_threshold": 1.0240821711304804e-05,
+          "recall_at_baseline_threshold": 2.580045924815977e-05
+        },
+        "eligible": false,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch1",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch2.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": true,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 2.5559052324264364e-05,
+        "ap_small": 8.431877291226186e-05,
+        "max_f1_precision": 0.0,
+        "precision_at_baseline_threshold": -2.2056833478889537e-05,
+        "recall_at_baseline_threshold": 0.0
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": true,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 2.5559052324264364e-05,
+          "ap_small": 8.431877291226186e-05,
+          "max_f1_precision": 0.0,
+          "precision_at_baseline_threshold": -2.2056833478889537e-05,
+          "recall_at_baseline_threshold": 0.0
+        },
+        "eligible": true,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch2",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch3.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": false
+      },
+      "deltas": {
+        "ap": 4.4758244354348165e-05,
+        "ap_small": 0.00010649155906555796,
+        "max_f1_precision": -0.001336760190066344,
+        "precision_at_baseline_threshold": -9.846179545691669e-05,
+        "recall_at_baseline_threshold": -2.580045924815977e-05
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": false,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 4.4758244354348165e-05,
+          "ap_small": 0.00010649155906555796,
+          "max_f1_precision": -0.001336760190066344,
+          "precision_at_baseline_threshold": -9.846179545691669e-05,
+          "recall_at_baseline_threshold": -2.580045924815977e-05
+        },
+        "eligible": false,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch3",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch4.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 5.0128650028874455e-05,
+        "ap_small": 0.0001154357106558368,
+        "max_f1_precision": -4.415007335989429e-05,
+        "precision_at_baseline_threshold": -4.411224223588306e-05,
+        "recall_at_baseline_threshold": 0.0
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": true,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 5.0128650028874455e-05,
+          "ap_small": 0.0001154357106558368,
+          "max_f1_precision": -4.415007335989429e-05,
+          "precision_at_baseline_threshold": -4.411224223588306e-05,
+          "recall_at_baseline_threshold": 0.0
+        },
+        "eligible": true,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch4",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch5.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 5.580232974133903e-05,
+        "ap_small": 0.00011458074167167154,
+        "max_f1_precision": -0.0013806649935187432,
+        "precision_at_baseline_threshold": -5.5924260058182185e-05,
+        "recall_at_baseline_threshold": 2.580045924815977e-05
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": false,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 5.580232974133903e-05,
+          "ap_small": 0.00011458074167167154,
+          "max_f1_precision": -0.0013806649935187432,
+          "precision_at_baseline_threshold": -5.5924260058182185e-05,
+          "recall_at_baseline_threshold": 2.580045924815977e-05
+        },
+        "eligible": false,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch5",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch6.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 4.385029932210682e-05,
+        "ap_small": 0.000102910326311767,
+        "max_f1_precision": -0.0008530588777729831,
+        "precision_at_baseline_threshold": -0.00011026992155516169,
+        "recall_at_baseline_threshold": 0.0
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": true,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 4.385029932210682e-05,
+          "ap_small": 0.000102910326311767,
+          "max_f1_precision": -0.0008530588777729831,
+          "precision_at_baseline_threshold": -0.00011026992155516169,
+          "recall_at_baseline_threshold": 0.0
+        },
+        "eligible": true,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch6",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch7.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": true
+      },
+      "deltas": {
+        "ap": 4.667668562721716e-05,
+        "ap_small": 9.66602699768726e-05,
+        "max_f1_precision": -0.001559119540035292,
+        "precision_at_baseline_threshold": -8.821878613607392e-05,
+        "recall_at_baseline_threshold": 0.0
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": false,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 4.667668562721716e-05,
+          "ap_small": 9.66602699768726e-05,
+          "max_f1_precision": -0.001559119540035292,
+          "precision_at_baseline_threshold": -8.821878613607392e-05,
+          "recall_at_baseline_threshold": 0.0
+        },
+        "eligible": false,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch7",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch8.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": false,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": false
+      },
+      "deltas": {
+        "ap": 5.5236114570061945e-05,
+        "ap_small": 0.00011298088751934832,
+        "max_f1_precision": -0.0016687786762430434,
+        "precision_at_baseline_threshold": -7.640885432136368e-05,
+        "recall_at_baseline_threshold": -2.580045924815977e-05
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": false,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 5.5236114570061945e-05,
+          "ap_small": 0.00011298088751934832,
+          "max_f1_precision": -0.0016687786762430434,
+          "precision_at_baseline_threshold": -7.640885432136368e-05,
+          "recall_at_baseline_threshold": -2.580045924815977e-05
+        },
+        "eligible": false,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch8",
+      "passed": false
+    },
+    {
+      "checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch9.pt",
+      "criteria": {
+        "ap_small_within_tolerance": true,
+        "gate_not_saturated_low": true,
+        "map_within_tolerance": true,
+        "max_f1_precision_non_decrease": true,
+        "precision_at_baseline_threshold_non_decrease": false,
+        "recall_at_baseline_threshold_non_decrease": false
+      },
+      "deltas": {
+        "ap": 5.176721237495907e-05,
+        "ap_small": 9.205047745500239e-05,
+        "max_f1_precision": 0.00027316974047897347,
+        "precision_at_baseline_threshold": -7.640885432136368e-05,
+        "recall_at_baseline_threshold": -2.580045924815977e-05
+      },
+      "g2_feasibility": {
+        "criteria": {
+          "ap_small_within_feasibility_tolerance": true,
+          "ap_within_feasibility_tolerance": true,
+          "gate_not_saturated_low": true,
+          "max_f1_precision_within_feasibility_tolerance": true,
+          "precision_within_feasibility_tolerance": true,
+          "recall_within_feasibility_tolerance": true
+        },
+        "deltas": {
+          "ap": 5.176721237495907e-05,
+          "ap_small": 9.205047745500239e-05,
+          "max_f1_precision": 0.00027316974047897347,
+          "precision_at_baseline_threshold": -7.640885432136368e-05,
+          "recall_at_baseline_threshold": -2.580045924815977e-05
+        },
+        "eligible": true,
+        "purpose": "independent_10_epoch_feasibility_only",
+        "strict_passed": false,
+        "tolerance": 0.001
+      },
+      "output": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/evaluation-inventory/epoch9",
+      "passed": false
+    }
+  ],
+  "g2_eligible_checkpoint": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights/epoch2.pt",
+  "schema": 1,
+  "selected_checkpoint": null,
+  "training_signal": false,
+  "weights_dir": "/root/data/uav/runs/sqda-geometry-gate/sqda-geometry-smogt-g2r2-seed0-10ep/weights"
+}
