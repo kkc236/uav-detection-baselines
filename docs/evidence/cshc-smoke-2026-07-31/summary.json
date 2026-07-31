@@ -1,0 +1,49 @@
+{
+  "schema": "cshc-smoke-v1",
+  "decision": "NO_GO",
+  "reason": "Raw pre-Top-300 C2 candidates covered only 5 of 6005 frozen stock missed tiny GT at class-aware one-to-one IoU 0.50 (0.0833%). This is not sufficient evidence for a high-probability follow-up screen.",
+  "source": {
+    "branch": "codex/cshc-querydet",
+    "smoke_code_commit": "449514b8cd525d46d9ccbd992e06171e2f38b583",
+    "coverage_export_commit": "741698d6"
+  },
+  "environment": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "torch": "2.5.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "smoke": {
+    "epochs": 1,
+    "fraction": 0.01,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "pretrained": false,
+    "metrics": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "map50": 0.0,
+      "map50_95": 0.0
+    },
+    "losses": {
+      "train_giou": 2.57351,
+      "train_cls": 0.74293,
+      "train_l1": 4.83116,
+      "train_c2_candidate": 0.00563,
+      "val_c2_candidate": 0.00262
+    },
+    "finite": true,
+    "peak_cuda_mib": 15999.74,
+    "checkpoint_sha256": "3b6cf735ef05da9de9c0dd1b4960c9b18eaad398320e0d7245e623983557f898"
+  },
+  "coverage": {
+    "protocol": "new_c2_candidates_only_class_aware_one_to_one_iou",
+    "iou_threshold": 0.5,
+    "frozen_bqp_ledger_sha256": "b160d63331585c3230fd041a5397c7b6cf2cf18cb7455ef70a6855c37bfc2546",
+    "frozen_missed_tiny": 6005,
+    "new_c2_candidates": 331264,
+    "covered_by_new_candidates": 5,
+    "coverage": 0.0008326394671107411
+  },
+  "remote_artifacts": "/root/data/uav/cshc-storage/runs/cshc-smoke"
+}

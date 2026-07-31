@@ -340,7 +340,7 @@ The exporter must load the CSHC checkpoint into the repository-owned model class
 
 - [x] **Step 4: Run the extended coverage test and verify GREEN.**
 
-- [ ] **Step 5: Execute the exporter remotely before running the existing class-aware one-to-one audit.**
+- [x] **Step 5: Execute the exporter remotely before running the existing class-aware one-to-one audit.**
 
 ### Task 6: Verify locally, then use the GPU only for gated execution
 
@@ -353,17 +353,15 @@ Run: `python -m pytest tests/test_cshc.py tests/test_cshc_targets.py tests/test_
 
 Expected: all tests pass before any remote upload.
 
-- [ ] **Step 2: Push the clean branch, checkout it on the GPU host, and run only the one-epoch 1% smoke.**
+- [x] **Step 2: Push the clean branch, checkout it on the GPU host, and run only the one-epoch 1% smoke.**
 
 Run remotely: `python scripts/train_rtdetr_cshc.py --smoke --project /root/data/uav/runs/cshc-smoke --device 0 --workers 8 --batch 8`
 
 Expected: checkpoint, results file, finite C2 candidate loss, and native validator output; no formal claim.
 
-- [ ] **Step 3: Run the coverage audit and make the go/no-go decision.**
+- [x] **Step 3: Run the coverage audit and make the go/no-go decision.**
 
-Run remotely: `python scripts/audit_cshc_coverage.py --checkpoint <smoke-checkpoint> --stock-misses <frozen-bqp-misses.jsonl> --output /root/data/uav/runs/cshc-smoke/coverage.json`
-
-Expected: a new-candidate-only coverage record. Do not reuse BQP's 7.43% replacement-pair metric and do not start `--screen` if coverage is non-positive, model outputs are nonfinite, or the baseline path does not reproduce.
+Ran remotely: `scripts/export_cshc_coverage_candidates.py` followed by `scripts/audit_cshc_coverage.py` against the SHA-256-verified BQP ledger. The resulting raw-candidate coverage was `5 / 6005 = 0.0833%`, so this route is a `NO_GO`; BQP's 7.43% replacement-pair metric was not reused.
 
 - [ ] **Step 4: Only after a positive smoke and a matched five-epoch control, run the five-epoch 10% screen.**
 
