@@ -30,12 +30,12 @@ def _checkpoint(path: Path, completed_epoch: int) -> None:
 
 def test_latest_pair_is_exact_prefix_and_ignores_other_arm() -> None:
     assets = [
-        {"name": "screen-seed0-lprg-epoch-0050.pt", "id": 1},
-        {"name": "screen-seed0-lprg-epoch-0050.json", "id": 2},
-        {"name": "screen-seed0-control-epoch-0050.pt", "id": 3},
-        {"name": "screen-seed0-control-epoch-0050.json", "id": 4},
-        {"name": "screen-seed0-lprg-epoch-0049.pt", "id": 5},
-        {"name": "screen-seed0-lprg-epoch-0049.json", "id": 6},
+        {"name": "screen-seed0-lprg-epoch-0030.pt", "id": 1},
+        {"name": "screen-seed0-lprg-epoch-0030.json", "id": 2},
+        {"name": "screen-seed0-control-epoch-0030.pt", "id": 3},
+        {"name": "screen-seed0-control-epoch-0030.json", "id": 4},
+        {"name": "screen-seed0-lprg-epoch-0029.pt", "id": 5},
+        {"name": "screen-seed0-lprg-epoch-0029.json", "id": 6},
     ]
 
     checkpoint, manifest, epoch = select_latest_pair(
@@ -44,7 +44,7 @@ def test_latest_pair_is_exact_prefix_and_ignores_other_arm() -> None:
 
     assert checkpoint["id"] == 3
     assert manifest["id"] == 4
-    assert epoch == 50
+    assert epoch == 30
 
 
 def test_download_validation_checks_integrity_and_protocol(tmp_path: Path) -> None:

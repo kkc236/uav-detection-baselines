@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from scripts.evaluate_lpr_g import expected_completed_epoch
 from src.lpr_g_evaluation import evaluate_screen_gate
 
 
@@ -8,6 +9,11 @@ def _arm(final_map, tail_map, final_ap75, tail_ap75, final_map50, tail_map50):
         "final": {"map": final_map, "ap75": final_ap75, "map50": final_map50},
         "tail10": {"map": tail_map, "ap75": tail_ap75, "map50": tail_map50},
     }
+
+
+def test_independent_evaluation_uses_screen_cutoff_and_formal_total() -> None:
+    assert expected_completed_epoch("screen") == 30
+    assert expected_completed_epoch("formal") == 100
 
 
 def test_screen_gate_requires_final_tail_and_same_checkpoint_refinement_wins() -> None:

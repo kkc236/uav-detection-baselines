@@ -31,6 +31,14 @@ from src.lpr_protocol import (
 from src.rtdetr_lpr_g import LPRGRTDETRDetectionModel
 
 
+def expected_completed_epoch(stage: str) -> int:
+    if stage == "screen":
+        return 30
+    if stage == "formal":
+        return 100
+    raise ValueError(f"unknown LPR-G stage: {stage}")
+
+
 def _model_state(checkpoint: Mapping[str, Any]) -> dict[str, torch.Tensor]:
     source = checkpoint.get("ema")
     if source is None:
@@ -186,7 +194,7 @@ def validate_evaluation_authority(
     expected_dataset = {"file_count": 14038, "sha256": EXPECTED_DATASET_SHA256}
     if dataset != expected_dataset or authority.get("dataset") != expected_dataset:
         raise ValueError("evaluation dataset does not match frozen authority")
-    expected_epochs = 50 if stage == "screen" else 100
+    expected_epochs = expected_completed_epoch(stage)
     metadata = checkpoint_metadata(checkpoint)
     if metadata.completed_epoch != expected_epochs:
         raise ValueError(
