@@ -35,6 +35,16 @@ def test_zero_correction_has_zero_direction_and_identity_update() -> None:
     torch.testing.assert_close(refined, edges, rtol=0, atol=0)
 
 
+def test_zero_correction_preserves_out_of_image_stock_edges_exactly() -> None:
+    stock = torch.tensor([[[-0.01, 0.985, 0.03, 1.005]]], dtype=torch.float32)
+    gate = torch.full_like(stock, 0.5)
+    residual = torch.zeros_like(stock)
+
+    refined = apply_edge_update(stock, gate, residual, rho=0.05)
+
+    torch.testing.assert_close(refined, stock, rtol=0, atol=0)
+
+
 def test_box_conversion_round_trip_is_exact_for_binary_fractions() -> None:
     boxes = torch.tensor([[[0.5, 0.5, 0.25, 0.125]]])
 

@@ -86,7 +86,9 @@ def apply_edge_update(
     bottom = torch.maximum(
         candidate[..., 3].clamp(numeric_eps, 1), top + numeric_eps
     ).clamp(max=1)
-    return torch.stack((left, top, right, bottom), dim=-1)
+    sanitized = torch.stack((left, top, right, bottom), dim=-1)
+    zero_query_correction = (gate * residual).eq(0).all(dim=-1, keepdim=True)
+    return torch.where(zero_query_correction, stock_edges, sanitized)
 
 
 def trajectory_state(
