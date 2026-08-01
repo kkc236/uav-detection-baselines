@@ -62,3 +62,7 @@ def test_optimizer_step_records_separate_norms(tmp_path: Path) -> None:
     assert record["lpr_g_gradient_norm"] is not None
     assert record["lpr_g_gradient_norm"] > record["gradient_norm"]
     assert record["gradient_norm_finite"] is True
+    assert trainer.last_gradient_norms == {
+        "gradient_norm": record["gradient_norm"],
+        "lpr_g_gradient_norm": record["lpr_g_gradient_norm"],
+    }

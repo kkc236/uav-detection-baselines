@@ -11,7 +11,9 @@ from ultralytics.utils import RANK
 
 from src.lpr_g_head import LPRGDeformableTransformerDecoder
 from src.lpr_g_loss import MatchRecordingRTDETRDetectionLoss
+from src.lpr_g_protocol import load_lpr_g_initial_state
 from src.rtdetr_lpr import FixedPairedProtocolMixin
+from src.rtdetr_vsf_rmr import apply_resume_runtime_overrides
 
 
 class LPRGRTDETRDetectionModel(RTDETRDetectionModel):
@@ -111,11 +113,20 @@ class LPRGTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
         *args,
         max_logit_delta: float = 0.5,
         experiment_seed: int = 0,
+        initial_state_path: str | Path | None = None,
         **kwargs,
     ) -> None:
         self.max_logit_delta = float(max_logit_delta)
         self.experiment_seed = int(experiment_seed)
+        self.initial_state_path = Path(initial_state_path) if initial_state_path is not None else None
         super().__init__(*args, **kwargs)
+
+    def check_resume(self, overrides):
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)
+            if "epochs" in overrides:
+                self.args.epochs = int(overrides["epochs"])
 
     def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
         common: list[torch.nn.Parameter] = []
@@ -144,4 +155,41 @@ class LPRGTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
         )
         if weights:
             model.load(weights)
+        elif self.initial_state_path is not None:
+            artifact = torch.load(self.initial_state_path, map_location="cpu", weights_only=False)
+            load_lpr_g_initial_state(model, artifact, variant="lprg")
+        return model
+
+
+class LPRGControlTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+    """Stock control arm loaded from the same format-v2 common state."""
+
+    def __init__(self, *args, initial_state_path: str | Path | None = None, **kwargs) -> None:
+        self.initial_state_path = Path(initial_state_path) if initial_state_path is not None else None
+        super().__init__(*args, **kwargs)
+
+    def check_resume(self, overrides):
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)
+            if "epochs" in overrides:
+                self.args.epochs = int(overrides["epochs"])
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> RTDETRDetectionModel:
+        model = RTDETRDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if weights:
+            model.load(weights)
+        elif self.initial_state_path is not None:
+            artifact = torch.load(self.initial_state_path, map_location="cpu", weights_only=False)
+            load_lpr_g_initial_state(model, artifact, variant="control")
         return model

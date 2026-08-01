@@ -124,6 +124,7 @@ class FixedPairedProtocolMixin:
             norm = torch.nn.utils.clip_grad_norm_(parameters, max_norm=10.0)
             value = float(norm.detach().float().cpu())
             norms[name] = value if math.isfinite(value) else None
+        self.last_gradient_norms = dict(norms)
         gradient_finite = all(value is not None for value in norms.values())
         self.scaler.step(self.optimizer)
         self.scaler.update()
