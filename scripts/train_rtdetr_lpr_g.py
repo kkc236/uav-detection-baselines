@@ -16,7 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.checkpoint_recovery import validate_checkpoint
-from src.lpr_g_audit import common_model_fingerprint, common_optimizer_fingerprint
+from scripts.sync_experiment_checkpoint import (
+    prune_local_epoch_checkpoints,
+    validate_token_file,
+)
+from src.lpr_g_audit import (
+    common_model_fingerprint,
+    common_optimizer_fingerprint,
+    write_epoch_audit,
+)
+from src.lpr_g_publication import PublicationConfig, publish_with_retry
 from src.lpr_g_protocol import validate_lpr_g_initial_state_file
 from src.lpr_protocol import (
     EXPECTED_DATASET_SHA256,
@@ -109,6 +118,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--project", type=Path, default=ROOT / "runs" / "lpr-g")
     parser.add_argument("--name")
+    parser.add_argument("--token-file", type=Path, required=True)
+    parser.add_argument("--repo", default="kkc236/uav-detection-baselines")
+    parser.add_argument(
+        "--repo-url",
+        default="https://github.com/kkc236/uav-detection-baselines.git",
+    )
+    parser.add_argument("--tag", required=True)
+    parser.add_argument("--source-branch", default="codex/lpr-rtdetr")
+    parser.add_argument("--results-branch", default="training-results")
+    parser.add_argument(
+        "--results-repo",
+        type=Path,
+        default=Path.home() / "uav-training-results-lpr-g",
+    )
+    parser.add_argument("--asset-prefix", required=True)
+    parser.add_argument("--retain", type=int, default=3)
     parser.add_argument(
         "--preflight",
         action="store_true",
@@ -217,6 +242,7 @@ def validate_resume_authority(
         "seed": 0,
         "epochs": _scientific_epochs(args.stage),
         "initial_state": str(args.initial_state.resolve()),
+        "publication": publication_authority(args),
     }
     for field, value in expected.items():
         if runtime.get(field) != value:
@@ -352,6 +378,75 @@ def reset_peak_memory(_trainer) -> None:
         torch.cuda.reset_peak_memory_stats()
 
 
+def publication_authority(args: argparse.Namespace) -> dict[str, Any]:
+    """Return credential-free publication settings frozen into the run manifest."""
+    prefix = f"{args.asset_prefix}-preflight" if args.preflight else args.asset_prefix
+    return {
+        "token_file": str(args.token_file.resolve()),
+        "repo": args.repo,
+        "repo_url": args.repo_url,
+        "tag": args.tag,
+        "source_branch": args.source_branch,
+        "results_branch": args.results_branch,
+        "results_repo": str(args.results_repo.resolve()),
+        "asset_prefix": prefix,
+        "retain": int(args.retain),
+    }
+
+
+def publication_config(trainer, args: argparse.Namespace) -> PublicationConfig:
+    authority = publication_authority(args)
+    return PublicationConfig(
+        repo=authority["repo"],
+        repo_url=authority["repo_url"],
+        source_branch=authority["source_branch"],
+        results_branch=authority["results_branch"],
+        tag=authority["tag"],
+        asset_prefix=authority["asset_prefix"],
+        run_name=Path(trainer.save_dir).name,
+        token_file=Path(authority["token_file"]),
+        results_repo=Path(authority["results_repo"]),
+        variant=args.variant,
+        stage=args.stage,
+        retain=authority["retain"],
+    )
+
+
+def write_common_state_audit(trainer) -> dict | None:
+    epoch = int(trainer.epoch + 1)
+    if epoch > int(trainer.args.epochs):
+        return None
+    return write_epoch_audit(
+        Path(trainer.save_dir) / "common_state_audit.jsonl",
+        epoch=epoch,
+        model=trainer.model,
+        optimizer=trainer.optimizer,
+    )
+
+
+def publish_current_epoch(trainer, *, args: argparse.Namespace) -> dict:
+    """Publish the exact just-saved epoch and prune only after remote verification."""
+    checkpoint = Path(trainer.save_dir) / "weights" / f"epoch{trainer.epoch}.pt"
+    if not checkpoint.is_file():
+        raise FileNotFoundError(f"exact epoch checkpoint was not saved: {checkpoint}")
+    record = publish_with_retry(
+        Path(trainer.save_dir),
+        checkpoint,
+        publication_config(trainer, args),
+    )
+    expected_epoch = int(trainer.epoch + 1)
+    if int(record.get("completed_epoch", -1)) != expected_epoch:
+        raise RuntimeError(
+            f"published epoch mismatch: expected={expected_epoch}, "
+            f"actual={record.get('completed_epoch')}"
+        )
+    prune_local_epoch_checkpoints(
+        checkpoint.parent,
+        retain=int(args.retain),
+    )
+    return record
+
+
 def write_protocol_manifest(
     trainer,
     authority: dict,
@@ -369,6 +464,7 @@ def write_protocol_manifest(
         "workers": int(trainer.args.workers),
         "device": str(trainer.args.device),
         "initial_state": str(args.initial_state.resolve()),
+        "publication": publication_authority(args),
     }
     _atomic_write(
         Path(trainer.save_dir) / "lpr_g_protocol.json",
@@ -378,6 +474,9 @@ def write_protocol_manifest(
 
 def main() -> None:
     args = build_parser().parse_args()
+    args.token_file = args.token_file.resolve()
+    args.results_repo = args.results_repo.resolve()
+    validate_token_file(args.token_file)
     authority = json.loads(args.protocol_manifest.read_text(encoding="utf-8"))
     environment = current_environment()
     current_dataset = dataset_signature(Path(authority["dataset_root"]))
@@ -406,6 +505,11 @@ def main() -> None:
     trainer.add_callback(
         "on_model_save",
         lambda current: write_lpr_g_diagnostics(current, variant=args.variant),
+    )
+    trainer.add_callback("on_model_save", write_common_state_audit)
+    trainer.add_callback(
+        "on_model_save",
+        lambda current: publish_current_epoch(current, args=args),
     )
     trainer.train()
 

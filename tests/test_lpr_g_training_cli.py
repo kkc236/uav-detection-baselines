@@ -43,6 +43,9 @@ def _args(tmp_path: Path, *extra: str):
             "--protocol-manifest", str(manifest_path),
             "--initial-state", manifest["initial_state"]["path"],
             "--project", str(tmp_path / "runs"),
+            "--token-file", str(tmp_path / "github_token"),
+            "--tag", "lpr-g-v2-live",
+            "--asset-prefix", "screen-seed0-lprg",
             *extra,
         ]
     )
@@ -142,3 +145,17 @@ def test_diagnostics_write_ap75_private_distributions_and_null_control(tmp_path:
     control = json.loads((control_dir / "lpr_g_diagnostics.jsonl").read_text(encoding="utf-8"))
     assert control["gate_p95"] is None
     assert control["loss_bbox_refine"] is None
+
+
+def test_scientific_cli_requires_github_publication_authority() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--variant", "lprg",
+                "--stage", "screen",
+                "--seed", "0",
+                "--protocol-manifest", "protocol.json",
+                "--initial-state", "initial.pt",
+            ]
+        )
