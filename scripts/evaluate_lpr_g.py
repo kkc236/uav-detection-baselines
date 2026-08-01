@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 from ultralytics.models.rtdetr.val import RTDETRValidator
 

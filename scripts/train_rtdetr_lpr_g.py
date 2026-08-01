@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -33,6 +33,22 @@ def test_python_executable_path_is_not_symlink_resolved(
     assert normalize_python_executable(relative) == tmp_path / relative
 
 
+def test_scientific_entrypoints_configure_cublas_before_torch_import() -> None:
+    entrypoints = (
+        "run_lpr_g_paired.py",
+        "prepare_lpr_g_protocol.py",
+        "train_rtdetr_lpr_g.py",
+        "evaluate_lpr_g.py",
+        "benchmark_lpr_g.py",
+    )
+
+    for name in entrypoints:
+        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        config_offset = source.index('CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"')
+        torch_offset = source.index("import torch")
+        assert config_offset < torch_offset, name
+
+
 def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:
     command = build_arm_command(
         python=Path("/data/uav/venvs/rtdetr-lpr-py310/bin/python"),

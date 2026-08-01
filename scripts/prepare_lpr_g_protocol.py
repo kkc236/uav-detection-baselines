@@ -10,6 +10,8 @@ import sys
 from hashlib import sha256
 from pathlib import Path
 
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]

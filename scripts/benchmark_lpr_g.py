@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 from ultralytics.nn.tasks import RTDETRDetectionModel
 from ultralytics.utils.torch_utils import get_flops
