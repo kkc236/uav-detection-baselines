@@ -62,8 +62,26 @@ class IBERRecordingDecoder(nn.Module):
         score: torch.Tensor,
         stock_box: torch.Tensor,
     ) -> None:
-        normal = min(self.normal_query_count, hidden.shape[1])
-        selection = slice(hidden.shape[1] - normal, hidden.shape[1])
+        evidence = {
+            "hidden": hidden,
+            "score": score,
+            "stock_box": stock_box,
+        }
+        if any(value.ndim < 2 for value in evidence.values()):
+            raise ValueError("stock evidence must include batch and query dimensions")
+        batch_queries = hidden.shape[:2]
+        if any(value.shape[:2] != batch_queries for value in evidence.values()):
+            raise ValueError("stock evidence batch and query dimensions must agree")
+        query_count = hidden.shape[1]
+        if query_count < self.normal_query_count:
+            raise ValueError(
+                "stock evidence has fewer queries than the configured normal query "
+                f"count: {query_count} < {self.normal_query_count}"
+            )
+        selection = slice(
+            query_count - self.normal_query_count,
+            query_count,
+        )
         self.last_hidden = hidden[:, selection].detach()
         self.last_stock_scores = score[:, selection].detach()
         self.last_stock_boxes = stock_box[:, selection].detach()
@@ -165,7 +183,25 @@ class FrozenIBERAdapter(nn.Module):
         normal_query_count: int = 300,
     ) -> "FrozenIBERAdapter":
         head = detector.model[-1]
-        if not isinstance(head.decoder, IBERRecordingDecoder):
+        head_query_count = int(head.num_queries)
+        if head_query_count != 300:
+            raise ValueError(
+                "RT-DETR head.num_queries must equal the approved normal query "
+                f"count 300; got {head_query_count}"
+            )
+        if normal_query_count != head_query_count:
+            raise ValueError(
+                "normal_query_count must match frozen RT-DETR "
+                f"head.num_queries={head_query_count}; got {normal_query_count}"
+            )
+        if isinstance(head.decoder, IBERRecordingDecoder):
+            if head.decoder.normal_query_count != head_query_count:
+                raise ValueError(
+                    "existing wrapped decoder normal query count must match "
+                    f"head.num_queries={head_query_count}; got "
+                    f"{head.decoder.normal_query_count}"
+                )
+        else:
             head.decoder = IBERRecordingDecoder.from_stock(
                 head.decoder,
                 normal_query_count=normal_query_count,

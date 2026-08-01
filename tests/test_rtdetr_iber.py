@@ -156,7 +156,7 @@ def _direct_decoder(layers: nn.ModuleList, *, normal_query_count: int = 300) -> 
     return decoder, bbox_head, score_head
 
 
-def test_direct_decoder_records_only_the_last_300_queries() -> None:
+def test_direct_decoder_excludes_prepended_queries_and_records_last_300() -> None:
     torch.manual_seed(1)
     layers = nn.ModuleList([_IncrementLayer(value) for value in (1.0, 2.0, 3.0)])
     decoder, bbox_head, score_head = _direct_decoder(layers)
@@ -187,6 +187,49 @@ def test_direct_decoder_records_only_the_last_300_queries() -> None:
     torch.testing.assert_close(
         decoder.last_stock_boxes, boxes[0, :, -300:], rtol=0, atol=0
     )
+    assert not torch.equal(decoder.last_hidden[:, 0], expected_hidden[:, 0])
+
+
+@pytest.mark.parametrize(
+    ("hidden_shape", "score_shape", "box_shape"),
+    [
+        ((2, 300, 8), (1, 300, 10), (2, 300, 4)),
+        ((1, 301, 8), (1, 300, 10), (1, 301, 4)),
+        ((1, 300, 8), (1, 300, 10), (1, 299, 4)),
+    ],
+    ids=["batch-mismatch", "score-query-mismatch", "box-query-mismatch"],
+)
+def test_record_rejects_inconsistent_batch_or_query_dimensions(
+    hidden_shape: tuple[int, ...],
+    score_shape: tuple[int, ...],
+    box_shape: tuple[int, ...],
+) -> None:
+    decoder = IBERRecordingDecoder(
+        nn.ModuleList(), hidden_dim=8, num_layers=0, eval_idx=0
+    )
+
+    with pytest.raises((RuntimeError, ValueError), match="batch|quer"):
+        decoder._record(
+            torch.randn(hidden_shape),
+            torch.randn(score_shape),
+            torch.randn(box_shape),
+        )
+
+
+def test_direct_decoder_rejects_runtime_with_fewer_than_300_queries() -> None:
+    layers = nn.ModuleList([_IncrementLayer(1.0)])
+    decoder, bbox_head, score_head = _direct_decoder(layers)
+
+    with pytest.raises((RuntimeError, ValueError), match="300|normal quer"):
+        decoder(
+            torch.randn(1, 299, 8),
+            torch.randn(1, 299, 4),
+            torch.empty(1, 0, 8),
+            [],
+            bbox_head,
+            score_head,
+            nn.Identity(),
+        )
 
 
 def test_recording_decoder_rejects_nonpositive_counts_and_clears_stale_evidence() -> None:
@@ -232,6 +275,37 @@ def real_adapter() -> FrozenIBERAdapter:
         image_size=160,
         normal_query_count=300,
     )
+
+
+@pytest.fixture(scope="module")
+def authority_detector() -> RTDETRDetectionModel:
+    return RTDETRDetectionModel(
+        "rtdetr-l.yaml", ch=3, nc=10, verbose=False
+    )
+
+
+@pytest.mark.parametrize("normal_query_count", [17, 301])
+def test_from_detector_rejects_count_different_from_real_head_authority(
+    authority_detector: RTDETRDetectionModel,
+    normal_query_count: int,
+) -> None:
+    head = authority_detector.model[-1]
+    assert head.num_queries == 300
+    original_decoder = head.decoder
+    created: FrozenIBERAdapter | None = None
+    try:
+        with pytest.raises(ValueError, match="300|normal quer|num_queries"):
+            created = FrozenIBERAdapter.from_detector(
+                authority_detector,
+                private_seed=10_000,
+                image_size=160,
+                normal_query_count=normal_query_count,
+            )
+    finally:
+        if created is not None:
+            created._head_hook.remove()
+        head.decoder = original_decoder
+    assert head.decoder is original_decoder
 
 
 def test_real_adapter_is_frozen_single_pass_and_zero_init_identity(
@@ -464,7 +538,28 @@ def test_adapter_train_eval_toggles_only_private_refiner(
     assert all(not parameter.requires_grad for parameter in adapter.detector.parameters())
 
 
-def test_existing_iber_wrapper_is_left_intact(
+def test_existing_iber_wrapper_with_wrong_count_is_rejected(
+    real_adapter: FrozenIBERAdapter,
+) -> None:
+    decoder = real_adapter.detector.model[-1].decoder
+    decoder.normal_query_count = 299
+    second: FrozenIBERAdapter | None = None
+    try:
+        with pytest.raises(ValueError, match="wrapped|300|normal quer"):
+            second = FrozenIBERAdapter.from_detector(
+                real_adapter.detector,
+                private_seed=20_000,
+                image_size=160,
+                normal_query_count=300,
+            )
+    finally:
+        if second is not None:
+            second._head_hook.remove()
+        decoder.normal_query_count = 300
+    assert real_adapter.detector.model[-1].decoder is decoder
+
+
+def test_existing_iber_wrapper_with_authoritative_count_is_left_intact(
     real_adapter: FrozenIBERAdapter,
 ) -> None:
     decoder = real_adapter.detector.model[-1].decoder
@@ -472,13 +567,32 @@ def test_existing_iber_wrapper_is_left_intact(
         real_adapter.detector,
         private_seed=20_000,
         image_size=160,
-        normal_query_count=17,
+        normal_query_count=300,
     )
     try:
         assert second.detector.model[-1].decoder is decoder
-        assert decoder.normal_query_count == 300
     finally:
         second._head_hook.remove()
+
+
+def test_from_detector_rejects_head_query_count_outside_approved_authority(
+    real_adapter: FrozenIBERAdapter,
+) -> None:
+    head = real_adapter.detector.model[-1]
+    head.num_queries = 301
+    second: FrozenIBERAdapter | None = None
+    try:
+        with pytest.raises(ValueError, match="approved|300|num_queries"):
+            second = FrozenIBERAdapter.from_detector(
+                real_adapter.detector,
+                private_seed=20_001,
+                image_size=160,
+                normal_query_count=301,
+            )
+    finally:
+        if second is not None:
+            second._head_hook.remove()
+        head.num_queries = 300
 
 
 def test_incomplete_evidence_and_invalid_hook_inputs_fail_clearly(
