@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import inspect
+import json
 import subprocess
 import sys
 from pathlib import Path
 
+import torch
+from torch import nn
+
 from scripts.run_lpr_g_paired import (
+    CANARY_COMMON_GRADIENT_RELATIVE_L2_LIMIT,
     SCREEN_ORDER,
+    _verify_preflight_pair,
     build_arm_command,
+    common_gradient_difference,
     normalize_python_executable,
     next_stage,
     run_model_canary,
@@ -68,6 +75,56 @@ def test_model_canary_keeps_forward_cache_usable_for_backward() -> None:
     assert "torch.use_deterministic_algorithms(True, warn_only=True)" in source
     assert "torch.no_grad()" in source
     assert "torch.inference_mode()" not in source
+
+
+def test_canary_gradient_comparison_uses_relative_runtime_tolerance() -> None:
+    control = nn.Linear(2, 1, bias=False)
+    method = nn.Linear(2, 1, bias=False)
+    control.weight.grad = torch.tensor([[3.0, 4.0]])
+    method.weight.grad = torch.tensor([[3.003, 4.004]])
+
+    summary = common_gradient_difference(control, method)
+
+    assert abs(summary["relative_l2"] - 0.001) < 1e-7
+    assert summary["relative_l2"] < CANARY_COMMON_GRADIENT_RELATIVE_L2_LIMIT
+
+
+def test_preflight_accepts_audited_cuda_drift_after_exact_common_initialization(
+    tmp_path: Path,
+) -> None:
+    initial_common = "A" * 64
+    signature = "B" * 64
+    for index, variant in enumerate(("control", "lprg")):
+        run = tmp_path / f"screen-seed0-{variant}-lpr-g-v2-preflight"
+        run.mkdir()
+        (run / "common_state_audit.jsonl").write_text(
+            json.dumps(
+                {
+                    "epoch": 1,
+                    "common_model_sha256": f"{index + 1:064X}",
+                    "common_optimizer_sha256": f"{index + 101:064X}",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run / "lpr_g_protocol.json").write_text(
+            json.dumps(
+                {
+                    "authority": {
+                        "signature": signature,
+                        "initial_state": {"fingerprints": {"common": initial_common}},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    report = _verify_preflight_pair(tmp_path)
+
+    assert report["common_initial_fingerprint_exact"] is True
+    assert report["post_epoch_fingerprints_complete"] is True
+    assert report["post_epoch_fingerprints_equal"] is False
 
 
 def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:

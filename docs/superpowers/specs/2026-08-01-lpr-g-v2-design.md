@@ -162,6 +162,15 @@ hsv_h=0.015；hsv_s=0.7；hsv_v=0.4；cutmix=0.0；copy_paste=0.0
 
 同一公共初始化、样本顺序、数据增强随机序列、验证预处理、指标代码、类别映射、checkpoint/resume 规则必须由机器可读 manifest 证明。
 
+Ultralytics 8.4.90 对 `deterministic=True` 的实际实现是
+`torch.use_deterministic_algorithms(True, warn_only=True)`。PyTorch 2.5.1+cu121 的
+RT-DETR CUDA 路径包含没有确定性反向实现的 `grid_sampler_2d_backward_cuda`，因此两个
+独立训练进程即使拥有相同初始化和 RNG 序列，更新后的公共参数/optimizer SHA256 也不能
+作为 bitwise 相等门禁。隔离门禁改为：公共初始化 fingerprint 严格相等；初始 stock
+outputs 和 stock loss 项逐值相等；目标 4090 上一步公共梯度全局相对 L2 漂移不超过
+`0.005`。逐 epoch 公共 fingerprint 仍完整记录，用于发现断点、缺失和异常轨迹，但不以
+跨 arm SHA256 相等作为工程有效性的必要条件。
+
 ### 6.3 全数据集 100 epoch
 
 50 epoch 筛选通过后，在 6471 张完整训练集上从相同 seed0 公共初始状态重新开始 100 epoch；禁止把 10% 子集 checkpoint resume 到全量数据。默认运行 fresh control/LPR-G 配对 100 epoch。只有现有 full-data seed0 baseline 的环境、协议、初始化和数据顺序 manifest 全部逐项一致时，才允许复用；任一证据缺失就重跑 control。
@@ -201,7 +210,8 @@ control 和 LPR-G 使用不同 asset prefix，禁止跨 arm、跨 10%/full stage
 
 1. 环境、数据、子集、源码、公共初始化或协议哈希不一致；
 2. 一步 canary 中 method 的 stock outputs 或 stock loss 字典与 control 不逐值相等；
-3. 任一 epoch 后两臂公共参数 fingerprint 不相等，或公共 optimizer state 不相等；
+3. 公共初始化 fingerprint 不相等、目标 4090 canary 的公共梯度相对 L2 漂移超过
+   `0.005`，或任一 epoch 缺失合法的公共参数/optimizer fingerprint；
 4. AMP scale 不是 128、发生 skipped step、出现 NaN/Inf；
 5. 任一完成 epoch 缺少 GitHub 指标 commit 或已验证 checkpoint 发布记录；
 6. resume canary 不能从 GitHub checkpoint 完整恢复并完成一次独立评估。
@@ -246,7 +256,7 @@ control 和 LPR-G 使用不同 asset prefix，禁止跨 arm、跨 10%/full stage
 - stock criterion 的输出键和值与 Ultralytics 8.4.90 完全一致；
 - 只记录主 normal layer 的原匹配索引，auxiliary matcher 行为不变；
 - refinement loss 只给私有参数梯度；stock 和 private 独立裁剪；
-- common-state 一步和逐 epoch fingerprint 审计；
+- common-state 公共初始化逐值审计、一步梯度相对漂移门禁和逐 epoch fingerprint 完整性审计；
 - stock/refined 独立评估切换；
 - checkpoint 本地/Release 恢复、损坏拒绝、跨 arm/stage 拒绝；
 - 每 epoch 发布队列不漏号、失败重试、远端校验后确认、最近 3 份轮换；

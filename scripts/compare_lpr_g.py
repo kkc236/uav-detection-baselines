@@ -8,6 +8,7 @@ import json
 import math
 import os
 import statistics
+import string
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,18 @@ def _finite(values) -> bool:
         return all(value is not None and math.isfinite(float(value)) for value in values)
     except (TypeError, ValueError):
         return False
+
+
+def _sha256_fingerprints_complete(records: list[dict[str, Any]]) -> bool:
+    hexdigits = set(string.hexdigits)
+    fields = ("common_model_sha256", "common_optimizer_sha256")
+    return all(
+        isinstance(record.get(field), str)
+        and len(record[field]) == 64
+        and set(record[field]).issubset(hexdigits)
+        for record in records
+        for field in fields
+    )
 
 
 def load_arm_evidence(
@@ -141,17 +154,23 @@ def compare_runs(
     """Compare paired artifacts and return the frozen decision plus raw evidence."""
     control = load_arm_evidence(control_run, method=False, expected_epochs=expected_epochs)
     method = load_arm_evidence(method_run, method=True, expected_epochs=expected_epochs)
-    common_state_equal = all(
+    exact_epoch_flags = [
         control_record.get("common_model_sha256")
         == method_record.get("common_model_sha256")
         and control_record.get("common_optimizer_sha256")
         == method_record.get("common_optimizer_sha256")
         for control_record, method_record in zip(control["audits"], method["audits"])
-    )
+    ]
+    common_state_equal = all(exact_epoch_flags)
+    common_state_fingerprints_complete = _sha256_fingerprints_complete(
+        control["audits"]
+    ) and _sha256_fingerprints_complete(method["audits"])
     publication_records = control["publication_records"] + method["publication_records"]
     engineering = {
         "expected_epochs_per_arm": expected_epochs,
         "common_state_equal": common_state_equal,
+        "common_state_exact_epochs": sum(exact_epoch_flags),
+        "common_state_fingerprints_complete": common_state_fingerprints_complete,
         "control_optimizer_valid": control["optimizer_valid"],
         "method_optimizer_valid": method["optimizer_valid"],
         "method_private_finite": method["private_finite"],
@@ -160,7 +179,7 @@ def compare_runs(
     }
     engineering_valid = all(
         (
-            engineering["common_state_equal"],
+            engineering["common_state_fingerprints_complete"],
             engineering["control_optimizer_valid"],
             engineering["method_optimizer_valid"],
             engineering["method_private_finite"],

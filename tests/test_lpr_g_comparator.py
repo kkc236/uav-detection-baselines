@@ -92,6 +92,32 @@ def test_comparator_requires_exact_epochs_pairing_and_publication(tmp_path: Path
     assert report["engineering"]["common_state_equal"] is True
 
 
+def test_cuda_nondeterministic_post_epoch_hashes_are_recorded_not_rejected(
+    tmp_path: Path,
+) -> None:
+    control = tmp_path / "control"
+    method = tmp_path / "method"
+    _write_arm(control, method=False)
+    _write_arm(method, method=True)
+    audit_path = method / "common_state_audit.jsonl"
+    audits = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    audits[0]["common_model_sha256"] = "F" * 64
+    audit_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in audits), encoding="utf-8"
+    )
+    ablation = {
+        "stock": {"map": 0.09, "ap75": 0.04},
+        "refined": {"map": 0.091, "ap75": 0.041},
+    }
+
+    report = compare_runs(control, method, ablation=ablation, benchmark={})
+
+    assert report["status"] == "passed"
+    assert report["engineering"]["common_state_equal"] is False
+    assert report["engineering"]["common_state_exact_epochs"] == 49
+    assert report["engineering"]["common_state_fingerprints_complete"] is True
+
+
 def test_arm_parser_rejects_postfit_rows_and_gaps(tmp_path: Path) -> None:
     run = tmp_path / "method"
     _write_arm(run, method=True)
