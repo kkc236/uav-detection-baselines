@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "design_version": "itber-v1.1",
+  "stage": "formal",
+  "probe": "p3",
+  "seed": 0,
+  "expected_private_epochs": 30,
+  "repo": "kkc236/uav-detection-baselines",
+  "repo_url": "https://github.com/kkc236/uav-detection-baselines.git",
+  "source_branch": "codex/lpr-rtdetr",
+  "results_branch": "itber-v1.1-results",
+  "tag": "itber-v1.1-rtdetr-l-live",
+  "asset_prefix": "itber-v1.1-formal-seed0-p3",
+  "run_name": "itber-v1.1-formal-seed0-p3",
+  "token_file": "/data/uav/HANDOFFS/secrets/github_token",
+  "results_repo": "/data/uav/results/itber-v1.1",
+  "gate1_cache_manifest": "/data/uav/cache/itber-v1.1/manifest.json",
+  "retain": 3
+}

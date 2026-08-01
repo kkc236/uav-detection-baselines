@@ -20,6 +20,16 @@ def test_repository_is_locally_ready_without_claiming_remote_verification() -> N
         "network": "unresolved",
     }
     assert report["remote_verified"] is False
+    for required in (
+        "scripts/run_itber_pipeline.py",
+        "scripts/train_itber.py",
+        "scripts/evaluate_itber.py",
+        "scripts/publish_itber_epoch.py",
+        "scripts/restore_itber_checkpoint.py",
+        "deploy/itber/publication-screen.template.json",
+        "deploy/itber/publication-formal.template.json",
+    ):
+        assert required in report["local"]["required_files"]
 
 
 def test_empty_tree_is_not_ready(tmp_path) -> None:
@@ -43,6 +53,10 @@ def test_guide_contains_safe_transfer_gate0_publication_and_recovery_contracts()
         "P0-P3",
         "每个 epoch",
         "restore_itber_checkpoint.py",
+        "run_itber_pipeline.py",
+        "publication-screen.json",
+        "publication-formal.json",
+        "BASELINE_TRAINING_CONTRACT_SHA256",
         "至少 80 GiB",
         "用户明确提供并授权",
     ):

@@ -12,7 +12,11 @@ from scripts.restore_itber_checkpoint import (
     select_latest_pair,
     verify_downloaded_checkpoint,
 )
-from src.itber_protocol import EXPECTED_BASELINE_SHA256, EXPECTED_DATASET_SHA256
+from src.itber_protocol import (
+    BASELINE_TRAINING_CONTRACT_SHA256,
+    EXPECTED_BASELINE_SHA256,
+    EXPECTED_DATASET_SHA256,
+)
 
 
 CACHE_SHA = "C" * 64
@@ -31,6 +35,7 @@ def _checkpoint(path: Path, epoch: int, *, stage: str = "screen") -> None:
             "baseline_sha256": EXPECTED_BASELINE_SHA256,
             "dataset_sha256": EXPECTED_DATASET_SHA256,
             "cache_manifest_sha256": CACHE_SHA,
+            "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
             "refiner": {"weight": torch.ones(1)},
             "optimizer": {"state": {}, "param_groups": []},
             "scaler": {"scale": 128.0},
@@ -66,6 +71,7 @@ def test_download_verification_checks_all_scientific_identity(tmp_path: Path) ->
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": CACHE_SHA,
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
         "completed_epoch": 7,
         "checkpoint": {
             "asset_name": f"{PREFIX}-epoch-0007.pt",
@@ -117,6 +123,7 @@ def test_download_verification_rejects_corrupted_checkpoint(tmp_path: Path) -> N
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": CACHE_SHA,
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
         "completed_epoch": 1,
         "checkpoint": {
             "asset_name": f"{PREFIX}-epoch-0001.pt",

@@ -7,7 +7,11 @@ import pytest
 import torch
 
 import src.itber_publication as publication
-from src.itber_protocol import EXPECTED_BASELINE_SHA256, EXPECTED_DATASET_SHA256
+from src.itber_protocol import (
+    BASELINE_TRAINING_CONTRACT_SHA256,
+    EXPECTED_BASELINE_SHA256,
+    EXPECTED_DATASET_SHA256,
+)
 from src.itber_publication import (
     PublicationIdentity,
     PublicationLedger,
@@ -33,6 +37,7 @@ def _checkpoint(path: Path, epoch: int, *, stage: str = "screen") -> None:
             "baseline_sha256": EXPECTED_BASELINE_SHA256,
             "dataset_sha256": EXPECTED_DATASET_SHA256,
             "cache_manifest_sha256": CACHE_SHA,
+            "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
             "refiner": {"weight": torch.ones(1)},
             "optimizer": {"state": {}, "param_groups": []},
             "scaler": {"scale": 128.0},

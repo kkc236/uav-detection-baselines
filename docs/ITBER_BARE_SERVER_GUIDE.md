@@ -78,7 +78,7 @@ sha256sum /data/uav/weights/matched_baseline/matched-baseline-best-epoch-0100.pt
 
 ## 5. GitHub 凭据
 
-配置模板位于 `deploy/itber/publication.env.template`。token 只允许通过交互式隐藏输入写入指定文件：
+逐 epoch 发布配置分别使用 `deploy/itber/publication-screen.template.json` 与 `deploy/itber/publication-formal.template.json`。复制到 `/data/uav/config/publication-screen.json` 和 `/data/uav/config/publication-formal.json` 后，只能修改与当前不可变 source/cache 路径有关的操作字段，不得修改 stage、seed、epoch、分支、tag 或 asset prefix。模板不包含凭据。token 只允许通过交互式隐藏输入写入指定文件：
 
 ```bash
 install -d -m 700 /data/uav/HANDOFFS/secrets
@@ -120,7 +120,22 @@ bash /data/uav/source/uav-detection-baselines/deploy/itber/bootstrap_ubuntu.sh \
 
 Gate 0 通过后才生成固定 evidence cache，并按同容量、同私有初始化运行 P0、P1、P2、P3，各 12 epoch。Probe 只用于信息量判断；通过后必须在固定 647 张子集上 fresh 运行 Gate 2，不能把 cache checkpoint 续训成正式模型。Gate 2 通过后，再在完整 6471/548 数据上 fresh 运行私有 30 epoch；同 checkpoint 的 stock/refined 是主比较。
 
-实际命令由 Probe 训练实现提供，启动前必须再次检查 `docs/superpowers/specs/2026-08-01-i-tber-v1-1-design.md` 中的 P0-P3、Gate 1、Gate 2 和 formal 阈值没有漂移。
+完整流水线由 `scripts/run_itber_pipeline.py` 监督。它按 authority -> Gate 0 -> cache -> P0-P3 -> Gate 1 -> screen12 -> formal30 顺序执行；任何工程无效或科学失败都会停止，不会自动越过门槛：
+
+```bash
+/data/uav/venvs/itber-v1.1/bin/python \
+  /data/uav/source/uav-detection-baselines/scripts/run_itber_pipeline.py \
+  --baseline-checkpoint /data/uav/weights/matched_baseline/matched-baseline-best-epoch-0100.pt \
+  --dataset-root /data/uav/datasets/VisDrone \
+  --run-root /data/uav/runs/itber-v1.1/RUN_ID \
+  --cache-root /data/uav/cache/itber-v1.1 \
+  --screen-publication-config /data/uav/config/publication-screen.json \
+  --formal-publication-config /data/uav/config/publication-formal.json
+```
+
+启动前必须再次检查 `docs/superpowers/specs/2026-08-01-i-tber-v1-1-design.md` 中的 P0-P3、Gate 1、Gate 2 和 formal 阈值没有漂移。
+
+baseline 的完整原始训练协议由代码常量 `BASELINE_TRAINING_CONTRACT` 锁定，并以 `BASELINE_TRAINING_CONTRACT_SHA256` 写入每个私有 checkpoint、逐 epoch 评估报告和 GitHub manifest。其内容包括 seed0、MuSGD、lr0/lrf、momentum、weight decay、warmup、nbs、全部增强、query=300、max_det=300 与 NMS=False。I-TBER 的 AdamW 只更新冻结检测器之外的私有头，是隔离后训练协议，不得冒充 baseline 优化器或改变 baseline checkpoint。
 
 ## 9. 每 epoch 发布、监控和恢复
 
@@ -133,8 +148,13 @@ Gate 0 通过后才生成固定 evidence cache，并按同容量、同私有初�
 ```bash
 /data/uav/venvs/itber-v1.1/bin/python \
   /data/uav/source/uav-detection-baselines/scripts/restore_itber_checkpoint.py \
+  --stage screen \
+  --probe p3 \
   --run-dir /data/uav/runs/itber-v1.1/RUN_ID \
-  --token-file /data/uav/HANDOFFS/secrets/github_token
+  --cache-manifest /data/uav/cache/itber-v1.1/manifest.json \
+  --token-file /data/uav/HANDOFFS/secrets/github_token \
+  --tag itber-v1.1-rtdetr-l-live \
+  --asset-prefix itber-v1.1-screen-seed0-p3
 ```
 
 恢复后先单独评估 checkpoint，再从下一个 epoch 继续。任何缺失 epoch、SHA 不一致或 metadata 漂移都按工程失败处理，不得跳过后解释为科学结果。

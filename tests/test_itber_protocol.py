@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from src.itber_protocol import (
+    BASELINE_TRAINING_CONTRACT,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
@@ -19,6 +20,59 @@ from src.itber_protocol import (
     validate_authorities,
     write_immutable_report,
 )
+
+
+def test_baseline_training_contract_is_exact_and_seed0_only() -> None:
+    assert BASELINE_TRAINING_CONTRACT == {
+        "base_model": "Ultralytics RT-DETR-L",
+        "ultralytics": "8.4.90",
+        "dataset": "VisDrone train/val",
+        "train_images": 6471,
+        "val_images": 548,
+        "class_count": 10,
+        "dataset_sha256": EXPECTED_DATASET_SHA256,
+        "screen_subset_images": 647,
+        "screen_subset_sha256": EXPECTED_SUBSET_SHA256,
+        "pretrained": False,
+        "formal_epochs": 100,
+        "seeds": [0],
+        "imgsz": 640,
+        "batch": 8,
+        "workers": 8,
+        "device": "0",
+        "amp": True,
+        "amp_scale": 128.0,
+        "deterministic": True,
+        "cache": False,
+        "optimizer": "MuSGD",
+        "lr0": 0.01,
+        "lrf": 0.01,
+        "momentum": 0.937,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3.0,
+        "warmup_momentum": 0.8,
+        "warmup_bias_lr": 0.0,
+        "nbs": 64,
+        "cos_lr": False,
+        "query_count": 300,
+        "max_det": 300,
+        "nms": False,
+        "mosaic": 1.0,
+        "close_mosaic": 10,
+        "mixup": 0.0,
+        "scale": 0.5,
+        "translate": 0.1,
+        "degrees": 0.0,
+        "shear": 0.0,
+        "perspective": 0.0,
+        "flipud": 0.0,
+        "fliplr": 0.5,
+        "hsv_h": 0.015,
+        "hsv_s": 0.7,
+        "hsv_v": 0.4,
+        "cutmix": 0.0,
+        "copy_paste": 0.0,
+    }
 
 
 def _authority() -> dict:
@@ -91,4 +145,3 @@ def test_immutable_report_is_exclusive_and_readable(tmp_path) -> None:
 def test_exact_authority_is_accepted() -> None:
     report = validate_authorities(**_authority())
     assert report["status"] == "passed"
-

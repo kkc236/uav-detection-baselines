@@ -8,6 +8,7 @@ import json
 import os
 import random
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from src.itber_metrics import correction_rms  # noqa: E402
 from src.itber_protocol import (  # noqa: E402
+    BASELINE_TRAINING_CONTRACT,
+    BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
@@ -144,6 +147,7 @@ def validate_resume_checkpoint(
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": cache_manifest_sha256.upper(),
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
     }
     violations = {
         name: {"expected": value, "actual": artifact.get(name)}
@@ -173,6 +177,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-checkpoint", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--gate1-cache-manifest", type=Path, required=True)
+    parser.add_argument("--publication-config", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--device", default="0")
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -310,6 +315,78 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         os.fsync(stream.fileno())
 
 
+def _reseed_loader_for_epoch(loader: Any, epoch: int) -> None:
+    """Make each epoch's order and worker augmentation RNG independently resumable."""
+    if epoch < 1:
+        raise ValueError("I-TBER epoch must be positive")
+    loader.close()
+    loader.generator.manual_seed(6148914691236517204 + epoch)
+    loader.reset()
+
+
+def _published_record(output_root: Path, epoch: int) -> dict[str, Any] | None:
+    ledger_path = output_root / "publication-ledger.jsonl"
+    if not ledger_path.is_file():
+        return None
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines() if line]
+    if epoch > len(rows):
+        return None
+    record = rows[epoch - 1]
+    if record.get("completed_epoch") != epoch or record.get("verified") is not True:
+        raise RuntimeError("ITBER epoch publication did not verify")
+    return record
+
+
+def _protect_completed_epoch(
+    *,
+    stage: str,
+    baseline_checkpoint: Path,
+    dataset_root: Path,
+    gate1_cache_manifest: Path,
+    output_root: Path,
+    checkpoint: Path,
+    publication_config: Path,
+    epoch: int,
+) -> None:
+    evaluation = output_root / "evaluations" / f"epoch-{epoch:04d}.json"
+    record = _published_record(output_root, epoch)
+    if record is not None:
+        if not evaluation.is_file() or record.get("checkpoint", {}).get("sha256") != file_sha256(checkpoint).lower():
+            raise RuntimeError("ITBER epoch publication did not verify local evidence")
+        return
+    evaluate_command = [
+        sys.executable,
+        str(REPOSITORY_ROOT / "scripts" / "evaluate_itber.py"),
+        "--stage",
+        stage,
+        "--baseline-checkpoint",
+        str(baseline_checkpoint),
+        "--private-checkpoint",
+        str(checkpoint),
+        "--dataset-root",
+        str(dataset_root),
+        "--gate1-cache-manifest",
+        str(gate1_cache_manifest),
+        "--output",
+        str(evaluation),
+    ]
+    subprocess.run(evaluate_command, cwd=REPOSITORY_ROOT, check=True)
+    publish_command = [
+        sys.executable,
+        str(REPOSITORY_ROOT / "scripts" / "publish_itber_epoch.py"),
+        "--run-dir",
+        str(output_root),
+        "--checkpoint",
+        str(checkpoint),
+        "--config",
+        str(publication_config),
+    ]
+    subprocess.run(publish_command, cwd=REPOSITORY_ROOT, check=True)
+    record = _published_record(output_root, epoch)
+    if record is None or record.get("checkpoint", {}).get("sha256") != file_sha256(checkpoint).lower():
+        raise RuntimeError("ITBER epoch publication did not verify")
+
+
 def main() -> int:
     args = _parse_args()
     protocol = stage_protocol(args.stage)
@@ -362,9 +439,22 @@ def main() -> int:
     diagnostics_path = args.output_root / "diagnostics.jsonl"
     checkpoint_root = args.output_root / "checkpoints"
 
+    if args.resume_checkpoint is not None:
+        _protect_completed_epoch(
+            stage=args.stage,
+            baseline_checkpoint=args.baseline_checkpoint,
+            dataset_root=args.dataset_root,
+            gate1_cache_manifest=args.gate1_cache_manifest,
+            output_root=args.output_root,
+            checkpoint=args.resume_checkpoint,
+            publication_config=args.publication_config,
+            epoch=artifact["epoch"],
+        )
+
     for epoch in range(start_epoch, protocol.epochs + 1):
-        if epoch - 1 == protocol.epochs - AUGMENTATION["close_mosaic"]:
+        if epoch > protocol.epochs - AUGMENTATION["close_mosaic"]:
             loader.dataset.close_mosaic(hyp=copy.copy(dataset_hyp))
+        _reseed_loader_for_epoch(loader, epoch)
         loss_accumulator: dict[str, list[float]] = {}
         matched_values: list[float] = []
         unmatched_values: list[float] = []
@@ -421,6 +511,7 @@ def main() -> int:
             "baseline_sha256": baseline_sha,
             "dataset_sha256": dataset_sha,
             "cache_manifest_sha256": cache_manifest_sha,
+            "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
             "detector_sha_before": detector_sha_before,
             "detector_sha_after": detector_sha_after,
             "refiner": adapter.refiner.state_dict(),
@@ -430,6 +521,7 @@ def main() -> int:
             "diagnostic": diagnostic,
             "training_constants": TRAINING_CONSTANTS,
             "augmentation": AUGMENTATION,
+            "baseline_training_contract": BASELINE_TRAINING_CONTRACT,
         }
         checkpoint = atomic_save_private_checkpoint(
             checkpoint_root / f"epoch-{epoch:04d}.pt", artifact
@@ -438,6 +530,16 @@ def main() -> int:
         shutil.copy2(checkpoint, last_temporary)
         os.replace(last_temporary, checkpoint_root / "last.pt")
         _append_jsonl(diagnostics_path, diagnostic)
+        _protect_completed_epoch(
+            stage=args.stage,
+            baseline_checkpoint=args.baseline_checkpoint,
+            dataset_root=args.dataset_root,
+            gate1_cache_manifest=args.gate1_cache_manifest,
+            output_root=args.output_root,
+            checkpoint=checkpoint,
+            publication_config=args.publication_config,
+            epoch=epoch,
+        )
     return 0
 
 

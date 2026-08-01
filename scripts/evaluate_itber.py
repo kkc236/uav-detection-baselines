@@ -36,6 +36,8 @@ from src.itber_evaluation import (  # noqa: E402
     write_immutable_report,
 )
 from src.itber_protocol import (  # noqa: E402
+    BASELINE_TRAINING_CONTRACT,
+    BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
@@ -252,7 +254,13 @@ def evaluate_checkpoint(
         stage=stage,
         cache_manifest_sha256=cache_manifest_sha,
     )
-    if artifact.get("training_constants") != TRAINING_CONSTANTS or artifact.get("augmentation") != AUGMENTATION:
+    if (
+        artifact.get("training_constants") != TRAINING_CONSTANTS
+        or artifact.get("augmentation") != AUGMENTATION
+        or artifact.get("baseline_training_contract") != BASELINE_TRAINING_CONTRACT
+        or artifact.get("baseline_training_contract_sha256")
+        != BASELINE_TRAINING_CONTRACT_SHA256
+    ):
         raise ValueError("I-TBER checkpoint training protocol mismatch")
 
     from ultralytics import RTDETR
@@ -304,6 +312,8 @@ def evaluate_checkpoint(
         "dataset_sha256": dataset_sha,
         "category_sha256": category_sha,
         "cache_manifest_sha256": cache_manifest_sha,
+        "baseline_training_contract": BASELINE_TRAINING_CONTRACT,
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
         "environment": current_environment(),
         "evaluation_constants": EVALUATION_CONSTANTS,
         "repeat_count": len(repeats),

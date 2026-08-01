@@ -29,12 +29,22 @@ REQUIRED_FILES = (
     "src/rtdetr_itber.py",
     "src/itber_protocol.py",
     "scripts/run_itber_canary.py",
+    "scripts/cache_itber_evidence.py",
+    "scripts/run_itber_probe.py",
+    "scripts/train_itber.py",
+    "scripts/evaluate_itber.py",
+    "scripts/publish_itber_epoch.py",
+    "scripts/restore_itber_checkpoint.py",
+    "scripts/benchmark_itber.py",
+    "scripts/run_itber_pipeline.py",
     "deploy/itber/verify_bundle.py",
     "deploy/itber/verify_host.sh",
     "deploy/itber/build_wheelhouse.sh",
     "deploy/itber/bootstrap_ubuntu.sh",
     "deploy/itber/artifact-manifest.template.json",
     "deploy/itber/publication.env.template",
+    "deploy/itber/publication-screen.template.json",
+    "deploy/itber/publication-formal.template.json",
     "docs/ITBER_BARE_SERVER_GUIDE.md",
 )
 
@@ -45,6 +55,8 @@ GUIDE_MARKERS = (
     "restore_itber_checkpoint.py",
     "每个 epoch",
     "chmod 600",
+    "run_itber_pipeline.py",
+    "BASELINE_TRAINING_CONTRACT_SHA256",
 )
 
 

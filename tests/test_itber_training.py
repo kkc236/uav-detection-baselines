@@ -16,7 +16,11 @@ from scripts.train_itber import (
     stage_protocol,
     validate_resume_checkpoint,
 )
-from src.itber_protocol import EXPECTED_BASELINE_SHA256, EXPECTED_DATASET_SHA256
+from src.itber_protocol import (
+    BASELINE_TRAINING_CONTRACT_SHA256,
+    EXPECTED_BASELINE_SHA256,
+    EXPECTED_DATASET_SHA256,
+)
 
 
 def test_stage_protocol_locks_screen_and_formal_without_shared_checkpoint() -> None:
@@ -90,6 +94,7 @@ def test_resume_validation_rejects_cross_stage_or_authority() -> None:
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": cache_sha,
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
     }
     validate_resume_checkpoint(artifact, stage="screen", cache_manifest_sha256=cache_sha)
     for key, value in (
@@ -122,6 +127,7 @@ def test_atomic_checkpoint_roundtrip_contains_private_state_only(tmp_path) -> No
         "epoch": 1,
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
+        "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
         "refiner": model.state_dict(),
     }
 
@@ -141,7 +147,7 @@ def test_cli_exposes_only_operational_paths_stage_device_and_resume() -> None:
         text=True,
     )
     help_text = result.stdout
-    for allowed in ("--stage", "--baseline-checkpoint", "--dataset-root", "--gate1-cache-manifest", "--output-root", "--device", "--resume-checkpoint"):
+    for allowed in ("--stage", "--baseline-checkpoint", "--dataset-root", "--gate1-cache-manifest", "--publication-config", "--output-root", "--device", "--resume-checkpoint"):
         assert allowed in help_text
     for forbidden in ("--epochs", "--seed", "--batch", "--workers", "--imgsz", "--lr"):
         assert forbidden not in help_text
@@ -161,5 +167,24 @@ def test_source_forces_frozen_on_the_fly_detector_and_epoch_checkpoints() -> Non
         "detector_sha_after",
         "matched_correction_rms",
         "unmatched_correction_rms",
+        "evaluate_itber.py",
+        "publish_itber_epoch.py",
+        "subprocess.run",
+        "ITBER epoch publication did not verify",
+        "generator.manual_seed",
+        "loader.reset()",
     ):
         assert marker in source
+
+
+def test_publication_cli_is_operational_only() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/publish_itber_epoch.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for allowed in ("--run-dir", "--checkpoint", "--config"):
+        assert allowed in result.stdout
+    for forbidden in ("--stage", "--seed", "--probe", "--retain", "--repo", "--tag"):
+        assert forbidden not in result.stdout

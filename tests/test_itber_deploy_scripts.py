@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,24 @@ def test_bootstrap_has_idempotent_lock_marker_and_secret_policy() -> None:
         "YOLO_CONFIG_DIR",
     ):
         assert required in content
+
+
+def test_publication_templates_are_credential_free_and_stage_locked() -> None:
+    for stage, epochs in (("screen", 12), ("formal", 30)):
+        path = Path(f"deploy/itber/publication-{stage}.template.json")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["format_version"] == 1
+        assert payload["design_version"] == "itber-v1.1"
+        assert payload["stage"] == stage
+        assert payload["probe"] == "p3"
+        assert payload["seed"] == 0
+        assert payload["asset_prefix"] == f"itber-v1.1-{stage}-seed0-p3"
+        assert payload["run_name"].endswith(f"-{stage}-seed0-p3")
+        assert payload["retain"] == 3
+        assert payload["expected_private_epochs"] == epochs
+        content = path.read_text(encoding="utf-8")
+        assert "github_pat_" not in content
+        assert "a1314520" not in content
 
 
 @pytest.mark.parametrize("path", SCRIPTS)
