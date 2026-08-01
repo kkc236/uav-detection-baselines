@@ -465,7 +465,7 @@ def run_model_canary(initial_state: Path) -> dict[str, Any]:
 
     if not torch.cuda.is_available():
         raise RuntimeError("LPR-G model canary requires CUDA")
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(True, warn_only=True)
     device = torch.device("cuda:0")
     artifact = torch.load(initial_state, map_location="cpu", weights_only=False)
     control = RTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)

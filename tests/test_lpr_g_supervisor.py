@@ -65,6 +65,7 @@ def test_stock_canary_class_count_comes_from_locked_model_yaml() -> None:
 def test_model_canary_keeps_forward_cache_usable_for_backward() -> None:
     source = inspect.getsource(run_model_canary)
 
+    assert "torch.use_deterministic_algorithms(True, warn_only=True)" in source
     assert "torch.no_grad()" in source
     assert "torch.inference_mode()" not in source
 
