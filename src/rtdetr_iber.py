@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from functools import partial
 from numbers import Integral
 from threading import Lock, RLock, local
 from typing import Any
-from weakref import WeakKeyDictionary, ref
+from weakref import WeakKeyDictionary, finalize, ref
 
 import torch
 from torch import nn
@@ -22,6 +23,84 @@ _ADAPTER_OWNERS = WeakKeyDictionary()
 _ADAPTER_OWNERS_LOCK = RLock()
 
 
+class _AdapterCleanupState:
+    """Non-module lifecycle state; checkpoints intentionally remain state_dict-only."""
+
+    def __init__(
+        self,
+        detector: nn.Module,
+        head: nn.Module,
+        detector_requires_grad: tuple[tuple[nn.Parameter, bool], ...],
+        detector_training: tuple[tuple[nn.Module, bool], ...],
+    ) -> None:
+        self.lock = RLock()
+        self.detector = detector
+        self.head = head
+        self.detector_requires_grad = detector_requires_grad
+        self.detector_training = detector_training
+        self.owner_reference: Any | None = None
+        self.head_hook: Any | None = None
+        self.original_decoder: nn.Module | None = None
+        self.installed_decoder: IBERRecordingDecoder | None = None
+        self.replaced_decoder = False
+        self.closed = False
+
+
+def _cleanup_adapter_state(state: _AdapterCleanupState) -> None:
+    """Best-effort all cleanup phases without retaining the adapter."""
+    with _ADAPTER_OWNERS_LOCK:
+        with state.lock:
+            if state.closed:
+                return
+            state.closed = True
+
+            if state.head_hook is not None:
+                try:
+                    state.head_hook.remove()
+                except Exception:
+                    pass
+                state.head_hook = None
+
+            try:
+                if (
+                    state.replaced_decoder
+                    and state.installed_decoder is not None
+                    and state.head.decoder is state.installed_decoder
+                ):
+                    state.head.decoder = state.original_decoder
+            except Exception:
+                pass
+
+            for parameter, requires_grad in state.detector_requires_grad:
+                try:
+                    parameter.requires_grad_(requires_grad)
+                except Exception:
+                    pass
+            for module, training in state.detector_training:
+                try:
+                    module.training = training
+                except Exception:
+                    pass
+
+            if _ADAPTER_OWNERS.get(state.detector) is state:
+                _ADAPTER_OWNERS.pop(state.detector, None)
+
+
+def _finalize_adapter_cleanup(state: _AdapterCleanupState) -> None:
+    _cleanup_adapter_state(state)
+
+
+def _capture_head_input_weak(
+    owner_reference: Any,
+    module: nn.Module,
+    inputs: tuple[Any, ...],
+) -> None:
+    owner = owner_reference()
+    if owner is None or owner._closed:
+        return
+    owner._capture_head_input(module, inputs)
+
+
 def _require_normal_query_count(value: object, *, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, Integral) or value != 300:
         raise ValueError(f"{name} must be an integral value exactly 300")
@@ -30,10 +109,13 @@ def _require_normal_query_count(value: object, *, name: str) -> int:
 
 def _active_adapter(detector: nn.Module) -> "FrozenIBERAdapter | None":
     """Return the live owner, discarding stale weak ownership records."""
-    owner_reference = _ADAPTER_OWNERS.get(detector)
+    cleanup_state = _ADAPTER_OWNERS.get(detector)
+    if cleanup_state is None:
+        return None
+    owner_reference = cleanup_state.owner_reference
     owner = owner_reference() if owner_reference is not None else None
     if owner is None or owner._closed:
-        _ADAPTER_OWNERS.pop(detector, None)
+        _cleanup_adapter_state(cleanup_state)
         return None
     return owner
 
@@ -216,15 +298,31 @@ class FrozenIBERAdapter(nn.Module):
                 "IBERRecordingDecoder"
             )
 
+        cleanup_state = _AdapterCleanupState(
+            detector,
+            head,
+            self._detector_requires_grad,
+            self._detector_training,
+        )
+        self._cleanup_state = cleanup_state
+        owner_reference = ref(self)
+        cleanup_state.owner_reference = owner_reference
+        self._cleanup_finalizer = finalize(
+            self,
+            _finalize_adapter_cleanup,
+            cleanup_state,
+        )
+
         with _ADAPTER_OWNERS_LOCK:
             if _active_adapter(detector) is not None:
                 raise RuntimeError("RT-DETR detector already has an active owner")
-            _ADAPTER_OWNERS[detector] = ref(self)
+            _ADAPTER_OWNERS[detector] = cleanup_state
             self._owns_detector = True
             try:
                 self._head_hook = head.register_forward_pre_hook(
-                    self._capture_head_input
+                    partial(_capture_head_input_weak, owner_reference)
                 )
+                cleanup_state.head_hook = self._head_hook
                 self.detector.requires_grad_(False)
                 self.detector.eval()
             except BaseException:
@@ -304,6 +402,9 @@ class FrozenIBERAdapter(nn.Module):
                 object.__setattr__(adapter, "_original_decoder", original_decoder)
                 object.__setattr__(adapter, "_installed_decoder", candidate_decoder)
                 adapter._replaced_decoder = replace_decoder
+                adapter._cleanup_state.original_decoder = original_decoder
+                adapter._cleanup_state.installed_decoder = candidate_decoder
+                adapter._cleanup_state.replaced_decoder = replace_decoder
                 if replace_decoder:
                     candidate_decoder.eval()
                     head.decoder = candidate_decoder
@@ -313,27 +414,20 @@ class FrozenIBERAdapter(nn.Module):
                     adapter.close()
                 raise
 
-    def _restore_detector_state(self) -> None:
-        for parameter, requires_grad in self._detector_requires_grad:
-            parameter.requires_grad_(requires_grad)
-        for module, training in self._detector_training:
-            module.training = training
-
-    def _release_ownership(self) -> None:
-        if not self._owns_detector:
-            return
-        owner_reference = _ADAPTER_OWNERS.get(self.detector)
-        if owner_reference is not None and owner_reference() is self:
-            _ADAPTER_OWNERS.pop(self.detector, None)
-        self._owns_detector = False
+    def _finish_cleanup(self) -> None:
+        self._closed = True
+        try:
+            _cleanup_adapter_state(self._cleanup_state)
+        finally:
+            self._owns_detector = False
+            self._head_hook = None
+            try:
+                self._cleanup_finalizer.detach()
+            except Exception:
+                pass
 
     def _rollback_takeover(self) -> None:
-        if self._head_hook is not None:
-            self._head_hook.remove()
-            self._head_hook = None
-        self._restore_detector_state()
-        self._release_ownership()
-        self._closed = True
+        self._finish_cleanup()
 
     def _require_open(self) -> None:
         if self._closed:
@@ -348,20 +442,7 @@ class FrozenIBERAdapter(nn.Module):
         with self._evidence_lock:
             if self._closed:
                 return
-            with _ADAPTER_OWNERS_LOCK:
-                head = self.detector.model[-1]
-                if (
-                    self._replaced_decoder
-                    and self._installed_decoder is not None
-                    and head.decoder is self._installed_decoder
-                ):
-                    head.decoder = self._original_decoder
-                if self._head_hook is not None:
-                    self._head_hook.remove()
-                    self._head_hook = None
-                self._restore_detector_state()
-                self._release_ownership()
-                self._closed = True
+            self._finish_cleanup()
 
     def __enter__(self) -> "FrozenIBERAdapter":
         self._require_open()

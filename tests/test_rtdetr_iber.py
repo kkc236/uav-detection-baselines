@@ -761,6 +761,111 @@ def test_close_is_idempotent_restores_decoder_and_allows_gc_and_rebuild() -> Non
         assert adapter_reference() is None
 
 
+def test_unclosed_adapter_gc_removes_hook_and_releases_detector() -> None:
+    detector = _detector().train()
+    head = detector.model[-1]
+    original_decoder = head.decoder
+    original_hooks = _head_hook_count(detector)
+    original_requires_grad = tuple(
+        parameter.requires_grad for parameter in detector.parameters()
+    )
+    original_training = _module_training_flags(detector)
+
+    adapter = FrozenIBERAdapter.from_detector(
+        detector, private_seed=10_000, image_size=160
+    )
+    adapter_reference = weakref.ref(adapter)
+    del adapter
+    gc.collect()
+
+    assert adapter_reference() is None
+    assert _head_hook_count(detector) == original_hooks
+    assert head.decoder is original_decoder
+    assert tuple(
+        parameter.requires_grad for parameter in detector.parameters()
+    ) == original_requires_grad
+    assert _module_training_flags(detector) == original_training
+
+    replacement = FrozenIBERAdapter.from_detector(
+        detector, private_seed=20_000, image_size=160
+    )
+    replacement.close()
+
+
+@pytest.mark.parametrize("failure_path", ["close", "rollback"])
+def test_hook_remove_failure_does_not_interrupt_cleanup(
+    failure_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector = _detector().train()
+    head = detector.model[-1]
+    original_decoder = head.decoder
+    original_requires_grad = tuple(
+        parameter.requires_grad for parameter in detector.parameters()
+    )
+    original_training = _module_training_flags(detector)
+    residual_handles: list[object] = []
+
+    if failure_path == "close":
+        adapter = FrozenIBERAdapter.from_detector(
+            detector, private_seed=10_000, image_size=160
+        )
+        handle = adapter._head_hook
+        residual_handles.append(handle)
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                handle,
+                "remove",
+                lambda: (_ for _ in ()).throw(RuntimeError("forced remove failure")),
+            )
+            adapter.close()
+        assert adapter._closed is True
+    else:
+        real_register = head.register_forward_pre_hook
+
+        class FailingRemoveHandle:
+            def __init__(self, real_handle: object) -> None:
+                self.real_handle = real_handle
+
+            def remove(self) -> None:
+                raise RuntimeError("forced remove failure")
+
+        def register_failing_handle(callback: object) -> FailingRemoveHandle:
+            real_handle = real_register(callback)
+            residual_handles.append(real_handle)
+            return FailingRemoveHandle(real_handle)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(head, "register_forward_pre_hook", register_failing_handle)
+            scoped.setattr(
+                detector,
+                "eval",
+                lambda: (_ for _ in ()).throw(
+                    RuntimeError("forced detector eval failure")
+                ),
+            )
+            with pytest.raises(RuntimeError, match="forced detector eval failure"):
+                FrozenIBERAdapter.from_detector(
+                    detector, private_seed=10_000, image_size=160
+                )
+
+    assert head.decoder is original_decoder
+    assert tuple(
+        parameter.requires_grad for parameter in detector.parameters()
+    ) == original_requires_grad
+    assert _module_training_flags(detector) == original_training
+    for handle in residual_handles:
+        callback = head._forward_pre_hooks[handle.id]
+        assert callback(head, ()) is None
+
+    replacement = FrozenIBERAdapter.from_detector(
+        detector, private_seed=20_000, image_size=160
+    )
+    replacement.close()
+    for handle in residual_handles:
+        handle.remove()
+
+
 def test_context_manager_closes_and_closed_apis_raise_clearly() -> None:
     detector = _detector()
     head = detector.model[-1]
