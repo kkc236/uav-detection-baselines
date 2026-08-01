@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+from scripts.run_lpr_g_paired import SCREEN_ORDER, build_arm_command, next_stage
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_only_seed0_control_then_lprg_is_scheduled() -> None:
+    assert SCREEN_ORDER == ((0, "control"), (0, "lprg"))
+
+
+def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:
+    command = build_arm_command(
+        python=Path("/data/uav/venvs/rtdetr-lpr-py310/bin/python"),
+        protocol=tmp_path / "protocol-seed0.json",
+        initial_state=tmp_path / "initial-state-seed0.pt",
+        project=tmp_path / "runs",
+        stage="screen",
+        variant="lprg",
+    )
+
+    assert command[1] == "scripts/train_rtdetr_lpr_g.py"
+    assert command[command.index("--seed") + 1] == "0"
+    assert not {"--batch", "--workers", "--optimizer", "--mosaic", "--epochs"}.intersection(
+        command
+    )
+
+
+def test_formal_launch_requires_passed_screen() -> None:
+    assert next_stage({"status": "passed"}, through_formal=True) == "formal"
+    assert next_stage({"status": "scientific_failed"}, through_formal=True) == "stop"
+    assert next_stage({"status": "engineering_invalid"}, through_formal=True) == "repair"
+
+
+def test_supervisor_cli_exposes_only_operational_authority() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "run_lpr_g_paired.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--dataset-root" in result.stdout
+    assert "--through-formal" in result.stdout
+    assert "--epochs" not in result.stdout
+    assert "--batch" not in result.stdout
+    assert "--optimizer" not in result.stdout

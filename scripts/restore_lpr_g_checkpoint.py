@@ -121,7 +121,17 @@ def restore_latest_checkpoint(args: argparse.Namespace) -> Path:
             expected_prefix=args.asset_prefix,
         )
         destination = weights / f"epoch{expected_epoch - 1}.pt"
-        temporary_checkpoint.replace(destination)
+        if destination.exists():
+            destination = weights / f"restored-epoch{expected_epoch - 1}.pt"
+            if destination.exists():
+                existing = checkpoint_metadata(destination)
+                if existing.sha256 != metadata.sha256:
+                    raise FileExistsError(
+                        f"refusing to replace changed restored checkpoint: {destination}"
+                    )
+                temporary_checkpoint.unlink()
+        if temporary_checkpoint.exists():
+            temporary_checkpoint.replace(destination)
         print(
             json.dumps(
                 {
