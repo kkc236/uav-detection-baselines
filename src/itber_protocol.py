@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
 import torch
 from torch import nn
 
-from src.lpr_protocol import state_fingerprint
+from src.lpr_protocol import current_environment, state_fingerprint
 
 
 EXPECTED_BASELINE_SHA256 = "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
@@ -23,8 +24,9 @@ EXPECTED_SOURCE_SHA256 = {
     "tasks.py": "B00935C1851BB9CEA240985704C12E654E68B369F6C59DE20E45FA295CB79B92",
     "rtdetr-l.yaml": "85716F626769CB5DDF00D59FCF6CAFB5814AAD196328100BDC7C93306F650E83",
 }
-EXPECTED_ENVIRONMENT = {
+BASELINE_REFERENCE_ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 4090",
+    "reported_memory": "24GB",
     "driver": "550.142",
     "python": "3.10.12",
     "torch": "2.5.1+cu121",
@@ -32,6 +34,35 @@ EXPECTED_ENVIRONMENT = {
     "cuda": "12.1",
     "ultralytics": "8.4.90",
 }
+EXECUTION_ENVIRONMENT = {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "reported_memory_mib": 49140,
+    "driver": "570.133.07",
+    "python": "3.10.12",
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "cuda": "12.1",
+    "ultralytics": "8.4.90",
+}
+# Compatibility name for I-TBER-only consumers. Historical baseline identity is
+# always available separately and must never be inferred from this alias.
+EXPECTED_ENVIRONMENT = EXECUTION_ENVIRONMENT
+RUNTIME_AMENDMENT = {
+    "amendment_id": "itber-v1.1-runtime-driver-2026-08-01",
+    "approved_on": "2026-08-01",
+    "baseline_driver": "550.142",
+    "execution_driver": "570.133.07",
+    "allowed_differences": ["driver", "reported_memory_mib"],
+    "comparison": "same-checkpoint-stock-vs-refined",
+}
+RUNTIME_AMENDMENT_SHA256 = hashlib.sha256(
+    json.dumps(
+        RUNTIME_AMENDMENT,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+).hexdigest().upper()
 
 # This is the completed seed0 RT-DETR-L baseline authority. I-TBER is an
 # isolated post-training head and must never rewrite or relabel this contract.
@@ -103,6 +134,29 @@ class ProtocolViolation(ValueError):
         super().__init__("I-TBER protocol violation: " + ", ".join(sorted(self.violations)))
 
 
+def current_execution_environment() -> dict[str, Any]:
+    """Capture the exact amended runtime, including reported GPU memory."""
+    environment = dict(current_environment())
+    reported_memory_mib = None
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        reported_memory_mib = int(result.stdout.splitlines()[0].strip())
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        pass
+    environment["reported_memory_mib"] = reported_memory_mib
+    return environment
+
+
 def _hash_violation(
     violations: dict[str, dict[str, Any]],
     name: str,
@@ -157,13 +211,16 @@ def validate_authorities(
     if violations:
         raise ProtocolViolation(violations)
     return {
-        "status": "passed",
+        "status": "passed_with_runtime_amendment",
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "subset_sha256": EXPECTED_SUBSET_SHA256,
         "category_sha256": EXPECTED_CATEGORY_SHA256,
         "source_sha256": dict(EXPECTED_SOURCE_SHA256),
-        "environment": dict(EXPECTED_ENVIRONMENT),
+        "baseline_reference_environment": dict(BASELINE_REFERENCE_ENVIRONMENT),
+        "execution_environment": dict(EXECUTION_ENVIRONMENT),
+        "runtime_amendment": dict(RUNTIME_AMENDMENT),
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
     }
 
 

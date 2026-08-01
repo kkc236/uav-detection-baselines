@@ -8,13 +8,16 @@ from torch import nn
 
 from src.itber_protocol import (
     BASELINE_TRAINING_CONTRACT,
+    BASELINE_REFERENCE_ENVIRONMENT,
+    EXECUTION_ENVIRONMENT,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
-    EXPECTED_ENVIRONMENT,
     EXPECTED_SOURCE_SHA256,
     EXPECTED_SUBSET_SHA256,
     ProtocolViolation,
+    RUNTIME_AMENDMENT,
+    RUNTIME_AMENDMENT_SHA256,
     assert_detector_frozen,
     module_state_sha256,
     validate_authorities,
@@ -82,8 +85,40 @@ def _authority() -> dict:
         "subset_sha256": EXPECTED_SUBSET_SHA256,
         "category_sha256": EXPECTED_CATEGORY_SHA256,
         "source_sha256": dict(EXPECTED_SOURCE_SHA256),
-        "environment": dict(EXPECTED_ENVIRONMENT),
+        "environment": dict(EXECUTION_ENVIRONMENT),
     }
+
+
+def test_runtime_driver_amendment_preserves_baseline_reference() -> None:
+    assert BASELINE_REFERENCE_ENVIRONMENT == {
+        "gpu": "NVIDIA GeForce RTX 4090",
+        "reported_memory": "24GB",
+        "driver": "550.142",
+        "python": "3.10.12",
+        "torch": "2.5.1+cu121",
+        "torchvision": "0.20.1+cu121",
+        "cuda": "12.1",
+        "ultralytics": "8.4.90",
+    }
+    assert EXECUTION_ENVIRONMENT == {
+        "gpu": "NVIDIA GeForce RTX 4090",
+        "reported_memory_mib": 49140,
+        "driver": "570.133.07",
+        "python": "3.10.12",
+        "torch": "2.5.1+cu121",
+        "torchvision": "0.20.1+cu121",
+        "cuda": "12.1",
+        "ultralytics": "8.4.90",
+    }
+    assert RUNTIME_AMENDMENT == {
+        "amendment_id": "itber-v1.1-runtime-driver-2026-08-01",
+        "approved_on": "2026-08-01",
+        "baseline_driver": "550.142",
+        "execution_driver": "570.133.07",
+        "allowed_differences": ["driver", "reported_memory_mib"],
+        "comparison": "same-checkpoint-stock-vs-refined",
+    }
+    assert len(RUNTIME_AMENDMENT_SHA256) == 64
 
 
 @pytest.mark.parametrize(
@@ -144,4 +179,25 @@ def test_immutable_report_is_exclusive_and_readable(tmp_path) -> None:
 
 def test_exact_authority_is_accepted() -> None:
     report = validate_authorities(**_authority())
-    assert report["status"] == "passed"
+    assert report["status"] == "passed_with_runtime_amendment"
+    assert report["baseline_reference_environment"] == BASELINE_REFERENCE_ENVIRONMENT
+    assert report["execution_environment"] == EXECUTION_ENVIRONMENT
+    assert report["runtime_amendment"] == RUNTIME_AMENDMENT
+    assert report["runtime_amendment_sha256"] == RUNTIME_AMENDMENT_SHA256
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("driver", "550.142"),
+        ("reported_memory_mib", 24564),
+        ("torch", "2.6.0"),
+    ],
+)
+def test_authority_rejects_unapproved_execution_environment_drift(
+    field: str, replacement: object
+) -> None:
+    authority = _authority()
+    authority["environment"][field] = replacement
+    with pytest.raises(ProtocolViolation, match=f"environment.{field}"):
+        validate_authorities(**authority)
