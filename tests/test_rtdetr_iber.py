@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import inspect
 from contextlib import contextmanager
+from decimal import Decimal
+from fractions import Fraction
 from typing import Iterator
 
 import pytest
@@ -16,6 +18,22 @@ from src.iber_protocol import module_state_sha256
 from src.itber_geometry import cxcywh_to_xyxy
 from src.itber_loss import itber_private_loss
 from src.rtdetr_iber import FrozenIBERAdapter, IBERRecordingDecoder
+
+
+INVALID_NORMAL_QUERY_COUNTS = [
+    pytest.param(0, id="zero"),
+    pytest.param(-1, id="negative"),
+    pytest.param(17, id="17"),
+    pytest.param(299, id="299"),
+    pytest.param(301, id="301"),
+    pytest.param(300.0, id="float-300"),
+    pytest.param(300.5, id="float-300-point-5"),
+    pytest.param(True, id="bool"),
+    pytest.param("300", id="string"),
+    pytest.param(None, id="none"),
+    pytest.param(Decimal("300"), id="decimal"),
+    pytest.param(Fraction(300, 1), id="fraction"),
+]
 
 
 @contextmanager
@@ -156,6 +174,38 @@ def _direct_decoder(layers: nn.ModuleList, *, normal_query_count: int = 300) -> 
     return decoder, bbox_head, score_head
 
 
+@pytest.mark.parametrize("normal_query_count", INVALID_NORMAL_QUERY_COUNTS)
+def test_recording_decoder_constructor_rejects_every_non_integral_300(
+    normal_query_count: object,
+) -> None:
+    with pytest.raises(
+        (TypeError, ValueError), match="integral.*300|300.*integral"
+    ):
+        IBERRecordingDecoder(
+            nn.ModuleList(),
+            hidden_dim=8,
+            num_layers=0,
+            eval_idx=0,
+            normal_query_count=normal_query_count,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("normal_query_count", INVALID_NORMAL_QUERY_COUNTS)
+def test_from_stock_rejects_every_non_integral_300(
+    authority_detector: RTDETRDetectionModel,
+    normal_query_count: object,
+) -> None:
+    stock = authority_detector.model[-1].decoder
+
+    with pytest.raises(
+        (TypeError, ValueError), match="integral.*300|300.*integral"
+    ):
+        IBERRecordingDecoder.from_stock(
+            stock,
+            normal_query_count=normal_query_count,  # type: ignore[arg-type]
+        )
+
+
 def test_direct_decoder_excludes_prepended_queries_and_records_last_300() -> None:
     torch.manual_seed(1)
     layers = nn.ModuleList([_IncrementLayer(value) for value in (1.0, 2.0, 3.0)])
@@ -232,17 +282,7 @@ def test_direct_decoder_rejects_runtime_with_fewer_than_300_queries() -> None:
         )
 
 
-def test_recording_decoder_rejects_nonpositive_counts_and_clears_stale_evidence() -> None:
-    for query_count in (0, -1):
-        with pytest.raises(ValueError, match="positive"):
-            IBERRecordingDecoder(
-                nn.ModuleList(),
-                hidden_dim=8,
-                num_layers=0,
-                eval_idx=0,
-                normal_query_count=query_count,
-            )
-
+def test_recording_decoder_clears_stale_evidence_at_forward_start() -> None:
     decoder, bbox_head, score_head = _direct_decoder(
         nn.ModuleList([_ExplodingLayer()])
     )
@@ -284,22 +324,24 @@ def authority_detector() -> RTDETRDetectionModel:
     )
 
 
-@pytest.mark.parametrize("normal_query_count", [17, 301])
-def test_from_detector_rejects_count_different_from_real_head_authority(
+@pytest.mark.parametrize("normal_query_count", INVALID_NORMAL_QUERY_COUNTS)
+def test_from_detector_rejects_every_non_integral_300_request(
     authority_detector: RTDETRDetectionModel,
-    normal_query_count: int,
+    normal_query_count: object,
 ) -> None:
     head = authority_detector.model[-1]
     assert head.num_queries == 300
     original_decoder = head.decoder
     created: FrozenIBERAdapter | None = None
     try:
-        with pytest.raises(ValueError, match="300|normal quer|num_queries"):
+        with pytest.raises(
+            (TypeError, ValueError), match="integral.*300|300.*integral"
+        ):
             created = FrozenIBERAdapter.from_detector(
                 authority_detector,
                 private_seed=10_000,
                 image_size=160,
-                normal_query_count=normal_query_count,
+                normal_query_count=normal_query_count,  # type: ignore[arg-type]
             )
     finally:
         if created is not None:
@@ -538,11 +580,21 @@ def test_adapter_train_eval_toggles_only_private_refiner(
     assert all(not parameter.requires_grad for parameter in adapter.detector.parameters())
 
 
+@pytest.mark.parametrize(
+    "wrapped_query_count",
+    [
+        pytest.param(299, id="299"),
+        pytest.param(300.0, id="float-300"),
+        pytest.param(300.5, id="float-300-point-5"),
+        pytest.param(True, id="bool"),
+    ],
+)
 def test_existing_iber_wrapper_with_wrong_count_is_rejected(
     real_adapter: FrozenIBERAdapter,
+    wrapped_query_count: object,
 ) -> None:
     decoder = real_adapter.detector.model[-1].decoder
-    decoder.normal_query_count = 299
+    decoder.normal_query_count = wrapped_query_count
     second: FrozenIBERAdapter | None = None
     try:
         with pytest.raises(ValueError, match="wrapped|300|normal quer"):
@@ -575,19 +627,31 @@ def test_existing_iber_wrapper_with_authoritative_count_is_left_intact(
         second._head_hook.remove()
 
 
-def test_from_detector_rejects_head_query_count_outside_approved_authority(
+@pytest.mark.parametrize(
+    "head_query_count",
+    [
+        pytest.param(301, id="301"),
+        pytest.param(300.0, id="float-300"),
+        pytest.param(300.5, id="float-300-point-5"),
+        pytest.param(True, id="bool"),
+    ],
+)
+def test_from_detector_rejects_raw_head_query_count_outside_integral_300(
     real_adapter: FrozenIBERAdapter,
+    head_query_count: object,
 ) -> None:
     head = real_adapter.detector.model[-1]
-    head.num_queries = 301
+    head.num_queries = head_query_count
     second: FrozenIBERAdapter | None = None
     try:
-        with pytest.raises(ValueError, match="approved|300|num_queries"):
+        with pytest.raises(
+            (TypeError, ValueError), match="integral.*300|300.*integral"
+        ):
             second = FrozenIBERAdapter.from_detector(
                 real_adapter.detector,
                 private_seed=20_001,
                 image_size=160,
-                normal_query_count=301,
+                normal_query_count=300,
             )
     finally:
         if second is not None:

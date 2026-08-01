@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Any
 
 import torch
@@ -12,6 +13,12 @@ from ultralytics.nn.modules.utils import inverse_sigmoid
 from src.iber_head import IBEROutput, IBERRefiner
 from src.itber_geometry import cxcywh_to_xyxy
 from src.itber_loss import itber_private_loss
+
+
+def _require_normal_query_count(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or value != 300:
+        raise ValueError(f"{name} must be an integral value exactly 300")
+    return int(value)
 
 
 class IBERRecordingDecoder(nn.Module):
@@ -27,13 +34,14 @@ class IBERRecordingDecoder(nn.Module):
         normal_query_count: int = 300,
     ) -> None:
         super().__init__()
-        if normal_query_count < 1:
-            raise ValueError("normal query count must be positive")
         self.layers = layers
         self.hidden_dim = int(hidden_dim)
         self.num_layers = int(num_layers)
         self.eval_idx = int(eval_idx)
-        self.normal_query_count = int(normal_query_count)
+        self.normal_query_count = _require_normal_query_count(
+            normal_query_count,
+            name="normal_query_count",
+        )
         self.last_hidden: torch.Tensor | None = None
         self.last_stock_scores: torch.Tensor | None = None
         self.last_stock_boxes: torch.Tensor | None = None
@@ -183,28 +191,25 @@ class FrozenIBERAdapter(nn.Module):
         normal_query_count: int = 300,
     ) -> "FrozenIBERAdapter":
         head = detector.model[-1]
-        head_query_count = int(head.num_queries)
-        if head_query_count != 300:
-            raise ValueError(
-                "RT-DETR head.num_queries must equal the approved normal query "
-                f"count 300; got {head_query_count}"
-            )
-        if normal_query_count != head_query_count:
-            raise ValueError(
-                "normal_query_count must match frozen RT-DETR "
-                f"head.num_queries={head_query_count}; got {normal_query_count}"
-            )
+        head_query_count = _require_normal_query_count(
+            head.num_queries,
+            name="RT-DETR head.num_queries",
+        )
+        requested_query_count = _require_normal_query_count(
+            normal_query_count,
+            name="normal_query_count",
+        )
         if isinstance(head.decoder, IBERRecordingDecoder):
-            if head.decoder.normal_query_count != head_query_count:
-                raise ValueError(
-                    "existing wrapped decoder normal query count must match "
-                    f"head.num_queries={head_query_count}; got "
-                    f"{head.decoder.normal_query_count}"
-                )
+            wrapped_query_count = _require_normal_query_count(
+                head.decoder.normal_query_count,
+                name="existing wrapped decoder normal_query_count",
+            )
+            if wrapped_query_count != head_query_count:
+                raise ValueError("wrapped decoder and RT-DETR head query counts differ")
         else:
             head.decoder = IBERRecordingDecoder.from_stock(
                 head.decoder,
-                normal_query_count=normal_query_count,
+                normal_query_count=requested_query_count,
             )
         first_projection = head.input_proj[0][0]
         f3_channels = int(first_projection.in_channels)
