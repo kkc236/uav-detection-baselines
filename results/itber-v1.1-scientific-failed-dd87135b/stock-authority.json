@@ -1,0 +1,69 @@
+{
+  "baseline_checkpoint": {
+    "bytes": 66262262,
+    "path": "/data/uav/weights/matched_baseline/matched-baseline-best-epoch-0100.pt",
+    "sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
+  },
+  "baseline_reference_environment": {
+    "cuda": "12.1",
+    "driver": "550.142",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "python": "3.10.12",
+    "reported_memory": "24GB",
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "category_sha256": "1455A1F5D9FA9988799815B36CF2CE6D5044B5BD7CAD7CC614D6B5E5059EF2A6",
+  "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+  "design_version": "itber-v1.1",
+  "evaluation_constants": {
+    "batch": 8,
+    "cache": false,
+    "conf": 0.001,
+    "device": "0",
+    "half": false,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "repeats": 3,
+    "seed": 0,
+    "workers": 8
+  },
+  "execution_environment": {
+    "cuda": "12.1",
+    "driver": "570.133.07",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "python": "3.10.12",
+    "reported_memory_mib": 49140,
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "format_version": 1,
+  "repeat_count": 3,
+  "repeat_exact": true,
+  "runtime_amendment": {
+    "allowed_differences": [
+      "driver",
+      "reported_memory_mib"
+    ],
+    "amendment_id": "itber-v1.1-runtime-driver-2026-08-01",
+    "approved_on": "2026-08-01",
+    "baseline_driver": "550.142",
+    "comparison": "same-checkpoint-stock-vs-refined",
+    "execution_driver": "570.133.07"
+  },
+  "runtime_amendment_sha256": "081A3F8C66080AE2B875E2E06EEF91ABE72315E521E1B51F4EC00F067DA7026B",
+  "source_commit": "dd87135bb0aa789678d19986b8f3dd2d646575ed",
+  "status": "passed_with_runtime_amendment",
+  "stock": {
+    "ap50": 0.41439466456193463,
+    "ap75": 0.23916354370541826,
+    "ap_small": 0.24166156936825636,
+    "ap_tiny": 0.10314861659739166,
+    "map": 0.24164841975328888,
+    "precision": 0.5119369275291381,
+    "recall": 0.43525461908044843
+  }
+}

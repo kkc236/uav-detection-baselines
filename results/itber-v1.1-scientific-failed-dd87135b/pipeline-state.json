@@ -1,0 +1,45 @@
+{
+  "design_version": "itber-v1.1",
+  "format_version": 1,
+  "history": [
+    {
+      "phase": "authority",
+      "time_ns": 1785596075893949183
+    },
+    {
+      "phase": "gate0",
+      "time_ns": 1785596080094929099
+    },
+    {
+      "phase": "stock_authority",
+      "time_ns": 1785596088196095569
+    },
+    {
+      "phase": "cache",
+      "time_ns": 1785596112112889404
+    },
+    {
+      "phase": "probe",
+      "time_ns": 1785596158158634310
+    },
+    {
+      "phase": "scientific_failed",
+      "time_ns": 1785596265050339993
+    }
+  ],
+  "last_process": {
+    "command": [
+      "/data/uav/venvs/itber-v1.1/bin/python",
+      "/data/uav/source/uav-detection-baselines-dd87135b/scripts/run_itber_probe.py",
+      "--cache-root",
+      "/data/uav/cache/itber-v1.1-dd87135b",
+      "--output-root",
+      "/data/uav/runs/itber-v1.1/dd87135b-seed0-amended/probe"
+    ],
+    "log": "/data/uav/runs/itber-v1.1/dd87135b-seed0-amended/logs/probe-1785596158159049431.log",
+    "phase": "probe",
+    "pid": 13991,
+    "return_code": 2
+  },
+  "phase": "scientific_failed"
+}

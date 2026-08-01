@@ -1,0 +1,14 @@
+WARNING ⚠️ 'half' is deprecated and will be removed in the future. Use 'quantize' instead.
+[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 5061.8±975.8 MB/s, size: 151.9 KB)
+[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/val... 220 images, 0 backgrounds, 0 corrupt: 40% ━━━━╸─────── 220/548 654.9it/s 0.1s<0.5s[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/val... 423 images, 0 backgrounds, 0 corrupt: 77% ━━━━━━━━━─── 423/548 1.1Kit/s 0.2s<0.1s[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/val... 548 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 548/548 2.1Kit/s 0.3s
+[34m[1mval: [0mNew cache created: /data/uav/datasets/VisDrone/labels/val.cache
+Traceback (most recent call last):
+  File "/data/uav/source/uav-detection-baselines-8b948e4e/scripts/evaluate_itber_stock.py", line 195, in <module>
+    raise SystemExit(main())
+  File "/data/uav/source/uav-detection-baselines-8b948e4e/scripts/evaluate_itber_stock.py", line 175, in main
+    repeats = [
+  File "/data/uav/source/uav-detection-baselines-8b948e4e/scripts/evaluate_itber_stock.py", line 176, in <listcomp>
+    _evaluate_stock_once(adapter, loader, validator, device=device)
+  File "/data/uav/source/uav-detection-baselines-8b948e4e/scripts/evaluate_itber_stock.py", line 124, in _evaluate_stock_once
+    raise RuntimeError("zero-initialized I-TBER changed stock boxes")
+RuntimeError: zero-initialized I-TBER changed stock boxes

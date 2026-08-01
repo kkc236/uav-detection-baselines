@@ -1,0 +1,41 @@
+{
+  "design_version": "itber-v1.1",
+  "format_version": 1,
+  "history": [
+    {
+      "phase": "authority",
+      "time_ns": 1785595542159227577
+    },
+    {
+      "phase": "gate0",
+      "time_ns": 1785595546242384902
+    },
+    {
+      "phase": "stock_authority",
+      "time_ns": 1785595554562042750
+    },
+    {
+      "failed_action": "stock_authority",
+      "phase": "engineering_invalid",
+      "return_code": 1,
+      "time_ns": 1785595558817364556
+    }
+  ],
+  "last_process": {
+    "command": [
+      "/data/uav/venvs/itber-v1.1/bin/python",
+      "/data/uav/source/uav-detection-baselines-8b948e4e/scripts/evaluate_itber_stock.py",
+      "--baseline-checkpoint",
+      "/data/uav/weights/matched_baseline/matched-baseline-best-epoch-0100.pt",
+      "--dataset-root",
+      "/data/uav/datasets/VisDrone",
+      "--output",
+      "/data/uav/runs/itber-v1.1/8b948e4e-seed0-amended/stock-authority.json"
+    ],
+    "log": "/data/uav/runs/itber-v1.1/8b948e4e-seed0-amended/logs/stock_authority-1785595554562259360.log",
+    "phase": "stock_authority",
+    "pid": 12802,
+    "return_code": 1
+  },
+  "phase": "engineering_invalid"
+}
