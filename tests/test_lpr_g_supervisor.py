@@ -4,7 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.run_lpr_g_paired import SCREEN_ORDER, build_arm_command, next_stage
+from scripts.run_lpr_g_paired import (
+    SCREEN_ORDER,
+    build_arm_command,
+    normalize_python_executable,
+    next_stage,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +17,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_only_seed0_control_then_lprg_is_scheduled() -> None:
     assert SCREEN_ORDER == ((0, "control"), (0, "lprg"))
+
+
+def test_python_executable_path_is_not_symlink_resolved(
+    tmp_path: Path, monkeypatch
+) -> None:
+    relative = Path("venvs/rtdetr-lpr-py310/bin/python")
+
+    def reject_resolve(self: Path, *args, **kwargs) -> Path:
+        raise AssertionError("the venv launcher must not be symlink-resolved")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "resolve", reject_resolve)
+
+    assert normalize_python_executable(relative) == tmp_path / relative
 
 
 def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:

@@ -32,6 +32,11 @@ FORMAL_ORDER = SCREEN_ORDER
 RELEASE_TAG = "lpr-g-v2-live"
 
 
+def normalize_python_executable(path: Path) -> Path:
+    """Make an executable path absolute without dereferencing a venv symlink."""
+    return Path(os.path.abspath(os.fspath(path)))
+
+
 def run_name(stage: str, variant: str) -> str:
     return f"{stage}-seed0-{variant}-lpr-g-v2"
 
@@ -642,7 +647,7 @@ def run_supervisor(args: argparse.Namespace) -> dict[str, Any]:
     args.dataset_root = args.dataset_root.resolve()
     args.protocol_dir = args.protocol_dir.resolve()
     args.project = args.project.resolve()
-    args.python = args.python.resolve()
+    args.python = normalize_python_executable(args.python)
     args.token_file = args.token_file.resolve()
     args.results_repo = args.results_repo.resolve()
     args.project.mkdir(parents=True, exist_ok=True)
