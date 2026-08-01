@@ -214,6 +214,17 @@ class FrozenITBERAdapter(nn.Module):
     def selected_boxes(self, output: ITBEROutput) -> torch.Tensor:
         return output.stock_boxes if self.output_mode == "stock" else output.refined_boxes
 
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        """Return stock-score Top-300 detections with the selected box mode."""
+        output = self.forward_evidence(image)
+        scores = self.detector.model[-1].decoder.last_stock_scores
+        if scores is None:
+            raise RuntimeError("I-TBER forward did not capture stock scores")
+        return self.detector.model[-1].postprocess(
+            self.selected_boxes(output),
+            scores.sigmoid(),
+        )
+
     def forward_evidence(self, image: torch.Tensor) -> ITBEROutput:
         """Run one immutable detector forward and invoke the private head."""
         self.detector.eval()
