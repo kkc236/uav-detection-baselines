@@ -1,0 +1,123 @@
+{
+  "authority": {
+    "category_mapping_sha256": "1455A1F5D9FA9988799815B36CF2CE6D5044B5BD7CAD7CC614D6B5E5059EF2A6",
+    "data": {
+      "formal": {
+        "path": "/data/uav/protocols/lpr-g-v2-7607b0f1/VisDrone-formal-full.yaml",
+        "sha256": "6CA488E9AADD47760249E1E51DD47EE0AA33A8BEC850A0806BEE730A559B6859"
+      },
+      "screen": {
+        "path": "/data/uav/protocols/lpr-g-v2-7607b0f1/VisDrone-screen-10pct.yaml",
+        "sha256": "7D2F054A08ED15B7AC3A0D425C63DE26E40251D02AB6F723487FAC477526D586"
+      }
+    },
+    "dataset": {
+      "file_count": 14038,
+      "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+    },
+    "dataset_root": "/data/uav/datasets/VisDrone-authority-fd92e9",
+    "environment": {
+      "cuda": "12.1",
+      "driver": "550.142",
+      "gpu": "NVIDIA GeForce RTX 4090",
+      "python": "3.10.12",
+      "torch": "2.5.1+cu121",
+      "torchvision": "0.20.1+cu121",
+      "ultralytics": "8.4.90"
+    },
+    "format_version": 2,
+    "git_commit": "7607b0f127a3400f78e449f3ae08c6738b31080c",
+    "initial_state": {
+      "fingerprints": {
+        "common": "0B968046FDC89BE5A31581C81F7335A9742BC422503428113637B1CC829F0FA0",
+        "lpr_g": "752891625551B4734AA646FA0CC5D9F2A18EBCBA43BFAF93D37BEFB361D5C8C4"
+      },
+      "path": "/data/uav/protocols/lpr-g-v2-7607b0f1/initial-state-seed0.pt",
+      "sha256": "607DDC50EAA13ACFFF5E960C88F341E72249E960739203ACD0F6C3FA751847B8"
+    },
+    "seed": 0,
+    "signature": "9571B92AF80EF435AA251FE17DA7564F2C5E3D4EF78709E77315FC0F1C8B5494",
+    "source_sha256": {
+      "head.py": "5701116D86881827AC9E1E7462DFAA44C33937BD68E23324763459685729E06F",
+      "rtdetr-l.yaml": "85716F626769CB5DDF00D59FCF6CAFB5814AAD196328100BDC7C93306F650E83",
+      "tasks.py": "B00935C1851BB9CEA240985704C12E654E68B369F6C59DE20E45FA295CB79B92"
+    },
+    "subset": {
+      "count": 647,
+      "file_sha256": "B38383EFAA44CA5A2428AD7674E83E06DB09736B94C437139EAF71DF2BBD71F1",
+      "fraction": 0.1,
+      "path": "/data/uav/protocols/lpr-g-v2-7607b0f1/train-10pct.txt",
+      "sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0"
+    }
+  },
+  "device": "0",
+  "environment": {
+    "cuda": "12.1",
+    "driver": "550.142",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "python": "3.10.12",
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "epochs": 1,
+  "initial_state": "/data/uav/protocols/lpr-g-v2-7607b0f1/initial-state-seed0.pt",
+  "protocol": {
+    "amp": true,
+    "batch": 8,
+    "cache": false,
+    "close_mosaic": 10,
+    "copy_paste": 0.0,
+    "cos_lr": false,
+    "cutmix": 0.0,
+    "degrees": 0.0,
+    "deterministic": true,
+    "device": "0",
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "fraction": 1.0,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "imgsz": 640,
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "max_det": 300,
+    "mixup": 0.0,
+    "model": "rtdetr-l.yaml",
+    "momentum": 0.937,
+    "mosaic": 1.0,
+    "nbs": 64,
+    "nms": false,
+    "optimizer": "MuSGD",
+    "perspective": 0.0,
+    "plots": true,
+    "pretrained": false,
+    "save": true,
+    "save_period": 1,
+    "scale": 0.5,
+    "shear": 0.0,
+    "translate": 0.1,
+    "val": true,
+    "warmup_bias_lr": 0.0,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "weight_decay": 0.0005,
+    "workers": 8
+  },
+  "publication": {
+    "asset_prefix": "screen-seed0-lprg-lpr-g-v2-preflight",
+    "repo": "kkc236/uav-detection-baselines",
+    "repo_url": "https://github.com/kkc236/uav-detection-baselines.git",
+    "results_branch": "training-results",
+    "results_repo": "/data/uav/repo/uav-training-results-lpr-g-v2",
+    "retain": 3,
+    "source_branch": "codex/lpr-rtdetr",
+    "tag": "lpr-g-v2-live",
+    "token_file": "/data/uav/HANDOFFS/secrets/github_token"
+  },
+  "seed": 0,
+  "stage": "screen",
+  "variant": "lprg",
+  "workers": 8
+}
