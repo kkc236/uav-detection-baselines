@@ -9,6 +9,7 @@ from scripts.run_lpr_g_paired import (
     build_arm_command,
     normalize_python_executable,
     next_stage,
+    set_stock_model_class_count,
 )
 
 
@@ -47,6 +48,16 @@ def test_scientific_entrypoints_configure_cublas_before_torch_import() -> None:
         config_offset = source.index('CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"')
         torch_offset = source.index("import torch")
         assert config_offset < torch_offset, name
+
+
+def test_stock_canary_class_count_comes_from_locked_model_yaml() -> None:
+    class StockModel:
+        yaml = {"nc": 10}
+
+    model = StockModel()
+    set_stock_model_class_count(model)
+
+    assert model.nc == 10
 
 
 def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:

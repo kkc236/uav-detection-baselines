@@ -39,6 +39,11 @@ def normalize_python_executable(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
 
+def set_stock_model_class_count(model: Any) -> None:
+    """Mirror Trainer model metadata before exercising the stock loss directly."""
+    model.nc = int(model.yaml["nc"])
+
+
 def run_name(stage: str, variant: str) -> str:
     return f"{stage}-seed0-{variant}-lpr-g-v2"
 
@@ -465,6 +470,7 @@ def run_model_canary(initial_state: Path) -> dict[str, Any]:
     artifact = torch.load(initial_state, map_location="cpu", weights_only=False)
     control = RTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)
     method = LPRGRTDETRDetectionModel("rtdetr-l.yaml", ch=3, nc=10, verbose=False)
+    set_stock_model_class_count(control)
     load_lpr_g_initial_state(control, artifact, variant="control")
     load_lpr_g_initial_state(method, artifact, variant="lprg")
     control, method = control.to(device), method.to(device)
