@@ -1,0 +1,356 @@
+"""Equal-capacity private refinement head for IBER-BE v1.0."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+from torch import nn
+
+from src.iber_protocol import PROBES
+from src.iber_sampling import (
+    sample_f3_boundary_evidence,
+    sample_rgb_boundary_evidence,
+)
+from src.itber_geometry import (
+    apply_edge_update,
+    cxcywh_to_xyxy,
+    xyxy_to_cxcywh,
+)
+
+
+@dataclass(frozen=True)
+class IBEROutput:
+    """Private head outputs and diagnostics for one forward pass."""
+
+    stock_boxes: torch.Tensor
+    stock_scores: torch.Tensor
+    refined_boxes: torch.Tensor
+    boundary_off_boxes: torch.Tensor
+    stock_edges: torch.Tensor
+    refined_edges: torch.Tensor
+    boundary_off_edges: torch.Tensor
+    gate_logits: torch.Tensor
+    gates: torch.Tensor
+    residual_raw: torch.Tensor
+    residuals: torch.Tensor
+    effective_correction: torch.Tensor
+    quality: torch.Tensor
+    entropy: torch.Tensor
+    f3_boundary_evidence: torch.Tensor
+    rgb_boundary_evidence: torch.Tensor
+    f3_boundary_features: torch.Tensor
+    rgb_boundary_features: torch.Tensor
+    boundary_features: torch.Tensor
+    base_gate_raw: torch.Tensor
+    boundary_gate_raw: torch.Tensor
+    base_residual_raw: torch.Tensor
+    boundary_residual_raw: torch.Tensor
+
+    def select_boxes(self, mode: str) -> torch.Tensor:
+        """Select one of the stock, full, or base-only box outputs."""
+        if mode == "stock":
+            return self.stock_boxes
+        if mode == "refined":
+            return self.refined_boxes
+        if mode == "boundary_off":
+            return self.boundary_off_boxes
+        raise ValueError(f"unknown IBER box mode: {mode}")
+
+
+def _geometry_quality(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    *,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    numeric_eps = max(float(eps), float(torch.finfo(boxes.dtype).eps))
+    center = boxes[..., :2].mul(2).sub(1)
+    width, height = boxes[..., 2:].clamp_min(numeric_eps).unbind(dim=-1)
+
+    probability = scores.sigmoid().clamp(numeric_eps, 1 - numeric_eps)
+    quality = probability.amax(dim=-1, keepdim=True)
+    entropy = -(
+        probability * probability.log()
+        + (1 - probability) * torch.log1p(-probability)
+    ).mean(dim=-1, keepdim=True)
+
+    logarithmic_geometry = torch.stack(
+        (
+            width.log(),
+            height.log(),
+            (width * height).log(),
+            (width / height).log(),
+        ),
+        dim=-1,
+    ).clamp(-12, 12)
+    geometry = torch.cat((center, logarithmic_geometry, quality, entropy), dim=-1)
+    return geometry, quality, entropy
+
+
+class IBERRefiner(nn.Module):
+    """Predict base and boundary-conditioned private edge corrections."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        f3_channels: int,
+        private_seed: int,
+        *,
+        probe: str = "b3",
+        image_size: int = 640,
+        rho: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if probe not in PROBES:
+            raise ValueError(f"unknown IBER probe: {probe}")
+        if hidden_dim < 1 or f3_channels < 1:
+            raise ValueError("hidden and F3 channel counts must be positive")
+        if image_size < 1 or rho <= 0:
+            raise ValueError("image_size and rho must be positive")
+
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(int(private_seed))
+            self.query_path = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, 64),
+                nn.SiLU(),
+            )
+            self.geometry_path = nn.Sequential(nn.Linear(8, 16), nn.SiLU())
+            self.edge_embedding = nn.Embedding(4, 8)
+            self.base_trunk = nn.Sequential(
+                nn.Linear(88, 64),
+                nn.SiLU(),
+                nn.Linear(64, 64),
+                nn.SiLU(),
+            )
+            self.f3_projection = nn.Conv2d(f3_channels, 32, kernel_size=1)
+            self.f3_encoder = nn.Sequential(nn.Linear(96, 32), nn.SiLU())
+            self.rgb_encoder = nn.Sequential(
+                nn.Linear(15, 16),
+                nn.LayerNorm(16),
+                nn.SiLU(),
+            )
+            self.boundary_encoder = nn.Sequential(nn.Linear(48, 32), nn.SiLU())
+            self.boundary_trunk = nn.Sequential(
+                nn.Linear(72, 64),
+                nn.SiLU(),
+                nn.Linear(64, 64),
+                nn.SiLU(),
+            )
+            self.base_gate_head = nn.Linear(64, 1)
+            self.boundary_gate_head = nn.Linear(64, 1)
+            self.base_residual_head = nn.Linear(64, 1)
+            self.boundary_residual_head = nn.Linear(64, 1)
+
+        for head in (
+            self.base_gate_head,
+            self.boundary_gate_head,
+            self.base_residual_head,
+            self.boundary_residual_head,
+        ):
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+
+        self.probe = probe
+        self.use_f3 = probe in {"b1", "b3"}
+        self.use_rgb = probe in {"b2", "b3"}
+        self.image_size = int(image_size)
+        self.rho = float(rho)
+
+    def _validate_inputs(
+        self,
+        hidden: torch.Tensor,
+        stock_boxes: torch.Tensor,
+        stock_scores: torch.Tensor,
+        f3: torch.Tensor,
+        image_rgb: torch.Tensor,
+    ) -> None:
+        for name, value in (
+            ("hidden", hidden),
+            ("stock_boxes", stock_boxes),
+            ("stock_scores", stock_scores),
+            ("F3", f3),
+            ("image_rgb", image_rgb),
+        ):
+            if not torch.is_floating_point(value):
+                raise TypeError(f"{name} must be a floating-point tensor")
+
+        hidden_dim = self.query_path[1].in_features
+        if hidden.ndim != 3 or hidden.shape[-1] != hidden_dim:
+            raise ValueError(
+                f"hidden must have shape [batch, queries, {hidden_dim}]"
+            )
+        batch, queries = hidden.shape[:2]
+        if stock_boxes.shape != (batch, queries, 4):
+            raise ValueError(
+                f"stock_boxes must have shape {(batch, queries, 4)}"
+            )
+        if (
+            stock_scores.ndim != 3
+            or stock_scores.shape[:2] != (batch, queries)
+            or stock_scores.shape[-1] < 1
+        ):
+            raise ValueError(
+                "stock_scores must have shape [batch, queries, classes] "
+                "with at least one class"
+            )
+        if (
+            f3.ndim != 4
+            or f3.shape[0] != batch
+            or f3.shape[1] != self.f3_projection.in_channels
+            or f3.shape[2] < 1
+            or f3.shape[3] < 1
+        ):
+            raise ValueError(
+                "F3 must have shape "
+                f"[batch, {self.f3_projection.in_channels}, height, width] "
+                "with positive spatial dimensions"
+            )
+        if (
+            image_rgb.ndim != 4
+            or image_rgb.shape[0] != batch
+            or image_rgb.shape[1] != 3
+            or image_rgb.shape[2] < 1
+            or image_rgb.shape[3] < 1
+        ):
+            raise ValueError(
+                "image_rgb must have shape [batch, 3, height, width] "
+                "with positive spatial dimensions"
+            )
+        for name, value in (
+            ("stock_boxes", stock_boxes),
+            ("stock_scores", stock_scores),
+            ("F3", f3),
+            ("image_rgb", image_rgb),
+        ):
+            if value.device != hidden.device:
+                raise ValueError(f"{name} and hidden must be on the same device")
+
+    def forward(
+        self,
+        hidden: torch.Tensor,
+        stock_boxes: torch.Tensor,
+        stock_scores: torch.Tensor,
+        f3: torch.Tensor,
+        image_rgb: torch.Tensor,
+    ) -> IBEROutput:
+        """Return full and base-only refinements plus private diagnostics."""
+        hidden = hidden.detach()
+        stock_boxes = stock_boxes.detach()
+        stock_scores = stock_scores.detach()
+        f3 = f3.detach()
+        image_rgb = image_rgb.detach()
+        self._validate_inputs(hidden, stock_boxes, stock_scores, f3, image_rgb)
+
+        query_features = self.query_path(hidden)
+        geometry, quality, entropy = _geometry_quality(stock_boxes, stock_scores)
+        geometry_features = self.geometry_path(
+            geometry.to(dtype=query_features.dtype)
+        )
+        stock_edges = cxcywh_to_xyxy(stock_boxes)
+        batch, queries = hidden.shape[:2]
+
+        edge_ids = torch.arange(4, device=hidden.device)
+        edge_features = self.edge_embedding(edge_ids).to(dtype=query_features.dtype)
+        edge_features = edge_features.view(1, 1, 4, 8).expand(
+            batch, queries, -1, -1
+        )
+        query_per_edge = query_features.unsqueeze(2).expand(-1, -1, 4, -1)
+        geometry_per_edge = geometry_features.unsqueeze(2).expand(-1, -1, 4, -1)
+        base_features = self.base_trunk(
+            torch.cat((query_per_edge, geometry_per_edge, edge_features), dim=-1)
+        )
+
+        empty = batch == 0 or queries == 0
+        if self.use_f3 and not empty:
+            projected_f3 = self.f3_projection(f3)
+            f3_boundary_evidence = sample_f3_boundary_evidence(
+                projected_f3,
+                stock_boxes,
+                image_size=self.image_size,
+            )
+        else:
+            f3_boundary_evidence = f3.new_zeros((batch, queries, 4, 96))
+        if self.use_rgb and not empty:
+            rgb_boundary_evidence = sample_rgb_boundary_evidence(
+                image_rgb,
+                stock_boxes,
+                image_size=self.image_size,
+            )
+        else:
+            rgb_boundary_evidence = image_rgb.new_zeros((batch, queries, 4, 15))
+
+        f3_boundary_features = self.f3_encoder(
+            f3_boundary_evidence.to(dtype=query_features.dtype)
+        )
+        rgb_boundary_features = self.rgb_encoder(
+            rgb_boundary_evidence.to(dtype=query_features.dtype)
+        )
+        boundary_features = self.boundary_encoder(
+            torch.cat((f3_boundary_features, rgb_boundary_features), dim=-1)
+        )
+        boundary_condition = torch.cat(
+            (boundary_features, query_per_edge[..., :32], edge_features),
+            dim=-1,
+        )
+        boundary_hidden = self.boundary_trunk(boundary_condition)
+
+        base_gate_raw = self.base_gate_head(base_features).squeeze(-1)
+        boundary_gate_raw = self.boundary_gate_head(boundary_hidden).squeeze(-1)
+        gate_logits = base_gate_raw + boundary_gate_raw
+        gates = gate_logits.sigmoid()
+
+        base_residual_raw = self.base_residual_head(base_features).squeeze(-1)
+        boundary_residual_raw = self.boundary_residual_head(
+            boundary_hidden
+        ).squeeze(-1)
+        residual_raw = base_residual_raw + boundary_residual_raw
+        residuals = residual_raw.tanh()
+        effective_correction = gates * residuals
+
+        refined_edges = apply_edge_update(
+            stock_edges,
+            gates,
+            residuals,
+            rho=self.rho,
+        )
+        reconstructed_stock = xyxy_to_cxcywh(stock_edges)
+        refined_boxes = stock_boxes + (
+            xyxy_to_cxcywh(refined_edges) - reconstructed_stock
+        )
+
+        boundary_off_edges = apply_edge_update(
+            stock_edges,
+            base_gate_raw.sigmoid(),
+            base_residual_raw.tanh(),
+            rho=self.rho,
+        )
+        boundary_off_boxes = stock_boxes + (
+            xyxy_to_cxcywh(boundary_off_edges) - reconstructed_stock
+        )
+        return IBEROutput(
+            stock_boxes=stock_boxes,
+            stock_scores=stock_scores,
+            refined_boxes=refined_boxes,
+            boundary_off_boxes=boundary_off_boxes,
+            stock_edges=stock_edges,
+            refined_edges=refined_edges,
+            boundary_off_edges=boundary_off_edges,
+            gate_logits=gate_logits,
+            gates=gates,
+            residual_raw=residual_raw,
+            residuals=residuals,
+            effective_correction=effective_correction,
+            quality=quality,
+            entropy=entropy,
+            f3_boundary_evidence=f3_boundary_evidence,
+            rgb_boundary_evidence=rgb_boundary_evidence,
+            f3_boundary_features=f3_boundary_features,
+            rgb_boundary_features=rgb_boundary_features,
+            boundary_features=boundary_features,
+            base_gate_raw=base_gate_raw,
+            boundary_gate_raw=boundary_gate_raw,
+            base_residual_raw=base_residual_raw,
+            boundary_residual_raw=boundary_residual_raw,
+        )
