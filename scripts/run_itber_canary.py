@@ -16,8 +16,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from src.itber_protocol import (  # noqa: E402
+    ACCEPTED_GATE_STATUSES,
     ProtocolViolation,
     assert_detector_frozen,
+    current_execution_environment,
     module_state_sha256,
     validate_authorities,
     write_immutable_report,
@@ -25,7 +27,6 @@ from src.itber_protocol import (  # noqa: E402
 from src.lpr_protocol import (  # noqa: E402
     CATEGORY_NAMES,
     category_mapping_sha256,
-    current_environment,
     dataset_signature,
     file_sha256,
     select_hashed_subset,
@@ -33,6 +34,8 @@ from src.lpr_protocol import (  # noqa: E402
     ultralytics_source_paths,
 )
 from src.rtdetr_itber import FrozenITBERAdapter  # noqa: E402
+
+AMENDED_GATE_STATUS = "passed_with_runtime_amendment"
 
 
 def _loss_tensors(losses: Any) -> dict[str, torch.Tensor]:
@@ -195,8 +198,17 @@ def main() -> int:
             subset_sha256=subset_signature(selected, root=args.dataset_root),
             category_sha256=category_mapping_sha256(CATEGORY_NAMES),
             source_sha256=source_hashes,
-            environment=current_environment(),
+            environment=current_execution_environment(),
         )
+        if authority["status"] != AMENDED_GATE_STATUS:
+            raise ProtocolViolation(
+                {
+                    "runtime_amendment.status": {
+                        "expected": AMENDED_GATE_STATUS,
+                        "actual": authority["status"],
+                    }
+                }
+            )
 
         from ultralytics import RTDETR
 
@@ -223,7 +235,7 @@ def main() -> int:
         }
         canary = run_private_step_canary(adapter, batch, use_amp=True)
         report = {
-            "status": "passed",
+            "status": AMENDED_GATE_STATUS,
             "authority": authority,
             "stock_wrapper_equality": True,
             "canary": canary,
@@ -234,7 +246,7 @@ def main() -> int:
         if isinstance(error, ProtocolViolation):
             report["violations"] = error.violations
     write_immutable_report(args.output, report)
-    return 0 if report["status"] == "passed" else 1
+    return 0 if report["status"] in ACCEPTED_GATE_STATUSES else 1
 
 
 if __name__ == "__main__":

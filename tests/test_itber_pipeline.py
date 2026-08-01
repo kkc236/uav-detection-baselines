@@ -48,6 +48,7 @@ def _evidence(**updates) -> PipelineEvidence:
     values = {
         "authority": None,
         "gate0": None,
+        "stock_authority": None,
         "cache_complete": False,
         "gate1": None,
         "screen": None,
@@ -60,15 +61,31 @@ def _evidence(**updates) -> PipelineEvidence:
 def test_state_machine_orders_all_gates_and_stops_failures() -> None:
     assert next_pipeline_phase(_evidence()) == "authority"
     assert next_pipeline_phase(_evidence(authority="passed")) == "gate0"
-    assert next_pipeline_phase(_evidence(authority="passed", gate0="passed")) == "cache"
-    assert next_pipeline_phase(_evidence(authority="passed", gate0="passed", cache_complete=True)) == "probe"
     assert next_pipeline_phase(
-        _evidence(authority="passed", gate0="passed", cache_complete=True, gate1="passed")
+        _evidence(
+            authority="passed_with_runtime_amendment",
+            gate0="passed_with_runtime_amendment",
+        )
+    ) == "stock_authority"
+    assert next_pipeline_phase(
+        _evidence(authority="passed", gate0="passed", stock_authority="passed")
+    ) == "cache"
+    assert next_pipeline_phase(
+        _evidence(
+            authority="passed",
+            gate0="passed",
+            stock_authority="passed",
+            cache_complete=True,
+        )
+    ) == "probe"
+    assert next_pipeline_phase(
+        _evidence(authority="passed", gate0="passed", stock_authority="passed", cache_complete=True, gate1="passed")
     ) == "screen"
     assert next_pipeline_phase(
         _evidence(
             authority="passed",
             gate0="passed",
+            stock_authority="passed",
             cache_complete=True,
             gate1="passed",
             screen="passed",
@@ -78,6 +95,7 @@ def test_state_machine_orders_all_gates_and_stops_failures() -> None:
         _evidence(
             authority="passed",
             gate0="passed",
+            stock_authority="passed",
             cache_complete=True,
             gate1="passed",
             screen="passed",
@@ -90,8 +108,18 @@ def test_state_machine_orders_all_gates_and_stops_failures() -> None:
         _evidence(authority="passed", gate0="engineering_invalid")
     ) == "engineering_invalid"
     assert next_pipeline_phase(
-        _evidence(authority="passed", gate0="passed", cache_complete=True, gate1="scientific_failed")
+        _evidence(authority="passed", gate0="passed", stock_authority="passed", cache_complete=True, gate1="scientific_failed")
     ) == "scientific_failed"
+    assert next_pipeline_phase(
+        _evidence(authority="passed_with_other_amendment")
+    ) == "engineering_invalid"
+    assert next_pipeline_phase(
+        _evidence(
+            authority="passed_with_runtime_amendment",
+            gate0="passed_with_runtime_amendment",
+            stock_authority="engineering_invalid",
+        )
+    ) == "engineering_invalid"
 
 
 def test_train_command_has_no_scientific_overrides_and_accepts_same_stage_resume(tmp_path: Path) -> None:

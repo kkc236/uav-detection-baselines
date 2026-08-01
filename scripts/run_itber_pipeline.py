@@ -25,22 +25,24 @@ from scripts.train_itber import (  # noqa: E402
 )
 from src.itber_evaluation import evaluate_formal_gate, write_immutable_report  # noqa: E402
 from src.itber_protocol import (  # noqa: E402
+    ACCEPTED_GATE_STATUSES,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
     EXPECTED_SUBSET_SHA256,
     EXPECTED_ENVIRONMENT,
+    ProtocolViolation,
+    current_execution_environment,
+    validate_authorities,
 )
 from src.lpr_protocol import (  # noqa: E402
     CATEGORY_NAMES,
     category_mapping_sha256,
-    current_environment,
     dataset_signature,
-    environment_violations,
     file_sha256,
     select_hashed_subset,
-    source_violations,
     subset_signature,
+    ultralytics_source_paths,
 )
 
 
@@ -51,6 +53,7 @@ TERMINAL_PHASES = {"engineering_invalid", "scientific_failed", "formal_complete"
 class PipelineEvidence:
     authority: str | None
     gate0: str | None
+    stock_authority: str | None
     cache_complete: bool
     gate1: str | None
     screen: str | None
@@ -59,16 +62,20 @@ class PipelineEvidence:
 
 def next_pipeline_phase(evidence: PipelineEvidence) -> str:
     """Return the only permitted next phase under immutable gate evidence."""
-    for status in (evidence.authority, evidence.gate0):
+    for status in (evidence.authority, evidence.gate0, evidence.stock_authority):
         if status == "engineering_invalid":
             return "engineering_invalid"
     if evidence.authority is None:
         return "authority"
-    if evidence.authority != "passed":
+    if evidence.authority not in ACCEPTED_GATE_STATUSES:
         return "engineering_invalid"
     if evidence.gate0 is None:
         return "gate0"
-    if evidence.gate0 != "passed":
+    if evidence.gate0 not in ACCEPTED_GATE_STATUSES:
+        return "engineering_invalid"
+    if evidence.stock_authority is None:
+        return "stock_authority"
+    if evidence.stock_authority not in ACCEPTED_GATE_STATUSES:
         return "engineering_invalid"
     if not evidence.cache_complete:
         return "cache"
@@ -207,34 +214,34 @@ def _formal_decision(run_root: Path) -> dict[str, Any]:
 def _authority_report(baseline: Path, dataset_root: Path) -> dict[str, Any]:
     images = sorted((dataset_root / "images" / "train").glob("*.jpg"))
     subset = select_hashed_subset(images, root=dataset_root, fraction=0.10)
+    source_sha256 = {
+        name: file_sha256(path) for name, path in ultralytics_source_paths().items()
+    }
     actual = {
         "baseline_sha256": file_sha256(baseline),
         "dataset_sha256": str(dataset_signature(dataset_root)["sha256"]),
         "subset_sha256": subset_signature(subset, root=dataset_root),
         "category_sha256": category_mapping_sha256(CATEGORY_NAMES),
-        "environment": current_environment(),
-        "source_violations": source_violations(),
+        "environment": current_execution_environment(),
+        "source_sha256": source_sha256,
     }
-    violations: dict[str, Any] = {}
-    for name, expected in (
-        ("baseline_sha256", EXPECTED_BASELINE_SHA256),
-        ("dataset_sha256", EXPECTED_DATASET_SHA256),
-        ("subset_sha256", EXPECTED_SUBSET_SHA256),
-        ("category_sha256", EXPECTED_CATEGORY_SHA256),
-    ):
-        if str(actual[name]).upper() != expected:
-            violations[name] = {"expected": expected, "actual": actual[name]}
-    violations.update(
-        {f"environment.{name}": value for name, value in environment_violations(actual["environment"]).items()}
-    )
-    if actual["source_violations"]:
-        violations["source"] = actual["source_violations"]
-    return {
-        "status": "passed" if not violations else "engineering_invalid",
-        "expected_environment": EXPECTED_ENVIRONMENT,
-        "actual": actual,
-        "violations": violations,
-    }
+    try:
+        authority = validate_authorities(
+            baseline_sha256=str(actual["baseline_sha256"]),
+            dataset_sha256=str(actual["dataset_sha256"]),
+            subset_sha256=str(actual["subset_sha256"]),
+            category_sha256=str(actual["category_sha256"]),
+            source_sha256=source_sha256,
+            environment=actual["environment"],
+        )
+    except ProtocolViolation as error:
+        return {
+            "status": "engineering_invalid",
+            "expected_environment": EXPECTED_ENVIRONMENT,
+            "actual": actual,
+            "violations": error.violations,
+        }
+    return {**authority, "actual": actual, "violations": {}}
 
 
 def _pipeline_evidence(run_root: Path, cache_root: Path) -> PipelineEvidence:
@@ -243,6 +250,7 @@ def _pipeline_evidence(run_root: Path, cache_root: Path) -> PipelineEvidence:
     return PipelineEvidence(
         authority=_json_status(run_root / "authority.json"),
         gate0=gate0,
+        stock_authority=_json_status(run_root / "stock-authority.json"),
         cache_complete=(cache_root / "manifest.json").is_file(),
         gate1=_json_status(run_root / "probe" / "gate1-decision.json"),
         screen=_json_status(

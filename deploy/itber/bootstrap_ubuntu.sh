@@ -11,7 +11,8 @@ freeze_path="/data/uav/deploy/itber-v1.1-pip-freeze.txt"
 mirror_index="https://mirrors.aliyun.com/pypi/simple"
 pytorch_index="https://download.pytorch.org/whl/cu121"
 expected_gpu="NVIDIA GeForce RTX 4090"
-expected_driver="550.142"
+baseline_reference_driver="550.142"
+expected_driver="570.133.07"
 minimum_disk_kib=$((80 * 1024 * 1024))
 
 if [[ ! -f "$lock_path" ]]; then
@@ -24,6 +25,7 @@ if [[ "$gpu" != "$expected_gpu" || "$driver" != "$expected_driver" ]]; then
     printf 'GPU contract mismatch: gpu=%s driver=%s\n' "$gpu" "$driver" >&2
     exit 3
 fi
+printf 'Runtime driver amendment: baseline=%s execution=%s\n' "$baseline_reference_driver" "$expected_driver"
 available_kib="$(df -Pk /data | awk 'NR==2 {print $4}')"
 if (( available_kib < minimum_disk_kib )); then
     printf 'insufficient /data disk: available_kib=%s\n' "$available_kib" >&2

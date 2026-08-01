@@ -64,3 +64,12 @@ def test_canary_rejects_trainable_detector() -> None:
         assert "requires_grad" in str(error)
     else:
         raise AssertionError("trainable detector passed Gate 0")
+
+
+def test_canary_source_uses_approved_execution_environment_and_status() -> None:
+    source = __import__("pathlib").Path("scripts/run_itber_canary.py").read_text(
+        encoding="utf-8"
+    )
+    assert "current_execution_environment" in source
+    assert "passed_with_runtime_amendment" in source
+    assert "ACCEPTED_GATE_STATUSES" in source

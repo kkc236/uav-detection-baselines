@@ -63,6 +63,7 @@ RUNTIME_AMENDMENT_SHA256 = hashlib.sha256(
         allow_nan=False,
     ).encode("utf-8")
 ).hexdigest().upper()
+ACCEPTED_GATE_STATUSES = frozenset({"passed", "passed_with_runtime_amendment"})
 
 # This is the completed seed0 RT-DETR-L baseline authority. I-TBER is an
 # isolated post-training head and must never rewrite or relabel this contract.
