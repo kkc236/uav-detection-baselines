@@ -8,8 +8,10 @@
   "completed_epoch": 28,
   "design_version": "lpr-g-v2",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/lpr-g-v2-live",
+  "result_commit_sha": "ae34a28fe202dd19e414c4051240b7de3449f2d1",
   "run_name": "screen-seed0-control-lpr-g-v2",
   "seed": 0,
   "stage": "screen",
-  "variant": "control"
+  "variant": "control",
+  "verified": true
 }
