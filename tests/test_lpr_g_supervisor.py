@@ -12,6 +12,8 @@ from torch import nn
 from scripts.run_lpr_g_paired import (
     CANARY_COMMON_GRADIENT_RELATIVE_L2_LIMIT,
     SCREEN_ORDER,
+    _arm_complete,
+    _expected_epochs,
     _verify_preflight_pair,
     build_arm_command,
     common_gradient_difference,
@@ -25,8 +27,42 @@ from scripts.run_lpr_g_paired import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _write_publication_prefix(run: Path, epochs: range) -> None:
+    run.mkdir(parents=True)
+    (run / "publication-ledger.jsonl").write_text(
+        "".join(
+            json.dumps({"completed_epoch": epoch, "verified": True}) + "\n"
+            for epoch in epochs
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_only_seed0_control_then_lprg_is_scheduled() -> None:
     assert SCREEN_ORDER == ((0, "control"), (0, "lprg"))
+
+
+def test_expected_epochs_use_30_cutoff_for_screen_only() -> None:
+    assert _expected_epochs("screen") == 30
+    assert _expected_epochs("screen", preflight=True) == 1
+    assert _expected_epochs("formal") == 100
+
+
+def test_arm_complete_accepts_exact_verified_1_to_30(tmp_path: Path) -> None:
+    run = tmp_path / "control"
+    _write_publication_prefix(run, range(1, 31))
+
+    assert _arm_complete(run, expected_epochs=30) is True
+
+
+def test_arm_complete_rejects_partial_or_post_cutoff_ledgers(tmp_path: Path) -> None:
+    partial = tmp_path / "partial"
+    post = tmp_path / "post"
+    _write_publication_prefix(partial, range(1, 30))
+    _write_publication_prefix(post, range(1, 32))
+
+    assert _arm_complete(partial, expected_epochs=30) is False
+    assert _arm_complete(post, expected_epochs=30) is False
 
 
 def test_python_executable_path_is_not_symlink_resolved(

@@ -32,6 +32,8 @@ from src.lpr_g_publication import (
 
 SCREEN_ORDER = ((0, "control"), (0, "lprg"))
 FORMAL_ORDER = SCREEN_ORDER
+SCREEN_CUTOFF_EPOCHS = 30
+FORMAL_EPOCHS = 100
 RELEASE_TAG = "lpr-g-v2-live"
 CANARY_COMMON_GRADIENT_RELATIVE_L2_LIMIT = 0.005
 
@@ -208,7 +210,7 @@ def _run_logged(command: list[str], *, log: Path) -> None:
 def _expected_epochs(stage: str, *, preflight: bool = False) -> int:
     if preflight:
         return 1
-    return 50 if stage == "screen" else 100
+    return SCREEN_CUTOFF_EPOCHS if stage == "screen" else FORMAL_EPOCHS
 
 
 def _publication_config(
@@ -351,7 +353,11 @@ def _arm_complete(run_dir: Path, *, expected_epochs: int) -> bool:
     if not run_dir.is_dir():
         return False
     rows = PublicationLedger(run_dir / "publication-ledger.jsonl").records()
-    return len(rows) == expected_epochs and int(rows[-1]["completed_epoch"]) == expected_epochs
+    return (
+        [int(row["completed_epoch"]) for row in rows]
+        == list(range(1, expected_epochs + 1))
+        and all(row.get("verified") is True for row in rows)
+    )
 
 
 def run_arm(
