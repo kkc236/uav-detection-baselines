@@ -3,22 +3,39 @@
 from __future__ import annotations
 
 from numbers import Integral
+from threading import Lock, RLock, local
 from typing import Any
+from weakref import WeakKeyDictionary, ref
 
 import torch
 from torch import nn
 from ultralytics.models.utils.loss import RTDETRDetectionLoss
+from ultralytics.nn.modules.transformer import DeformableTransformerDecoder
 from ultralytics.nn.modules.utils import inverse_sigmoid
 
 from src.iber_head import IBEROutput, IBERRefiner
 from src.itber_geometry import cxcywh_to_xyxy
-from src.itber_loss import itber_private_loss
+from src.itber_loss import ITBERLosses, itber_private_loss
+
+
+_ADAPTER_OWNERS = WeakKeyDictionary()
+_ADAPTER_OWNERS_LOCK = RLock()
 
 
 def _require_normal_query_count(value: object, *, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, Integral) or value != 300:
         raise ValueError(f"{name} must be an integral value exactly 300")
     return int(value)
+
+
+def _active_adapter(detector: nn.Module) -> "FrozenIBERAdapter | None":
+    """Return the live owner, discarding stale weak ownership records."""
+    owner_reference = _ADAPTER_OWNERS.get(detector)
+    owner = owner_reference() if owner_reference is not None else None
+    if owner is None or owner._closed:
+        _ADAPTER_OWNERS.pop(detector, None)
+        return None
+    return owner
 
 
 class IBERRecordingDecoder(nn.Module):
@@ -61,7 +78,7 @@ class IBERRecordingDecoder(nn.Module):
             eval_idx=stock.eval_idx,
             normal_query_count=normal_query_count,
         )
-        wrapped.train(stock.training)
+        wrapped.training = stock.training
         return wrapped
 
     def _record(
@@ -173,11 +190,46 @@ class FrozenIBERAdapter(nn.Module):
         self.last_match_indices: list[tuple[torch.Tensor, torch.Tensor]] | None = None
         self.last_output: IBEROutput | None = None
         self._last_f3: torch.Tensor | None = None
-        self.detector.requires_grad_(False)
-        self.detector.eval()
-        self._head_hook = self.detector.model[-1].register_forward_pre_hook(
-            self._capture_head_input
+        self._head_hook: Any | None = None
+        self._closed = False
+        self._owns_detector = False
+        self._original_decoder: nn.Module | None = None
+        self._installed_decoder: IBERRecordingDecoder | None = None
+        self._replaced_decoder = False
+        self._evidence_lock = Lock()
+        self._evidence_local = local()
+        self._detector_requires_grad = tuple(
+            (parameter, parameter.requires_grad)
+            for parameter in detector.parameters()
         )
+        self._detector_training = tuple(
+            (module, module.training) for module in detector.modules()
+        )
+
+        head = detector.model[-1]
+        if type(head.decoder) not in {
+            DeformableTransformerDecoder,
+            IBERRecordingDecoder,
+        }:
+            raise TypeError(
+                "FrozenIBERAdapter accepts only the pinned stock decoder or "
+                "IBERRecordingDecoder"
+            )
+
+        with _ADAPTER_OWNERS_LOCK:
+            if _active_adapter(detector) is not None:
+                raise RuntimeError("RT-DETR detector already has an active owner")
+            _ADAPTER_OWNERS[detector] = ref(self)
+            self._owns_detector = True
+            try:
+                self._head_hook = head.register_forward_pre_hook(
+                    self._capture_head_input
+                )
+                self.detector.requires_grad_(False)
+                self.detector.eval()
+            except BaseException:
+                self._rollback_takeover()
+                raise
 
     @classmethod
     def from_detector(
@@ -190,42 +242,133 @@ class FrozenIBERAdapter(nn.Module):
         rho: float = 0.05,
         normal_query_count: int = 300,
     ) -> "FrozenIBERAdapter":
-        head = detector.model[-1]
-        head_query_count = _require_normal_query_count(
-            head.num_queries,
-            name="RT-DETR head.num_queries",
-        )
-        requested_query_count = _require_normal_query_count(
-            normal_query_count,
-            name="normal_query_count",
-        )
-        if isinstance(head.decoder, IBERRecordingDecoder):
-            wrapped_query_count = _require_normal_query_count(
-                head.decoder.normal_query_count,
-                name="existing wrapped decoder normal_query_count",
+        with _ADAPTER_OWNERS_LOCK:
+            if _active_adapter(detector) is not None:
+                raise RuntimeError("RT-DETR detector already has an active owner")
+
+            head = detector.model[-1]
+            head_query_count = _require_normal_query_count(
+                head.num_queries,
+                name="RT-DETR head.num_queries",
             )
-            if wrapped_query_count != head_query_count:
-                raise ValueError("wrapped decoder and RT-DETR head query counts differ")
-        else:
-            head.decoder = IBERRecordingDecoder.from_stock(
-                head.decoder,
-                normal_query_count=requested_query_count,
+            requested_query_count = _require_normal_query_count(
+                normal_query_count,
+                name="normal_query_count",
             )
-        first_projection = head.input_proj[0][0]
-        f3_channels = int(first_projection.in_channels)
-        hidden_dim = int(head.decoder.hidden_dim)
-        device_parameter = next(detector.parameters())
-        refiner = IBERRefiner(
-            hidden_dim=hidden_dim,
-            f3_channels=f3_channels,
-            private_seed=private_seed,
-            probe=probe,
-            image_size=image_size,
-            rho=rho,
-        ).to(device=device_parameter.device, dtype=device_parameter.dtype)
-        nc = int(getattr(detector, "nc", detector.yaml["nc"]))
-        criterion = RTDETRDetectionLoss(nc=nc, use_vfl=True)
-        return cls(detector, refiner, criterion, rho=rho)
+            if requested_query_count != head_query_count:
+                raise ValueError(
+                    "normal_query_count must equal RT-DETR head.num_queries"
+                )
+
+            original_decoder = head.decoder
+            if type(original_decoder) is IBERRecordingDecoder:
+                wrapped_query_count = _require_normal_query_count(
+                    original_decoder.normal_query_count,
+                    name="existing wrapped decoder normal_query_count",
+                )
+                if wrapped_query_count != head_query_count:
+                    raise ValueError(
+                        "wrapped decoder and RT-DETR head query counts differ"
+                    )
+                candidate_decoder = original_decoder
+                replace_decoder = False
+            elif type(original_decoder) is DeformableTransformerDecoder:
+                candidate_decoder = IBERRecordingDecoder.from_stock(
+                    original_decoder,
+                    normal_query_count=requested_query_count,
+                )
+                replace_decoder = True
+            else:
+                raise TypeError(
+                    "FrozenIBERAdapter refuses a foreign RT-DETR decoder wrapper"
+                )
+
+            first_projection = head.input_proj[0][0]
+            f3_channels = int(first_projection.in_channels)
+            hidden_dim = int(candidate_decoder.hidden_dim)
+            device_parameter = next(detector.parameters())
+            refiner = IBERRefiner(
+                hidden_dim=hidden_dim,
+                f3_channels=f3_channels,
+                private_seed=private_seed,
+                probe=probe,
+                image_size=image_size,
+                rho=rho,
+            ).to(device=device_parameter.device, dtype=device_parameter.dtype)
+            nc = int(getattr(detector, "nc", detector.yaml["nc"]))
+            criterion = RTDETRDetectionLoss(nc=nc, use_vfl=True)
+
+            adapter: FrozenIBERAdapter | None = None
+            try:
+                adapter = cls(detector, refiner, criterion, rho=rho)
+                object.__setattr__(adapter, "_original_decoder", original_decoder)
+                object.__setattr__(adapter, "_installed_decoder", candidate_decoder)
+                adapter._replaced_decoder = replace_decoder
+                if replace_decoder:
+                    candidate_decoder.eval()
+                    head.decoder = candidate_decoder
+                return adapter
+            except BaseException:
+                if adapter is not None:
+                    adapter.close()
+                raise
+
+    def _restore_detector_state(self) -> None:
+        for parameter, requires_grad in self._detector_requires_grad:
+            parameter.requires_grad_(requires_grad)
+        for module, training in self._detector_training:
+            module.training = training
+
+    def _release_ownership(self) -> None:
+        if not self._owns_detector:
+            return
+        owner_reference = _ADAPTER_OWNERS.get(self.detector)
+        if owner_reference is not None and owner_reference() is self:
+            _ADAPTER_OWNERS.pop(self.detector, None)
+        self._owns_detector = False
+
+    def _rollback_takeover(self) -> None:
+        if self._head_hook is not None:
+            self._head_hook.remove()
+            self._head_hook = None
+        self._restore_detector_state()
+        self._release_ownership()
+        self._closed = True
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("FrozenIBERAdapter is closed")
+
+    def close(self) -> None:
+        """Release the detector and restore the state owned by this adapter."""
+        if self._closed:
+            return
+        if getattr(self._evidence_local, "active", False):
+            raise RuntimeError("cannot close during recursive evidence capture")
+        with self._evidence_lock:
+            if self._closed:
+                return
+            with _ADAPTER_OWNERS_LOCK:
+                head = self.detector.model[-1]
+                if (
+                    self._replaced_decoder
+                    and self._installed_decoder is not None
+                    and head.decoder is self._installed_decoder
+                ):
+                    head.decoder = self._original_decoder
+                if self._head_hook is not None:
+                    self._head_hook.remove()
+                    self._head_hook = None
+                self._restore_detector_state()
+                self._release_ownership()
+                self._closed = True
+
+    def __enter__(self) -> "FrozenIBERAdapter":
+        self._require_open()
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     def _capture_head_input(self, _module: nn.Module, inputs: tuple[Any, ...]) -> None:
         if not inputs or not isinstance(inputs[0], (list, tuple)) or not inputs[0]:
@@ -234,6 +377,7 @@ class FrozenIBERAdapter(nn.Module):
 
     def train(self, mode: bool = True) -> "FrozenIBERAdapter":
         """Toggle the private module while permanently locking detector eval."""
+        self._require_open()
         super().train(mode)
         self.detector.requires_grad_(False)
         self.detector.eval()
@@ -249,6 +393,7 @@ class FrozenIBERAdapter(nn.Module):
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         """Return stock-score Top-300 detections with the selected boxes."""
+        self._require_open()
         output = self.forward_evidence(image)
         return self.detector.model[-1].postprocess(
             self.selected_boxes(output),
@@ -257,32 +402,42 @@ class FrozenIBERAdapter(nn.Module):
 
     def forward_evidence(self, image: torch.Tensor) -> IBEROutput:
         """Run one immutable detector forward and invoke the private head."""
-        self.detector.eval()
-        self._last_f3 = None
-        detached_image = image.detach()
-        with torch.no_grad():
-            self.detector.predict(detached_image)
-        decoder = self.detector.model[-1].decoder
-        last_hidden = getattr(decoder, "last_hidden", None)
-        last_stock_scores = getattr(decoder, "last_stock_scores", None)
-        last_stock_boxes = getattr(decoder, "last_stock_boxes", None)
-        if (
-            last_hidden is None
-            or last_stock_scores is None
-            or last_stock_boxes is None
-            or self._last_f3 is None
-        ):
-            raise RuntimeError("frozen RT-DETR evidence capture is incomplete")
-        return self.refiner(
-            last_hidden,
-            last_stock_boxes,
-            last_stock_scores,
-            self._last_f3,
-            detached_image,
-        )
+        self._require_open()
+        if getattr(self._evidence_local, "active", False):
+            raise RuntimeError("recursive IBER evidence capture is not allowed")
+        with self._evidence_lock:
+            self._require_open()
+            self._evidence_local.active = True
+            try:
+                self.detector.eval()
+                self._last_f3 = None
+                detached_image = image.detach()
+                with torch.no_grad():
+                    self.detector.predict(detached_image)
+                decoder = self.detector.model[-1].decoder
+                last_hidden = getattr(decoder, "last_hidden", None)
+                last_stock_scores = getattr(decoder, "last_stock_scores", None)
+                last_stock_boxes = getattr(decoder, "last_stock_boxes", None)
+                if (
+                    last_hidden is None
+                    or last_stock_scores is None
+                    or last_stock_boxes is None
+                    or self._last_f3 is None
+                ):
+                    raise RuntimeError("frozen RT-DETR evidence capture is incomplete")
+                return self.refiner(
+                    last_hidden,
+                    last_stock_boxes,
+                    last_stock_scores,
+                    self._last_f3,
+                    detached_image,
+                )
+            finally:
+                self._evidence_local.active = False
 
-    def training_step(self, batch: dict[str, torch.Tensor]):
+    def training_step(self, batch: dict[str, torch.Tensor]) -> ITBERLosses:
         """Match stock outputs once and compute only the private objective."""
+        self._require_open()
         image = batch["img"]
         output = self.forward_evidence(image)
         self.last_output = output
