@@ -70,3 +70,126 @@ class QualityGatedRefiner(nn.Module):
         self.last_gate = gate.detach()
         self.last_residual = residual.detach()
         return refined
+
+
+class LPRGDeformableTransformerDecoder(nn.Module):
+    """Preserve the stock decoder trajectory and expose one private side output."""
+
+    def __init__(
+        self,
+        layers: nn.ModuleList,
+        hidden_dim: int,
+        num_layers: int,
+        eval_idx: int,
+        private_seed: int,
+        max_logit_delta: float = 0.5,
+    ) -> None:
+        super().__init__()
+        self.layers = layers
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.eval_idx = eval_idx
+        self.lpr_g_refiner = QualityGatedRefiner(
+            hidden_dim,
+            private_seed=private_seed,
+            max_logit_delta=max_logit_delta,
+        )
+        self.output_mode = "refined"
+        self.last_stock_bboxes: torch.Tensor | None = None
+        self.last_stock_scores: torch.Tensor | None = None
+        self.last_refined_bboxes: torch.Tensor | None = None
+
+    @classmethod
+    def from_stock(
+        cls,
+        stock: nn.Module,
+        private_seed: int = 10_000,
+        max_logit_delta: float = 0.5,
+    ) -> "LPRGDeformableTransformerDecoder":
+        """Wrap a stock decoder while reusing its exact decoder layers."""
+        return cls(
+            layers=stock.layers,
+            hidden_dim=stock.hidden_dim,
+            num_layers=stock.num_layers,
+            eval_idx=stock.eval_idx,
+            private_seed=private_seed,
+            max_logit_delta=max_logit_delta,
+        )
+
+    def set_output_mode(self, mode: str) -> None:
+        """Choose stock or refined boxes for evaluation output."""
+        if mode not in {"stock", "refined"}:
+            raise ValueError(f"unsupported LPR-G output mode: {mode}")
+        self.output_mode = mode
+
+    def forward(
+        self,
+        embed: torch.Tensor,
+        refer_bbox: torch.Tensor,
+        feats: torch.Tensor,
+        shapes: list,
+        bbox_head: nn.Module,
+        score_head: nn.Module,
+        pos_mlp: nn.Module,
+        attn_mask: torch.Tensor | None = None,
+        padding_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Decode with stock outputs and one detached last-layer refinement branch."""
+        output = embed
+        dec_bboxes = []
+        dec_cls = []
+        last_refined_bbox = None
+        refer_bbox = refer_bbox.sigmoid()
+        self.last_stock_bboxes = None
+        self.last_stock_scores = None
+        self.last_refined_bboxes = None
+
+        for index, layer in enumerate(self.layers):
+            output = layer(
+                output,
+                refer_bbox,
+                feats,
+                shapes,
+                padding_mask,
+                attn_mask,
+                pos_mlp(refer_bbox),
+            )
+            bbox_delta = bbox_head[index](output)
+            refined_bbox = torch.sigmoid(bbox_delta + inverse_sigmoid(refer_bbox))
+
+            if self.training:
+                stock_score = score_head[index](output)
+                stock_output_bbox = (
+                    refined_bbox
+                    if index == 0
+                    else torch.sigmoid(bbox_delta + inverse_sigmoid(last_refined_bbox))
+                )
+                dec_cls.append(stock_score)
+                dec_bboxes.append(stock_output_bbox)
+                if index == self.num_layers - 1:
+                    self.last_stock_bboxes = stock_output_bbox
+                    self.last_stock_scores = stock_score
+                    self.last_refined_bboxes = self.lpr_g_refiner(
+                        output,
+                        stock_output_bbox,
+                        stock_score,
+                    )
+            elif index == self.eval_idx:
+                stock_score = score_head[index](output)
+                self.last_stock_bboxes = refined_bbox
+                self.last_stock_scores = stock_score
+                self.last_refined_bboxes = self.lpr_g_refiner(
+                    output,
+                    refined_bbox,
+                    stock_score,
+                )
+                dec_cls.append(stock_score)
+                dec_bboxes.append(
+                    refined_bbox if self.output_mode == "stock" else self.last_refined_bboxes
+                )
+                break
+
+            last_refined_bbox = refined_bbox
+            refer_bbox = refined_bbox.detach() if self.training else refined_bbox
+
+        return torch.stack(dec_bboxes), torch.stack(dec_cls)
