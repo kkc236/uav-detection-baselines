@@ -5,7 +5,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import torch
 from torch import nn
 
@@ -14,6 +16,7 @@ from scripts.run_lpr_g_paired import (
     SCREEN_ORDER,
     _arm_complete,
     _expected_epochs,
+    _prepare_protocol,
     _verify_preflight_pair,
     build_arm_command,
     common_gradient_difference,
@@ -63,6 +66,47 @@ def test_arm_complete_rejects_partial_or_post_cutoff_ledgers(tmp_path: Path) -> 
 
     assert _arm_complete(partial, expected_epochs=30) is False
     assert _arm_complete(post, expected_epochs=30) is False
+
+
+def test_prepare_protocol_reuses_complete_locked_pair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    protocol_dir = tmp_path / "protocol"
+    protocol_dir.mkdir()
+    protocol = protocol_dir / "protocol-seed0.json"
+    initial_state = protocol_dir / "initial-state-seed0.pt"
+    protocol.write_text("{}\n", encoding="utf-8")
+    initial_state.write_bytes(b"locked")
+    args = SimpleNamespace(
+        python=Path("python"),
+        dataset_root=tmp_path / "dataset",
+        protocol_dir=protocol_dir,
+    )
+
+    monkeypatch.setattr(
+        "scripts.run_lpr_g_paired._run_logged",
+        lambda *args, **kwargs: pytest.fail("locked protocol must not be regenerated"),
+    )
+
+    assert _prepare_protocol(args, log=tmp_path / "prepare.log") == (
+        protocol,
+        initial_state,
+    )
+
+
+def test_prepare_protocol_rejects_incomplete_locked_pair(tmp_path: Path) -> None:
+    protocol_dir = tmp_path / "protocol"
+    protocol_dir.mkdir()
+    (protocol_dir / "protocol-seed0.json").write_text("{}\n", encoding="utf-8")
+    args = SimpleNamespace(
+        python=Path("python"),
+        dataset_root=tmp_path / "dataset",
+        protocol_dir=protocol_dir,
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete locked protocol"):
+        _prepare_protocol(args, log=tmp_path / "prepare.log")
 
 
 def test_python_executable_path_is_not_symlink_resolved(

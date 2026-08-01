@@ -611,6 +611,14 @@ def _verify_preflight_pair(project: Path) -> dict[str, Any]:
 def _prepare_protocol(args: argparse.Namespace, *, log: Path) -> tuple[Path, Path]:
     protocol = args.protocol_dir / "protocol-seed0.json"
     initial_state = args.protocol_dir / "initial-state-seed0.pt"
+    existing = (protocol.is_file(), initial_state.is_file())
+    if existing == (True, True):
+        return protocol, initial_state
+    if any(existing):
+        raise RuntimeError(
+            "incomplete locked protocol pair: "
+            f"protocol={existing[0]}, initial_state={existing[1]}"
+        )
     command = [
         str(args.python),
         "scripts/prepare_lpr_g_protocol.py",
