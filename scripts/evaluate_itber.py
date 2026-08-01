@@ -24,6 +24,7 @@ from scripts.train_itber import (  # noqa: E402
     AUGMENTATION,
     TRAINING_CONSTANTS,
     stage_protocol,
+    validate_gate1_cache_manifest,
     validate_resume_checkpoint,
 )
 from src.itber_evaluation import (  # noqa: E402
@@ -56,6 +57,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-checkpoint", type=Path, required=True)
     parser.add_argument("--private-checkpoint", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument("--gate1-cache-manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -232,6 +234,7 @@ def evaluate_checkpoint(
     baseline_checkpoint: Path,
     private_checkpoint: Path,
     dataset_root: Path,
+    gate1_cache_manifest: Path,
 ) -> dict[str, Any]:
     baseline_sha = file_sha256(baseline_checkpoint)
     dataset_sha = str(dataset_signature(dataset_root)["sha256"])
@@ -243,7 +246,12 @@ def evaluate_checkpoint(
     ):
         raise ValueError("I-TBER evaluation authority mismatch")
     artifact = torch.load(private_checkpoint, map_location="cpu", weights_only=False)
-    validate_resume_checkpoint(artifact, stage=stage)
+    cache_manifest_sha = validate_gate1_cache_manifest(gate1_cache_manifest)
+    validate_resume_checkpoint(
+        artifact,
+        stage=stage,
+        cache_manifest_sha256=cache_manifest_sha,
+    )
     if artifact.get("training_constants") != TRAINING_CONSTANTS or artifact.get("augmentation") != AUGMENTATION:
         raise ValueError("I-TBER checkpoint training protocol mismatch")
 
@@ -295,6 +303,7 @@ def evaluate_checkpoint(
         },
         "dataset_sha256": dataset_sha,
         "category_sha256": category_sha,
+        "cache_manifest_sha256": cache_manifest_sha,
         "environment": current_environment(),
         "evaluation_constants": EVALUATION_CONSTANTS,
         "repeat_count": len(repeats),
@@ -326,6 +335,7 @@ def main() -> int:
         baseline_checkpoint=args.baseline_checkpoint.resolve(),
         private_checkpoint=args.private_checkpoint.resolve(),
         dataset_root=args.dataset_root.resolve(),
+        gate1_cache_manifest=args.gate1_cache_manifest.resolve(),
     )
     write_immutable_report(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))

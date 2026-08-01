@@ -230,7 +230,7 @@ def test_evaluation_cli_exposes_no_scientific_parameter_overrides() -> None:
         capture_output=True,
         text=True,
     )
-    for allowed in ("--stage", "--baseline-checkpoint", "--private-checkpoint", "--dataset-root", "--output"):
+    for allowed in ("--stage", "--baseline-checkpoint", "--private-checkpoint", "--dataset-root", "--gate1-cache-manifest", "--output"):
         assert allowed in result.stdout
     for forbidden in ("--imgsz", "--batch", "--workers", "--max-det", "--nms", "--repeats", "--seed"):
         assert forbidden not in result.stdout

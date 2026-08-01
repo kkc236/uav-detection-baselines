@@ -79,6 +79,7 @@ def test_private_optimizer_is_exact_adamw() -> None:
 
 
 def test_resume_validation_rejects_cross_stage_or_authority() -> None:
+    cache_sha = "C" * 64
     artifact = {
         "format_version": 1,
         "design_version": "itber-v1.1",
@@ -88,8 +89,9 @@ def test_resume_validation_rejects_cross_stage_or_authority() -> None:
         "epoch": 4,
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
+        "cache_manifest_sha256": cache_sha,
     }
-    validate_resume_checkpoint(artifact, stage="screen")
+    validate_resume_checkpoint(artifact, stage="screen", cache_manifest_sha256=cache_sha)
     for key, value in (
         ("stage", "formal"),
         ("probe", "p2"),
@@ -99,7 +101,13 @@ def test_resume_validation_rejects_cross_stage_or_authority() -> None:
     ):
         changed = dict(artifact, **{key: value})
         with pytest.raises(ValueError, match=key):
-            validate_resume_checkpoint(changed, stage="screen")
+            validate_resume_checkpoint(changed, stage="screen", cache_manifest_sha256=cache_sha)
+    with pytest.raises(ValueError, match="cache_manifest_sha256"):
+        validate_resume_checkpoint(
+            artifact,
+            stage="screen",
+            cache_manifest_sha256="D" * 64,
+        )
 
 
 def test_atomic_checkpoint_roundtrip_contains_private_state_only(tmp_path) -> None:
@@ -133,7 +141,7 @@ def test_cli_exposes_only_operational_paths_stage_device_and_resume() -> None:
         text=True,
     )
     help_text = result.stdout
-    for allowed in ("--stage", "--baseline-checkpoint", "--dataset-root", "--output-root", "--device", "--resume-checkpoint"):
+    for allowed in ("--stage", "--baseline-checkpoint", "--dataset-root", "--gate1-cache-manifest", "--output-root", "--device", "--resume-checkpoint"):
         assert allowed in help_text
     for forbidden in ("--epochs", "--seed", "--batch", "--workers", "--imgsz", "--lr"):
         assert forbidden not in help_text

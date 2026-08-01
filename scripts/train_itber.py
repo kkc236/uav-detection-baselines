@@ -23,6 +23,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from src.itber_metrics import correction_rms  # noqa: E402
 from src.itber_protocol import (  # noqa: E402
     EXPECTED_BASELINE_SHA256,
+    EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
     assert_detector_frozen,
     module_state_sha256,
@@ -99,7 +100,41 @@ def build_private_optimizer(module: torch.nn.Module) -> torch.optim.AdamW:
     )
 
 
-def validate_resume_checkpoint(artifact: dict[str, Any], *, stage: str) -> None:
+def validate_gate1_cache_manifest(path: str | Path) -> str:
+    """Validate the immutable Gate 1 cache identity and return its file SHA."""
+    manifest_path = Path(path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = {
+        "format_version": 1,
+        "design_version": "itber-v1.1",
+        "complete": True,
+        "split_counts": {"train": 647, "val": 548},
+    }
+    violations = {
+        name: {"expected": value, "actual": payload.get(name)}
+        for name, value in expected.items()
+        if payload.get(name) != value
+    }
+    authority = payload.get("authority", {})
+    for name, value in (
+        ("baseline_sha256", EXPECTED_BASELINE_SHA256),
+        ("dataset_sha256", EXPECTED_DATASET_SHA256),
+        ("category_sha256", EXPECTED_CATEGORY_SHA256),
+    ):
+        actual = str(authority.get(name, "")).upper()
+        if actual != value:
+            violations[f"authority.{name}"] = {"expected": value, "actual": actual}
+    if violations:
+        raise ValueError("invalid I-TBER Gate 1 cache manifest " + ", ".join(sorted(violations)))
+    return file_sha256(manifest_path)
+
+
+def validate_resume_checkpoint(
+    artifact: dict[str, Any],
+    *,
+    stage: str,
+    cache_manifest_sha256: str,
+) -> None:
     expected = {
         "format_version": 1,
         "design_version": "itber-v1.1",
@@ -108,6 +143,7 @@ def validate_resume_checkpoint(artifact: dict[str, Any], *, stage: str) -> None:
         "seed": 0,
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
+        "cache_manifest_sha256": cache_manifest_sha256.upper(),
     }
     violations = {
         name: {"expected": value, "actual": artifact.get(name)}
@@ -136,6 +172,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--stage", choices=("screen", "formal"), required=True)
     parser.add_argument("--baseline-checkpoint", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument("--gate1-cache-manifest", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--device", default="0")
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -279,6 +316,7 @@ def main() -> int:
     _seed_everything(TRAINING_CONSTANTS["seed"])
     baseline_sha = file_sha256(args.baseline_checkpoint)
     dataset_sha = str(dataset_signature(args.dataset_root)["sha256"])
+    cache_manifest_sha = validate_gate1_cache_manifest(args.gate1_cache_manifest)
     if baseline_sha != EXPECTED_BASELINE_SHA256 or dataset_sha != EXPECTED_DATASET_SHA256:
         raise ValueError("I-TBER training authority mismatch")
 
@@ -308,7 +346,11 @@ def main() -> int:
     start_epoch = 1
     if args.resume_checkpoint is not None:
         artifact = torch.load(args.resume_checkpoint, map_location=device, weights_only=False)
-        validate_resume_checkpoint(artifact, stage=args.stage)
+        validate_resume_checkpoint(
+            artifact,
+            stage=args.stage,
+            cache_manifest_sha256=cache_manifest_sha,
+        )
         if artifact.get("detector_sha_after") != detector_sha_before:
             raise ValueError("detector_sha_after resume authority mismatch")
         adapter.refiner.load_state_dict(artifact["refiner"], strict=True)
@@ -378,6 +420,7 @@ def main() -> int:
             "epoch": epoch,
             "baseline_sha256": baseline_sha,
             "dataset_sha256": dataset_sha,
+            "cache_manifest_sha256": cache_manifest_sha,
             "detector_sha_before": detector_sha_before,
             "detector_sha_after": detector_sha_after,
             "refiner": adapter.refiner.state_dict(),
