@@ -154,6 +154,7 @@ class FrozenITBERAdapter(nn.Module):
         self.rho = float(rho)
         self.output_mode = "refined"
         self.last_match_indices: list[tuple[torch.Tensor, torch.Tensor]] | None = None
+        self.last_output: ITBEROutput | None = None
         self._last_f3: torch.Tensor | None = None
         self.detector.requires_grad_(False)
         self.detector.eval()
@@ -241,6 +242,7 @@ class FrozenITBERAdapter(nn.Module):
         """Match stock outputs once and compute only the private objective."""
         image = batch["img"]
         output = self.forward_evidence(image)
+        self.last_output = output
         target_boxes = batch["bboxes"].detach().to(
             device=image.device, dtype=output.stock_boxes.dtype
         )
