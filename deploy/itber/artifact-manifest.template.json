@@ -1,0 +1,16 @@
+{
+  "format_version": 1,
+  "baseline_sha256": "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B",
+  "dataset": {
+    "name": "VisDrone2019-DET",
+    "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "train_images": 6471,
+    "val_images": 548,
+    "classes": 10
+  },
+  "subset": {
+    "train_images": 647,
+    "sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0"
+  },
+  "files": []
+}
