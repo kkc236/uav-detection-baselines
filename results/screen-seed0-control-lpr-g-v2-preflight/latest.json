@@ -1,0 +1,15 @@
+{
+  "checkpoint": {
+    "asset_id": 497481807,
+    "asset_name": "screen-seed0-control-lpr-g-v2-preflight-epoch-0001.pt",
+    "bytes": 197648204,
+    "sha256": "3cd224f8cfa6be8863903f68d8eaa2ea6e3a309a0ac8998508e11d6072b68e74"
+  },
+  "completed_epoch": 1,
+  "design_version": "lpr-g-v2",
+  "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/lpr-g-v2-live",
+  "run_name": "screen-seed0-control-lpr-g-v2-preflight",
+  "seed": 0,
+  "stage": "screen",
+  "variant": "control"
+}
