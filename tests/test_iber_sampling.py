@@ -24,6 +24,45 @@ def _coordinate_field(axis: str, *, channels: int, size: int = 64) -> torch.Tens
     return field.clone()
 
 
+def _repeat_per_channel(
+    values: tuple[float, float, float, float], channels: int
+) -> torch.Tensor:
+    return torch.tensor(values, dtype=torch.float32).view(4, 1).expand(4, channels)
+
+
+def test_boundary_grid_uses_exact_tangential_positions_in_ltrb_order() -> None:
+    boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
+    normal_positions = torch.tensor([[[-1 / 64, 0.0, 1 / 64]]])
+
+    grid = iber_sampling._boundary_grid_fp32(boxes, normal_positions)
+    normalized = grid.add(1).div(2)
+
+    assert normalized.shape == (1, 1, 4, 3, 3, 2)
+    horizontal = torch.tensor((0.375, 0.500, 0.625)).view(3, 1).expand(3, 3)
+    vertical = torch.tensor((0.4375, 0.5000, 0.5625)).view(3, 1).expand(3, 3)
+    torch.testing.assert_close(normalized[0, 0, 0, :, :, 1], vertical, rtol=0, atol=0)
+    torch.testing.assert_close(
+        normalized[0, 0, 1, :, :, 0], horizontal, rtol=0, atol=0
+    )
+    torch.testing.assert_close(normalized[0, 0, 2, :, :, 1], vertical, rtol=0, atol=0)
+    torch.testing.assert_close(
+        normalized[0, 0, 3, :, :, 0], horizontal, rtol=0, atol=0
+    )
+
+    ordered_edge_coordinates = torch.stack(
+        (
+            normalized[0, 0, 0, :, 1, 0],
+            normalized[0, 0, 1, :, 1, 1],
+            normalized[0, 0, 2, :, 1, 0],
+            normalized[0, 0, 3, :, 1, 1],
+        )
+    )
+    expected_ltrb = torch.tensor((0.25, 0.375, 0.75, 0.625)).view(4, 1)
+    torch.testing.assert_close(
+        ordered_edge_coordinates, expected_ltrb.expand(4, 3), rtol=0, atol=0
+    )
+
+
 @pytest.mark.parametrize(
     ("minimum", "expected_near", "expected_far"),
     [
@@ -97,6 +136,105 @@ def test_coordinate_fields_verify_every_edge_normal_orientation(
         assert signed[negative_edge] < 0
         assert signed[orthogonal_edges[0]].abs() < 1e-6
         assert signed[orthogonal_edges[1]].abs() < 1e-6
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected_edge", "expected_near", "expected_far", "negative_edge"),
+    [
+        pytest.param(
+            "x",
+            (0.25, 0.50, 0.75, 0.50),
+            (1 / 32, 0.0, -1 / 32, 0.0),
+            (1 / 16, 0.0, -1 / 16, 0.0),
+            2,
+            id="left-right",
+        ),
+        pytest.param(
+            "y",
+            (0.50, 0.375, 0.50, 0.625),
+            (0.0, 1 / 32, 0.0, -1 / 32),
+            (0.0, 1 / 16, 0.0, -1 / 16),
+            3,
+            id="top-bottom",
+        ),
+    ],
+)
+def test_rgb_evidence_has_exact_edge_signed_and_absolute_slice_layout(
+    axis: str,
+    expected_edge: tuple[float, float, float, float],
+    expected_near: tuple[float, float, float, float],
+    expected_far: tuple[float, float, float, float],
+    negative_edge: int,
+) -> None:
+    images = _coordinate_field(axis, channels=3)
+    boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
+
+    evidence = sample_rgb_boundary_evidence(images, boxes, image_size=256)[0, 0]
+
+    edge = evidence[:, 0:3]
+    near_signed = evidence[:, 3:6]
+    near_absolute = evidence[:, 6:9]
+    far_signed = evidence[:, 9:12]
+    far_absolute = evidence[:, 12:15]
+    torch.testing.assert_close(
+        edge, _repeat_per_channel(expected_edge, 3), rtol=0, atol=1e-6
+    )
+    torch.testing.assert_close(
+        near_signed, _repeat_per_channel(expected_near, 3), rtol=0, atol=1e-6
+    )
+    torch.testing.assert_close(
+        far_signed, _repeat_per_channel(expected_far, 3), rtol=0, atol=1e-6
+    )
+    torch.testing.assert_close(near_absolute, near_signed.abs(), rtol=0, atol=0)
+    torch.testing.assert_close(far_absolute, far_signed.abs(), rtol=0, atol=0)
+    assert torch.all(near_signed[negative_edge] < 0)
+    assert torch.all(far_signed[negative_edge] < 0)
+    assert torch.all(near_absolute[negative_edge] > 0)
+    assert torch.all(far_absolute[negative_edge] > 0)
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected_edge", "expected_signed", "negative_edge"),
+    [
+        pytest.param(
+            "x",
+            (0.25, 0.50, 0.75, 0.50),
+            (1 / 32, 0.0, -1 / 32, 0.0),
+            2,
+            id="left-right",
+        ),
+        pytest.param(
+            "y",
+            (0.50, 0.375, 0.50, 0.625),
+            (0.0, 1 / 32, 0.0, -1 / 32),
+            3,
+            id="top-bottom",
+        ),
+    ],
+)
+def test_f3_evidence_has_exact_edge_signed_and_absolute_slice_layout(
+    axis: str,
+    expected_edge: tuple[float, float, float, float],
+    expected_signed: tuple[float, float, float, float],
+    negative_edge: int,
+) -> None:
+    features = _coordinate_field(axis, channels=32)
+    boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
+
+    evidence = sample_f3_boundary_evidence(features, boxes, image_size=256)[0, 0]
+
+    edge = evidence[:, 0:32]
+    signed = evidence[:, 32:64]
+    absolute = evidence[:, 64:96]
+    torch.testing.assert_close(
+        edge, _repeat_per_channel(expected_edge, 32), rtol=0, atol=1e-6
+    )
+    torch.testing.assert_close(
+        signed, _repeat_per_channel(expected_signed, 32), rtol=0, atol=1e-6
+    )
+    torch.testing.assert_close(absolute, signed.abs(), rtol=0, atol=0)
+    assert torch.all(signed[negative_edge] < 0)
+    assert torch.all(absolute[negative_edge] > 0)
 
 
 @pytest.mark.parametrize(
