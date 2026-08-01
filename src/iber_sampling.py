@@ -54,11 +54,11 @@ def rgb_normal_radii(
     return near, far
 
 
-def _f3_normal_radius(boxes: torch.Tensor) -> torch.Tensor:
+def _f3_normal_radius(boxes: torch.Tensor, image_size: int) -> torch.Tensor:
     boxes_fp32 = _boxes_fp32(boxes)
     width, height = boxes_fp32[..., 2:].unbind(-1)
     minimum = torch.minimum(width, height)
-    return (0.08 * minimum).clamp(1 / 640, 4 / 640)
+    return (0.08 * minimum).clamp(1 / image_size, 4 / image_size)
 
 
 def _boundary_grid_fp32(
@@ -183,7 +183,7 @@ def sample_f3_boundary_evidence(
     _require_sampling_inputs(
         features, boxes, name="features", channels=32, image_size=image_size
     )
-    distance = _f3_normal_radius(boxes)
+    distance = _f3_normal_radius(boxes, image_size)
     normal_positions = torch.stack(
         (-distance, torch.zeros_like(distance), distance), dim=-1
     )

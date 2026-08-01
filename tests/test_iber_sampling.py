@@ -24,20 +24,30 @@ def _coordinate_field(axis: str, *, channels: int, size: int = 64) -> torch.Tens
     return field.clone()
 
 
-def test_rgb_normal_radii_use_exact_clipped_formulas() -> None:
+@pytest.mark.parametrize(
+    ("minimum", "expected_near", "expected_far"),
+    [
+        pytest.param(0.01, 1 / 256, 2 / 256, id="lower-clamp"),
+        pytest.param(0.10, 0.08 * 0.10, 0.20 * 0.10, id="interior"),
+        pytest.param(0.50, 4 / 256, 8 / 256, id="upper-clamp"),
+    ],
+)
+def test_rgb_normal_radii_use_exact_clipped_formulas_at_non_640_size(
+    minimum: float, expected_near: float, expected_far: float
+) -> None:
     boxes = torch.tensor(
-        [[[0.5, 0.5, 10 / 640, 20 / 640]]], dtype=torch.float64
+        [[[0.5, 0.5, minimum, minimum]]], dtype=torch.float64
     )
 
-    near, far = rgb_normal_radii(boxes, image_size=640)
+    near, far = rgb_normal_radii(boxes, image_size=256)
 
     assert near.dtype is torch.float32
     assert far.dtype is torch.float32
     torch.testing.assert_close(
-        near, torch.tensor([[1 / 640]], dtype=torch.float32), rtol=0, atol=0
+        near, torch.tensor([[expected_near]], dtype=torch.float32), rtol=0, atol=1e-8
     )
     torch.testing.assert_close(
-        far, torch.tensor([[2 / 640]], dtype=torch.float32), rtol=0, atol=0
+        far, torch.tensor([[expected_far]], dtype=torch.float32), rtol=0, atol=1e-8
     )
 
 
@@ -73,16 +83,45 @@ def test_coordinate_fields_verify_every_edge_normal_orientation(
     if modality == "rgb":
         values = _coordinate_field(axis, channels=3)
         evidence = sample_rgb_boundary_evidence(values, boxes, image_size=640)
-        signed = evidence[0, 0, :, 3:6].mean(dim=-1)
+        signed_contrasts = (
+            evidence[0, 0, :, 3:6].mean(dim=-1),
+            evidence[0, 0, :, 9:12].mean(dim=-1),
+        )
     else:
         values = _coordinate_field(axis, channels=32)
         evidence = sample_f3_boundary_evidence(values, boxes, image_size=640)
-        signed = evidence[0, 0, :, 32:64].mean(dim=-1)
+        signed_contrasts = (evidence[0, 0, :, 32:64].mean(dim=-1),)
 
-    assert signed[positive_edge] > 0
-    assert signed[negative_edge] < 0
-    assert signed[orthogonal_edges[0]].abs() < 1e-6
-    assert signed[orthogonal_edges[1]].abs() < 1e-6
+    for signed in signed_contrasts:
+        assert signed[positive_edge] > 0
+        assert signed[negative_edge] < 0
+        assert signed[orthogonal_edges[0]].abs() < 1e-6
+        assert signed[orthogonal_edges[1]].abs() < 1e-6
+
+
+@pytest.mark.parametrize(
+    ("minimum", "expected_radius"),
+    [
+        pytest.param(0.01, 1 / 256, id="lower-clamp"),
+        pytest.param(0.10, 0.08 * 0.10, id="interior"),
+        pytest.param(0.50, 4 / 256, id="upper-clamp"),
+    ],
+)
+def test_f3_public_sampler_uses_image_size_for_exact_radius_regimes(
+    minimum: float, expected_radius: float
+) -> None:
+    features = _coordinate_field("x", channels=32)
+    boxes = torch.tensor([[[0.5, 0.5, minimum, minimum]]])
+
+    evidence = sample_f3_boundary_evidence(features, boxes, image_size=256)
+
+    left_signed_contrast = evidence[0, 0, 0, 32:64]
+    torch.testing.assert_close(
+        left_signed_contrast,
+        torch.full_like(left_signed_contrast, 2 * expected_radius),
+        rtol=0,
+        atol=1e-6,
+    )
 
 
 def test_f3_shape_and_constant_features_have_zero_contrasts() -> None:
