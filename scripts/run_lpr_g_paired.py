@@ -480,7 +480,7 @@ def run_model_canary(initial_state: Path) -> dict[str, Any]:
     control.eval()
     method.eval()
     method.set_refinement_output("refined")
-    with torch.inference_mode():
+    with torch.no_grad():
         stock_output = control.predict(image)[0]
         method_output = method.predict(image)[0]
     torch.testing.assert_close(method_output, stock_output, rtol=0, atol=0)

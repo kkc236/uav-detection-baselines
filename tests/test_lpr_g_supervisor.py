@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from scripts.run_lpr_g_paired import (
     build_arm_command,
     normalize_python_executable,
     next_stage,
+    run_model_canary,
     set_stock_model_class_count,
 )
 
@@ -58,6 +60,13 @@ def test_stock_canary_class_count_comes_from_locked_model_yaml() -> None:
     set_stock_model_class_count(model)
 
     assert model.nc == 10
+
+
+def test_model_canary_keeps_forward_cache_usable_for_backward() -> None:
+    source = inspect.getsource(run_model_canary)
+
+    assert "torch.no_grad()" in source
+    assert "torch.inference_mode()" not in source
 
 
 def test_arm_command_exposes_no_scientific_override(tmp_path: Path) -> None:
