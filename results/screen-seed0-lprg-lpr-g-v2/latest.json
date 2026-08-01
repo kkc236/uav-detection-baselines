@@ -1,17 +1,15 @@
 {
   "checkpoint": {
-    "asset_id": 497662248,
-    "asset_name": "screen-seed0-lprg-lpr-g-v2-epoch-0024.pt",
-    "bytes": 197851683,
-    "sha256": "cbbcb7bb20afdc72e27eeb22b8dee32243c9e8af10022a57cb6637e339ee18fa"
+    "asset_id": 497664464,
+    "asset_name": "screen-seed0-lprg-lpr-g-v2-epoch-0025.pt",
+    "bytes": 197851875,
+    "sha256": "ffdffde53dfe8f80dd4724b26814c0606741090af7b78a15517ffa2b3a8a7423"
   },
-  "completed_epoch": 24,
+  "completed_epoch": 25,
   "design_version": "lpr-g-v2",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/lpr-g-v2-live",
-  "result_commit_sha": "30e8d0842848630e3cf7045185cdf41747c4cb2a",
   "run_name": "screen-seed0-lprg-lpr-g-v2",
   "seed": 0,
   "stage": "screen",
-  "variant": "lprg",
-  "verified": true
+  "variant": "lprg"
 }
