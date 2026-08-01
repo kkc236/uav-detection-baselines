@@ -133,6 +133,19 @@ def test_formal_and_preflight_do_not_use_screen_cutoff() -> None:
     ) is False
 
 
+def test_epoch_save_callbacks_publish_before_cutoff() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts" / "train_rtdetr_lpr_g.py"
+    ).read_text(encoding="utf-8")
+
+    diagnostics = source.index("lambda current: write_lpr_g_diagnostics")
+    audit = source.index('"on_model_save", write_common_state_audit')
+    publication = source.index("lambda current: publish_current_epoch")
+    cutoff = source.index("lambda current: cutoff_after_verified_publication")
+
+    assert diagnostics < audit < publication < cutoff
+
+
 def test_nonzero_seed_is_rejected_before_manifest_access() -> None:
     args = SimpleNamespace(stage="screen", seed=1)
     with pytest.raises(ValueError, match="seed0"):
