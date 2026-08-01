@@ -35,6 +35,15 @@
 当前旧监督器仍以 50 为完成条件。迁移时只保留已经完整发布的 epoch；任何正在执行但尚未
 形成完整结果和已验证发布账本的 epoch 都不计入证据。已有 run 不删除、不覆盖。
 
+若旧监督器在迁移窗口内已经产生 epoch 31 或更高记录，原 run 必须改名隔离并完整保留，
+不能删除或回写。允许从该原 run 建立不可变的 exact-prefix cutoff view，但必须同时满足：
+
+- results、diagnostics、common-state audit 和 publication ledger 只包含连续 epoch 1–30；
+- epoch 30 checkpoint 的内部 completed epoch 和 SHA256 与第 30 条已验证发布记录完全一致；
+- optimizer evidence 只保留到 epoch 30 checkpoint 所记录的 optimizer update 数；
+- cutoff view 写入原文件哈希、输出文件哈希、来源路径和来源 ledger 范围；
+- 比较器只读取 cutoff view，仍然拒绝任何 epoch 31 记录。
+
 ## 4. 30 轮比较门禁
 
 比较器必须只接受连续且无重复的 epoch 1–30，并拒绝 epoch 31 及以后记录。
