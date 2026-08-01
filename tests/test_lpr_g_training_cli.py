@@ -8,9 +8,13 @@ import pytest
 import torch
 
 from scripts.train_rtdetr_lpr_g import (
+    FORMAL_EPOCHS,
     FROZEN_PROTOCOL,
+    SCREEN_CUTOFF_EPOCHS,
+    SCREEN_SCHEDULE_EPOCHS,
     build_parser,
     build_settings,
+    cutoff_after_verified_publication,
     validate_resume_authority,
     write_lpr_g_diagnostics,
 )
@@ -77,6 +81,56 @@ def test_screen_and_formal_settings_are_frozen() -> None:
     assert FROZEN_PROTOCOL["optimizer"] == "MuSGD"
     assert FROZEN_PROTOCOL["save_period"] == 1
     assert FROZEN_PROTOCOL["mosaic"] == 1.0
+
+
+def test_screen_keeps_50_epoch_schedule_but_stops_at_verified_30() -> None:
+    assert SCREEN_SCHEDULE_EPOCHS == 50
+    assert SCREEN_CUTOFF_EPOCHS == 30
+    assert FORMAL_EPOCHS == 100
+
+    trainer = SimpleNamespace(
+        epoch=29,
+        stop=False,
+        lpr_g_publication_record={"completed_epoch": 30, "verified": True},
+    )
+    args = SimpleNamespace(stage="screen", preflight=False)
+
+    assert cutoff_after_verified_publication(trainer, args=args) is True
+    assert trainer.stop is True
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        {"completed_epoch": 30, "verified": False},
+        {"completed_epoch": 29, "verified": True},
+    ),
+)
+def test_screen_cutoff_rejects_unverified_or_wrong_epoch_publication(record) -> None:
+    trainer = SimpleNamespace(
+        epoch=29,
+        stop=False,
+        lpr_g_publication_record=record,
+    )
+
+    with pytest.raises(RuntimeError, match="verified epoch 30"):
+        cutoff_after_verified_publication(
+            trainer,
+            args=SimpleNamespace(stage="screen", preflight=False),
+        )
+
+
+def test_formal_and_preflight_do_not_use_screen_cutoff() -> None:
+    trainer = SimpleNamespace(epoch=29, stop=False)
+
+    assert cutoff_after_verified_publication(
+        trainer,
+        args=SimpleNamespace(stage="formal", preflight=False),
+    ) is False
+    assert cutoff_after_verified_publication(
+        trainer,
+        args=SimpleNamespace(stage="screen", preflight=True),
+    ) is False
 
 
 def test_nonzero_seed_is_rejected_before_manifest_access() -> None:

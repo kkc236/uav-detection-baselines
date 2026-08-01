@@ -41,6 +41,11 @@ from src.lpr_protocol import (
 from src.rtdetr_lpr_g import LPRGControlTrainer, LPRGTrainer
 
 
+SCREEN_SCHEDULE_EPOCHS = 50
+SCREEN_CUTOFF_EPOCHS = 30
+FORMAL_EPOCHS = 100
+
+
 FROZEN_PROTOCOL = {
     "model": "rtdetr-l.yaml",
     "imgsz": 640,
@@ -145,7 +150,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _scientific_epochs(stage: str) -> int:
-    return 50 if stage == "screen" else 100
+    return SCREEN_SCHEDULE_EPOCHS if stage == "screen" else FORMAL_EPOCHS
+
+
+def _screen_cutoff_epoch(args: argparse.Namespace) -> int | None:
+    if args.stage == "screen" and not args.preflight:
+        return SCREEN_CUTOFF_EPOCHS
+    return None
+
+
+def cutoff_after_verified_publication(
+    trainer,
+    *,
+    args: argparse.Namespace,
+) -> bool:
+    """Stop a screen arm only after its exact epoch-30 publication is verified."""
+    cutoff = _screen_cutoff_epoch(args)
+    if cutoff is None:
+        return False
+    completed_epoch = int(trainer.epoch + 1)
+    if completed_epoch < cutoff:
+        return False
+    record = getattr(trainer, "lpr_g_publication_record", None)
+    verified = (
+        isinstance(record, dict)
+        and int(record.get("completed_epoch", -1)) == cutoff
+        and record.get("verified") is True
+    )
+    if completed_epoch != cutoff or not verified:
+        raise RuntimeError(f"screen cutoff requires verified epoch {cutoff} publication")
+    trainer.stop = True
+    return True
 
 
 def build_settings(args: argparse.Namespace, manifest: dict) -> dict:
@@ -243,6 +278,7 @@ def validate_resume_authority(
         "stage": args.stage,
         "seed": 0,
         "epochs": _scientific_epochs(args.stage),
+        "screen_cutoff_epoch": _screen_cutoff_epoch(args),
         "initial_state": str(args.initial_state.resolve()),
         "publication": publication_authority(args),
     }
@@ -442,6 +478,7 @@ def publish_current_epoch(trainer, *, args: argparse.Namespace) -> dict:
             f"published epoch mismatch: expected={expected_epoch}, "
             f"actual={record.get('completed_epoch')}"
         )
+    trainer.lpr_g_publication_record = record
     prune_local_epoch_checkpoints(
         checkpoint.parent,
         retain=int(args.retain),
@@ -463,6 +500,7 @@ def write_protocol_manifest(
         "stage": args.stage,
         "seed": 0,
         "epochs": int(trainer.args.epochs),
+        "screen_cutoff_epoch": _screen_cutoff_epoch(args),
         "workers": int(trainer.args.workers),
         "device": str(trainer.args.device),
         "initial_state": str(args.initial_state.resolve()),
@@ -512,6 +550,10 @@ def main() -> None:
     trainer.add_callback(
         "on_model_save",
         lambda current: publish_current_epoch(current, args=args),
+    )
+    trainer.add_callback(
+        "on_model_save",
+        lambda current: cutoff_after_verified_publication(current, args=args),
     )
     trainer.train()
 
