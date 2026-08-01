@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
+from ultralytics.utils import RANK
 
 from src.lpr_g_head import LPRGDeformableTransformerDecoder
 from src.lpr_g_loss import MatchRecordingRTDETRDetectionLoss
+from src.rtdetr_lpr import FixedPairedProtocolMixin
 
 
 class LPRGRTDETRDetectionModel(RTDETRDetectionModel):
@@ -98,3 +101,47 @@ class LPRGRTDETRDetectionModel(RTDETRDetectionModel):
             [stock_loss[name].detach() for name in ("loss_giou", "loss_class", "loss_bbox")],
             device=img.device,
         )
+
+
+class LPRGTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+    """Strict paired trainer with independently clipped stock/private gradients."""
+
+    def __init__(
+        self,
+        *args,
+        max_logit_delta: float = 0.5,
+        experiment_seed: int = 0,
+        **kwargs,
+    ) -> None:
+        self.max_logit_delta = float(max_logit_delta)
+        self.experiment_seed = int(experiment_seed)
+        super().__init__(*args, **kwargs)
+
+    def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        common: list[torch.nn.Parameter] = []
+        private: list[torch.nn.Parameter] = []
+        for name, parameter in self.model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            (private if "lpr_g_refiner." in name else common).append(parameter)
+        if not common or not private:
+            raise RuntimeError("LPR-G stock/private parameter partition is incomplete")
+        return {"gradient_norm": common, "lpr_g_gradient_norm": private}
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> LPRGRTDETRDetectionModel:
+        model = LPRGRTDETRDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            max_logit_delta=self.max_logit_delta,
+            private_seed=10_000 + self.experiment_seed,
+        )
+        if weights:
+            model.load(weights)
+        return model

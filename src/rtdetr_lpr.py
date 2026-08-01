@@ -108,12 +108,23 @@ class FixedPairedProtocolMixin:
         with self.optimizer_evidence_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 
+    def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Return independently clipped parameter groups for one optimizer step."""
+        return {
+            "gradient_norm": [
+                parameter for parameter in self.model.parameters() if parameter.requires_grad
+            ]
+        }
+
     def optimizer_step(self):
         scale_before = float(self.scaler.get_scale())
         self.scaler.unscale_(self.optimizer)
-        norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-        gradient_norm = float(norm.detach().float().cpu())
-        gradient_finite = math.isfinite(gradient_norm)
+        norms: dict[str, float | None] = {}
+        for name, parameters in self.gradient_parameter_groups().items():
+            norm = torch.nn.utils.clip_grad_norm_(parameters, max_norm=10.0)
+            value = float(norm.detach().float().cpu())
+            norms[name] = value if math.isfinite(value) else None
+        gradient_finite = all(value is not None for value in norms.values())
         self.scaler.step(self.optimizer)
         self.scaler.update()
         scale_after = float(self.scaler.get_scale())
@@ -126,7 +137,7 @@ class FixedPairedProtocolMixin:
                 "amp_scale_before": scale_before,
                 "amp_scale_after": scale_after,
                 "amp_step_skipped": skipped,
-                "gradient_norm": gradient_norm if gradient_finite else None,
+                **norms,
                 "gradient_norm_finite": gradient_finite,
             }
         )
