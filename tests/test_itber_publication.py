@@ -11,6 +11,7 @@ from src.itber_protocol import (
     BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 from src.itber_publication import (
     PublicationIdentity,
@@ -38,6 +39,7 @@ def _checkpoint(path: Path, epoch: int, *, stage: str = "screen") -> None:
             "dataset_sha256": EXPECTED_DATASET_SHA256,
             "cache_manifest_sha256": CACHE_SHA,
             "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
             "refiner": {"weight": torch.ones(1)},
             "optimizer": {"state": {}, "param_groups": []},
             "scaler": {"scale": 128.0},
@@ -77,6 +79,7 @@ def test_private_checkpoint_metadata_uses_private_one_based_epoch(tmp_path: Path
     assert metadata.completed_epoch == 1
     assert metadata.bytes == path.stat().st_size
     assert len(metadata.sha256) == 64
+    assert _identity().as_dict()["runtime_amendment_sha256"] == RUNTIME_AMENDMENT_SHA256
 
 
 @pytest.mark.parametrize("field", ["refiner", "optimizer", "scaler", "rng"])

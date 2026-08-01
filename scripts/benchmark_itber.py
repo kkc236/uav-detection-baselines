@@ -25,7 +25,12 @@ from scripts.train_itber import (  # noqa: E402
     validate_resume_checkpoint,
 )
 from src.itber_protocol import (  # noqa: E402
+    BASELINE_REFERENCE_ENVIRONMENT,
+    EXECUTION_ENVIRONMENT,
     EXPECTED_BASELINE_SHA256,
+    RUNTIME_AMENDMENT,
+    RUNTIME_AMENDMENT_SHA256,
+    current_execution_environment,
     module_state_sha256,
 )
 from src.lpr_protocol import file_sha256  # noqa: E402
@@ -166,6 +171,8 @@ def main() -> int:
         raise SystemExit("CUDA is required for the I-TBER benchmark")
     if file_sha256(args.baseline_checkpoint) != EXPECTED_BASELINE_SHA256:
         raise ValueError("I-TBER benchmark baseline authority mismatch")
+    if current_execution_environment() != EXECUTION_ENVIRONMENT:
+        raise ValueError("I-TBER benchmark execution environment mismatch")
     cache_sha = validate_gate1_cache_manifest(args.gate1_cache_manifest)
     artifact = torch.load(args.private_checkpoint, map_location="cpu", weights_only=False)
     validate_resume_checkpoint(
@@ -207,6 +214,10 @@ def main() -> int:
         "seed": 0,
         "epoch": int(artifact["epoch"]),
         "protocol": BENCHMARK_PROTOCOL,
+        "baseline_reference_environment": BASELINE_REFERENCE_ENVIRONMENT,
+        "execution_environment": EXECUTION_ENVIRONMENT,
+        "runtime_amendment": RUNTIME_AMENDMENT,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         "parameters": parameters,
         "gflops": {
             "baseline": baseline_flops,

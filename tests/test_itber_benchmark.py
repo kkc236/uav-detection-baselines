@@ -80,3 +80,18 @@ def test_cli_has_only_authority_paths_and_no_benchmark_overrides() -> None:
         assert allowed in result.stdout
     for forbidden in ("--imgsz", "--warmup", "--iterations", "--device", "--half", "--batch"):
         assert forbidden not in result.stdout
+
+
+def test_benchmark_report_source_binds_runtime_amendment_and_environments() -> None:
+    source = __import__("pathlib").Path("scripts/benchmark_itber.py").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "RUNTIME_AMENDMENT_SHA256",
+        "BASELINE_REFERENCE_ENVIRONMENT",
+        "EXECUTION_ENVIRONMENT",
+        '"runtime_amendment_sha256"',
+        '"baseline_reference_environment"',
+        '"execution_environment"',
+    ):
+        assert marker in source

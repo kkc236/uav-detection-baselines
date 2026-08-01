@@ -14,6 +14,7 @@ from src.itber_protocol import (
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 
 
@@ -23,6 +24,7 @@ def _authority() -> dict[str, str]:
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "category_sha256": EXPECTED_CATEGORY_SHA256,
         "source_commit": "a" * 40,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
     }
 
 
@@ -98,6 +100,9 @@ def test_loader_rejects_corruption_and_changed_baseline_authority(tmp_path) -> N
     changed = dict(_authority(), baseline_sha256="BAD")
     with pytest.raises(CacheViolation, match="baseline"):
         load_evidence_cache(root, expected_authority=changed)
+    changed_runtime = dict(_authority(), runtime_amendment_sha256="F" * 64)
+    with pytest.raises(CacheViolation, match="runtime_amendment"):
+        load_evidence_cache(root, expected_authority=changed_runtime)
 
     shard = next((root / "shards").glob("*.pt"))
     shard.write_bytes(shard.read_bytes() + b"corrupt")

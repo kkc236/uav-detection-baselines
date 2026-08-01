@@ -21,6 +21,7 @@ from src.itber_protocol import (  # noqa: E402
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 from src.lpr_protocol import (  # noqa: E402
     CATEGORY_NAMES,
@@ -198,6 +199,7 @@ def main() -> int:
             "dataset_sha256": dataset_sha,
             "category_sha256": category_sha,
             "source_commit": _source_commit(),
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         },
         shard_size=SHARD_SIZE,
     )

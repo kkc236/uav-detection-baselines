@@ -23,11 +23,15 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from src.itber_metrics import correction_rms  # noqa: E402
 from src.itber_protocol import (  # noqa: E402
+    BASELINE_REFERENCE_ENVIRONMENT,
     BASELINE_TRAINING_CONTRACT,
     BASELINE_TRAINING_CONTRACT_SHA256,
+    EXECUTION_ENVIRONMENT,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT,
+    RUNTIME_AMENDMENT_SHA256,
     assert_detector_frozen,
     module_state_sha256,
 )
@@ -123,6 +127,7 @@ def validate_gate1_cache_manifest(path: str | Path) -> str:
         ("baseline_sha256", EXPECTED_BASELINE_SHA256),
         ("dataset_sha256", EXPECTED_DATASET_SHA256),
         ("category_sha256", EXPECTED_CATEGORY_SHA256),
+        ("runtime_amendment_sha256", RUNTIME_AMENDMENT_SHA256),
     ):
         actual = str(authority.get(name, "")).upper()
         if actual != value:
@@ -148,6 +153,7 @@ def validate_resume_checkpoint(
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": cache_manifest_sha256.upper(),
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
     }
     violations = {
         name: {"expected": value, "actual": artifact.get(name)}
@@ -512,6 +518,10 @@ def main() -> int:
             "dataset_sha256": dataset_sha,
             "cache_manifest_sha256": cache_manifest_sha,
             "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
+            "baseline_reference_environment": BASELINE_REFERENCE_ENVIRONMENT,
+            "execution_environment": EXECUTION_ENVIRONMENT,
+            "runtime_amendment": RUNTIME_AMENDMENT,
             "detector_sha_before": detector_sha_before,
             "detector_sha_after": detector_sha_after,
             "refiner": adapter.refiner.state_dict(),

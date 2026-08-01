@@ -29,6 +29,7 @@ from src.itber_protocol import (
     BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 
 
@@ -74,6 +75,7 @@ class PublicationIdentity:
             "dataset_sha256": self.dataset_sha256.upper(),
             "cache_manifest_sha256": self.cache_manifest_sha256.upper(),
             "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         }
 
 

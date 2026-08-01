@@ -20,6 +20,7 @@ from src.itber_protocol import (  # noqa: E402
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
     write_immutable_report,
 )
 
@@ -49,6 +50,7 @@ def main() -> int:
             "dataset_sha256": EXPECTED_DATASET_SHA256,
             "category_sha256": EXPECTED_CATEGORY_SHA256,
             "source_commit": commit,
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         },
     )
     device = torch.device(f"cuda:{args.device}")

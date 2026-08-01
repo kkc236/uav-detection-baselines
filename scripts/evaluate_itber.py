@@ -36,17 +36,21 @@ from src.itber_evaluation import (  # noqa: E402
     write_immutable_report,
 )
 from src.itber_protocol import (  # noqa: E402
+    BASELINE_REFERENCE_ENVIRONMENT,
     BASELINE_TRAINING_CONTRACT,
     BASELINE_TRAINING_CONTRACT_SHA256,
+    EXECUTION_ENVIRONMENT,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_CATEGORY_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT,
+    RUNTIME_AMENDMENT_SHA256,
+    current_execution_environment,
     module_state_sha256,
 )
 from src.lpr_protocol import (  # noqa: E402
     CATEGORY_NAMES,
     category_mapping_sha256,
-    current_environment,
     dataset_signature,
     file_sha256,
 )
@@ -260,6 +264,11 @@ def evaluate_checkpoint(
         or artifact.get("baseline_training_contract") != BASELINE_TRAINING_CONTRACT
         or artifact.get("baseline_training_contract_sha256")
         != BASELINE_TRAINING_CONTRACT_SHA256
+        or artifact.get("runtime_amendment_sha256") != RUNTIME_AMENDMENT_SHA256
+        or artifact.get("baseline_reference_environment")
+        != BASELINE_REFERENCE_ENVIRONMENT
+        or artifact.get("execution_environment") != EXECUTION_ENVIRONMENT
+        or artifact.get("runtime_amendment") != RUNTIME_AMENDMENT
     ):
         raise ValueError("I-TBER checkpoint training protocol mismatch")
 
@@ -314,7 +323,11 @@ def evaluate_checkpoint(
         "cache_manifest_sha256": cache_manifest_sha,
         "baseline_training_contract": BASELINE_TRAINING_CONTRACT,
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
-        "environment": current_environment(),
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
+        "baseline_reference_environment": BASELINE_REFERENCE_ENVIRONMENT,
+        "execution_environment": EXECUTION_ENVIRONMENT,
+        "runtime_amendment": RUNTIME_AMENDMENT,
+        "environment": current_execution_environment(),
         "evaluation_constants": EVALUATION_CONSTANTS,
         "repeat_count": len(repeats),
         "repeat_exact": True,

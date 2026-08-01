@@ -16,6 +16,7 @@ from src.itber_protocol import (
     BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 
 
@@ -36,6 +37,7 @@ def _checkpoint(path: Path, epoch: int, *, stage: str = "screen") -> None:
             "dataset_sha256": EXPECTED_DATASET_SHA256,
             "cache_manifest_sha256": CACHE_SHA,
             "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+            "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
             "refiner": {"weight": torch.ones(1)},
             "optimizer": {"state": {}, "param_groups": []},
             "scaler": {"scale": 128.0},
@@ -72,6 +74,7 @@ def test_download_verification_checks_all_scientific_identity(tmp_path: Path) ->
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": CACHE_SHA,
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         "completed_epoch": 7,
         "checkpoint": {
             "asset_name": f"{PREFIX}-epoch-0007.pt",
@@ -98,6 +101,7 @@ def test_download_verification_checks_all_scientific_identity(tmp_path: Path) ->
         ("baseline_sha256", "B" * 64),
         ("dataset_sha256", "D" * 64),
         ("cache_manifest_sha256", "E" * 64),
+        ("runtime_amendment_sha256", "F" * 64),
     ):
         with pytest.raises(RuntimeError, match=field.replace("_sha256", "")):
             verify_downloaded_checkpoint(
@@ -124,6 +128,7 @@ def test_download_verification_rejects_corrupted_checkpoint(tmp_path: Path) -> N
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": CACHE_SHA,
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         "completed_epoch": 1,
         "checkpoint": {
             "asset_name": f"{PREFIX}-epoch-0001.pt",

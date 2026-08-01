@@ -72,12 +72,23 @@ def _sha256(path: Path) -> str:
 
 
 def _normalized_authority(authority: Mapping[str, Any]) -> dict[str, str]:
-    required = ("baseline_sha256", "dataset_sha256", "category_sha256", "source_commit")
+    required = (
+        "baseline_sha256",
+        "dataset_sha256",
+        "category_sha256",
+        "source_commit",
+        "runtime_amendment_sha256",
+    )
     missing = [name for name in required if not authority.get(name)]
     if missing:
         raise CacheViolation({"authority.missing": missing})
     normalized = {name: str(authority[name]) for name in required}
-    for name in ("baseline_sha256", "dataset_sha256", "category_sha256"):
+    for name in (
+        "baseline_sha256",
+        "dataset_sha256",
+        "category_sha256",
+        "runtime_amendment_sha256",
+    ):
         normalized[name] = normalized[name].upper()
     normalized["source_commit"] = normalized["source_commit"].lower()
     if len(normalized["source_commit"]) != 40:

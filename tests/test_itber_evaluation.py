@@ -95,6 +95,21 @@ def test_evaluation_constants_match_the_baseline_validation_contract() -> None:
     }
 
 
+def test_evaluation_report_source_binds_runtime_amendment_and_both_environments() -> None:
+    source = __import__("pathlib").Path("scripts/evaluate_itber.py").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "RUNTIME_AMENDMENT_SHA256",
+        "BASELINE_REFERENCE_ENVIRONMENT",
+        "EXECUTION_ENVIRONMENT",
+        '"runtime_amendment_sha256"',
+        '"baseline_reference_environment"',
+        '"execution_environment"',
+    ):
+        assert marker in source
+
+
 def test_detection_metrics_include_full_tiny_and_small_ap() -> None:
     metrics = compute_detection_metrics(_predictions(), _targets(), image_size=640)
 

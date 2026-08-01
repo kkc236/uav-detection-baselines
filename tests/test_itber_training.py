@@ -20,6 +20,7 @@ from src.itber_protocol import (
     BASELINE_TRAINING_CONTRACT_SHA256,
     EXPECTED_BASELINE_SHA256,
     EXPECTED_DATASET_SHA256,
+    RUNTIME_AMENDMENT_SHA256,
 )
 
 
@@ -95,6 +96,7 @@ def test_resume_validation_rejects_cross_stage_or_authority() -> None:
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "cache_manifest_sha256": cache_sha,
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
     }
     validate_resume_checkpoint(artifact, stage="screen", cache_manifest_sha256=cache_sha)
     for key, value in (
@@ -103,6 +105,7 @@ def test_resume_validation_rejects_cross_stage_or_authority() -> None:
         ("seed", 1),
         ("baseline_sha256", "BAD"),
         ("dataset_sha256", "BAD"),
+        ("runtime_amendment_sha256", "F" * 64),
     ):
         changed = dict(artifact, **{key: value})
         with pytest.raises(ValueError, match=key):
@@ -128,6 +131,7 @@ def test_atomic_checkpoint_roundtrip_contains_private_state_only(tmp_path) -> No
         "baseline_sha256": EXPECTED_BASELINE_SHA256,
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "baseline_training_contract_sha256": BASELINE_TRAINING_CONTRACT_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         "refiner": model.state_dict(),
     }
 
@@ -167,6 +171,7 @@ def test_source_forces_frozen_on_the_fly_detector_and_epoch_checkpoints() -> Non
         "detector_sha_after",
         "matched_correction_rms",
         "unmatched_correction_rms",
+        "runtime_amendment_sha256",
         "evaluate_itber.py",
         "publish_itber_epoch.py",
         "subprocess.run",
