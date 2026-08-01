@@ -99,7 +99,7 @@ bash /data/uav/source/uav-detection-baselines/deploy/itber/bootstrap_ubuntu.sh \
   /data/uav/source/uav-detection-baselines
 ```
 
-冻结环境要求 RTX 4090、驱动 550.142、Python 3.10.12、PyTorch 2.5.1+cu121、Torchvision 0.20.1+cu121、CUDA 12.1 和 Ultralytics 8.4.90。任一字段不符，Gate 0 状态只能是 `engineering_invalid`，不得启动 Probe 或训练。
+baseline 历史环境永久记录驱动 `550.142`；经批准的本次执行环境固定为 RTX 4090、驱动 `570.133.07`、上报显存 49140 MiB、Python 3.10.12、PyTorch 2.5.1+cu121、Torchvision 0.20.1+cu121、CUDA 12.1 和 Ultralytics 8.4.90。主机检查通过时必须返回 `passed_with_runtime_amendment`，并同时保留两套环境身份。除已批准的驱动和显存上报外，任一字段不符都只能是 `engineering_invalid`。
 
 ## 7. Gate 0
 
@@ -114,13 +114,13 @@ bash /data/uav/source/uav-detection-baselines/deploy/itber/bootstrap_ubuntu.sh \
   --device 0
 ```
 
-只有报告为 `passed` 才能继续。失败报告永久保留，修复后使用 `attempt-002.json`，不得覆盖旧报告。
+本服务器只有报告为 `passed_with_runtime_amendment` 才能继续。失败报告永久保留，修复后使用 `attempt-002.json`，不得覆盖旧报告。普通 `passed` 只兼容读取旧的不可变报告，不能用于掩盖本次运行环境修订。
 
 ## 8. P0-P3 Probe 与筛选顺序
 
-Gate 0 通过后才生成固定 evidence cache，并按同容量、同私有初始化运行 P0、P1、P2、P3，各 12 epoch。Probe 只用于信息量判断；通过后必须在固定 647 张子集上 fresh 运行 Gate 2，不能把 cache checkpoint 续训成正式模型。Gate 2 通过后，再在完整 6471/548 数据上 fresh 运行私有 30 epoch；同 checkpoint 的 stock/refined 是主比较。
+Gate 0 通过后必须先在当前 `570.133.07` 环境完成三次逐值一致的 stock baseline 复评，并写入不可变 `stock-authority.json`；之后才可生成固定 evidence cache，并按同容量、同私有初始化运行 P0、P1、P2、P3，各 12 epoch。Probe 只用于信息量判断；通过后必须在固定 647 张子集上 fresh 运行 Gate 2，不能把 cache checkpoint 续训成正式模型。Gate 2 通过后，再在完整 6471/548 数据上 fresh 运行私有 30 epoch；同 checkpoint 的 stock/refined 是主比较。
 
-完整流水线由 `scripts/run_itber_pipeline.py` 监督。它按 authority -> Gate 0 -> cache -> P0-P3 -> Gate 1 -> screen12 -> formal30 顺序执行；任何工程无效或科学失败都会停止，不会自动越过门槛：
+完整流水线由 `scripts/run_itber_pipeline.py` 监督。它按 authority -> Gate 0 -> stock authority -> cache -> P0-P3 -> Gate 1 -> screen12 -> formal30 顺序执行；任何工程无效或科学失败都会停止，不会自动越过门槛：
 
 ```bash
 /data/uav/venvs/itber-v1.1/bin/python \
@@ -136,6 +136,8 @@ Gate 0 通过后才生成固定 evidence cache，并按同容量、同私有初�
 启动前必须再次检查 `docs/superpowers/specs/2026-08-01-i-tber-v1-1-design.md` 中的 P0-P3、Gate 1、Gate 2 和 formal 阈值没有漂移。
 
 baseline 的完整原始训练协议由代码常量 `BASELINE_TRAINING_CONTRACT` 锁定，并以 `BASELINE_TRAINING_CONTRACT_SHA256` 写入每个私有 checkpoint、逐 epoch 评估报告和 GitHub manifest。其内容包括 seed0、MuSGD、lr0/lrf、momentum、weight decay、warmup、nbs、全部增强、query=300、max_det=300 与 NMS=False。I-TBER 的 AdamW 只更新冻结检测器之外的私有头，是隔离后训练协议，不得冒充 baseline 优化器或改变 baseline checkpoint。
+
+本次结论只能计算 `refined(570.133.07) - stock(570.133.07)`。不得使用历史 550.142 环境的 baseline 指标与当前 refined 指标相减；历史 mAP 仅作背景参考。运行环境修订 SHA 会进入 cache、checkpoint、评估、benchmark、GitHub manifest 与恢复校验。
 
 ## 9. 每 epoch 发布、监控和恢复
 

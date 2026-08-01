@@ -26,6 +26,7 @@ def test_repository_is_locally_ready_without_claiming_remote_verification() -> N
         "scripts/evaluate_itber.py",
         "scripts/publish_itber_epoch.py",
         "scripts/restore_itber_checkpoint.py",
+        "scripts/evaluate_itber_stock.py",
         "deploy/itber/publication-screen.template.json",
         "deploy/itber/publication-formal.template.json",
     ):
@@ -57,6 +58,11 @@ def test_guide_contains_safe_transfer_gate0_publication_and_recovery_contracts()
         "publication-screen.json",
         "publication-formal.json",
         "BASELINE_TRAINING_CONTRACT_SHA256",
+        "550.142",
+        "570.133.07",
+        "passed_with_runtime_amendment",
+        "stock-authority.json",
+        "不得使用历史 550.142 环境的 baseline 指标",
         "至少 80 GiB",
         "用户明确提供并授权",
     ):

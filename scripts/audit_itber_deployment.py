@@ -33,6 +33,7 @@ REQUIRED_FILES = (
     "scripts/run_itber_probe.py",
     "scripts/train_itber.py",
     "scripts/evaluate_itber.py",
+    "scripts/evaluate_itber_stock.py",
     "scripts/publish_itber_epoch.py",
     "scripts/restore_itber_checkpoint.py",
     "scripts/benchmark_itber.py",
@@ -57,6 +58,9 @@ GUIDE_MARKERS = (
     "chmod 600",
     "run_itber_pipeline.py",
     "BASELINE_TRAINING_CONTRACT_SHA256",
+    "passed_with_runtime_amendment",
+    "stock-authority.json",
+    "570.133.07",
 )
 
 
