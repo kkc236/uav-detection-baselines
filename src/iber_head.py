@@ -64,11 +64,13 @@ def _geometry_quality(
     *,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    numeric_eps = max(float(eps), float(torch.finfo(boxes.dtype).eps))
-    center = boxes[..., :2].mul(2).sub(1)
-    width, height = boxes[..., 2:].clamp_min(numeric_eps).unbind(dim=-1)
+    boxes_fp32 = boxes.to(dtype=torch.float32)
+    scores_fp32 = scores.to(dtype=torch.float32)
+    numeric_eps = max(float(eps), float(torch.finfo(torch.float32).eps))
+    center = boxes_fp32[..., :2].mul(2).sub(1)
+    width, height = boxes_fp32[..., 2:].clamp_min(numeric_eps).unbind(dim=-1)
 
-    probability = scores.sigmoid().clamp(numeric_eps, 1 - numeric_eps)
+    probability = scores_fp32.sigmoid().clamp(numeric_eps, 1 - numeric_eps)
     quality = probability.amax(dim=-1, keepdim=True)
     entropy = -(
         probability * probability.log()
@@ -110,7 +112,7 @@ class IBERRefiner(nn.Module):
             raise ValueError("image_size and rho must be positive")
 
         with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(int(private_seed))
+            torch.random.default_generator.manual_seed(int(private_seed))
             self.query_path = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
                 nn.Linear(hidden_dim, 64),
@@ -237,8 +239,8 @@ class IBERRefiner(nn.Module):
     ) -> IBEROutput:
         """Return full and base-only refinements plus private diagnostics."""
         hidden = hidden.detach()
-        stock_boxes = stock_boxes.detach()
-        stock_scores = stock_scores.detach()
+        stock_boxes = stock_boxes.detach().clone()
+        stock_scores = stock_scores.detach().clone()
         f3 = f3.detach()
         image_rgb = image_rgb.detach()
         self._validate_inputs(hidden, stock_boxes, stock_scores, f3, image_rgb)

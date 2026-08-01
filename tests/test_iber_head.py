@@ -15,6 +15,7 @@ from src.iber_sampling import (
     sample_f3_boundary_evidence,
     sample_rgb_boundary_evidence,
 )
+from src.itber_geometry import apply_edge_update, xyxy_to_cxcywh
 from src.itber_loss import itber_private_loss
 
 
@@ -89,6 +90,23 @@ def test_probe_initialization_is_equal_capacity_reproducible_and_rng_private() -
     }
     assert len(set(counts.values())) == 1
     assert len(set(fingerprints.values())) == 1
+
+
+def test_private_initialization_never_seeds_accelerators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accelerator_seed_calls: list[int] = []
+    before = torch.random.get_rng_state().clone()
+    monkeypatch.setattr(
+        torch.cuda,
+        "manual_seed_all",
+        lambda seed: accelerator_seed_calls.append(int(seed)),
+    )
+
+    _refiner()
+
+    assert accelerator_seed_calls == []
+    torch.testing.assert_close(torch.random.get_rng_state(), before, rtol=0, atol=0)
 
 
 def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
@@ -182,6 +200,22 @@ def test_zero_initialization_is_exact_identity_even_outside_image() -> None:
     assert stock.grad is None
 
 
+def test_exposed_stock_storage_is_isolated_from_detector_inputs() -> None:
+    inputs = _inputs(requires_grad=True)
+    detector_boxes = inputs[1].detach().clone()
+    detector_scores = inputs[2].detach().clone()
+    output = _refiner()(*inputs)
+
+    output.stock_boxes.add_(7)
+    output.stock_scores.mul_(-3)
+
+    torch.testing.assert_close(inputs[1], detector_boxes, rtol=0, atol=0)
+    torch.testing.assert_close(inputs[2], detector_scores, rtol=0, atol=0)
+    assert output.stock_boxes.data_ptr() != inputs[1].data_ptr()
+    assert output.stock_scores.data_ptr() != inputs[2].data_ptr()
+    assert all(value.grad is None for value in inputs)
+
+
 def test_probe_masks_zero_raw_evidence_before_the_encoders() -> None:
     inputs = tuple(value.detach() for value in _inputs(batch=1))
     outputs = {probe: _refiner(probe)(*inputs) for probe in sorted(PROBES)}
@@ -213,6 +247,40 @@ def test_probe_masks_zero_raw_evidence_before_the_encoders() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("probe", "expected_f3_calls", "expected_rgb_calls"),
+    [
+        pytest.param("b0", 0, 0, id="b0-skips-both"),
+        pytest.param("b1", 1, 0, id="b1-skips-rgb"),
+        pytest.param("b2", 0, 1, id="b2-skips-f3"),
+    ],
+)
+def test_disabled_modality_samplers_are_never_called(
+    probe: str,
+    expected_f3_calls: int,
+    expected_rgb_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"f3": 0, "rgb": 0}
+    real_f3_sampler = iber_head.sample_f3_boundary_evidence
+    real_rgb_sampler = iber_head.sample_rgb_boundary_evidence
+
+    def counted_f3(*args: object, **kwargs: object) -> torch.Tensor:
+        calls["f3"] += 1
+        return real_f3_sampler(*args, **kwargs)  # type: ignore[arg-type]
+
+    def counted_rgb(*args: object, **kwargs: object) -> torch.Tensor:
+        calls["rgb"] += 1
+        return real_rgb_sampler(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", counted_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", counted_rgb)
+
+    _refiner(probe)(*_inputs(batch=1))
+
+    assert calls == {"f3": expected_f3_calls, "rgb": expected_rgb_calls}
+
+
 def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() -> None:
     model = _refiner("b3")
     with torch.no_grad():
@@ -232,6 +300,40 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
     )
     for parameters in parameter_groups:
         gradients = [parameter.grad for parameter in parameters]
+        assert all(gradient is not None for gradient in gradients)
+        assert all(torch.isfinite(gradient).all() for gradient in gradients)
+        assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
+
+
+def test_first_private_loss_step_updates_all_four_zero_initialized_heads() -> None:
+    model = _refiner()
+    head_names = (
+        "base_gate_head",
+        "boundary_gate_head",
+        "base_residual_head",
+        "boundary_residual_head",
+    )
+    for name in head_names:
+        head = getattr(model, name)
+        assert torch.count_nonzero(head.weight) == 0
+        assert torch.count_nonzero(head.bias) == 0
+
+    output = model(*_inputs(batch=2))
+    losses = itber_private_loss(
+        output,
+        target_edges=torch.tensor(
+            [[0.39, 0.40, 0.61, 0.58], [0.07, 0.75, 0.17, 0.87]]
+        ),
+        match_indices=[
+            (torch.tensor([0]), torch.tensor([0])),
+            (torch.tensor([1]), torch.tensor([1])),
+        ],
+        rho=0.05,
+    )
+    losses.total.backward()
+
+    for name in head_names:
+        gradients = [parameter.grad for parameter in getattr(model, name).parameters()]
         assert all(gradient is not None for gradient in gradients)
         assert all(torch.isfinite(gradient).all() for gradient in gradients)
         assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
@@ -311,6 +413,37 @@ def test_tiny_border_outside_boxes_and_extreme_scores_are_finite() -> None:
             assert torch.isfinite(value).all()
 
 
+@pytest.mark.parametrize("score_dtype", [torch.float16, torch.bfloat16])
+def test_low_precision_extreme_scores_keep_outputs_and_private_loss_finite(
+    score_dtype: torch.dtype,
+) -> None:
+    hidden, boxes, _, f3, image = _inputs(batch=1)
+    scores = torch.tensor(
+        [[[1000.0, -1000.0], [-1000.0, 1000.0], [1000.0, 1000.0]]],
+        dtype=score_dtype,
+    )
+
+    output = _refiner()(hidden, boxes, scores, f3, image)
+
+    assert output.quality.dtype == torch.float32
+    assert output.entropy.dtype == torch.float32
+    for value in vars(output).values():
+        if isinstance(value, torch.Tensor):
+            assert torch.isfinite(value).all()
+    torch.testing.assert_close(output.refined_boxes, boxes, rtol=0, atol=0)
+    torch.testing.assert_close(output.boundary_off_boxes, boxes, rtol=0, atol=0)
+
+    losses = itber_private_loss(
+        output,
+        target_edges=torch.tensor([[0.39, 0.40, 0.61, 0.58]]),
+        match_indices=[(torch.tensor([0]), torch.tensor([0]))],
+        rho=0.05,
+    )
+    for value in vars(losses).values():
+        if isinstance(value, torch.Tensor):
+            assert torch.isfinite(value)
+
+
 @pytest.mark.parametrize(("batch", "queries"), [(1, 0), (0, 2)])
 def test_empty_batch_or_query_dimensions_return_well_shaped_outputs(
     batch: int, queries: int
@@ -386,6 +519,60 @@ def test_select_boxes_is_exact_and_stock_scores_are_never_modified() -> None:
         output.select_boxes("unknown")
     torch.testing.assert_close(output.stock_scores, inputs[2].detach(), rtol=0, atol=0)
     assert output.stock_scores.requires_grad is False
+
+
+def test_boundary_off_uses_only_nonzero_base_heads() -> None:
+    first = _refiner()
+    second = _refiner()
+    with torch.no_grad():
+        for model in (first, second):
+            model.base_gate_head.weight.fill_(0.04)
+            model.base_gate_head.bias.fill_(0.10)
+            model.base_residual_head.weight.fill_(-0.03)
+            model.base_residual_head.bias.fill_(0.20)
+        first.boundary_gate_head.weight.fill_(0.02)
+        first.boundary_gate_head.bias.fill_(-0.15)
+        first.boundary_residual_head.weight.fill_(0.01)
+        first.boundary_residual_head.bias.fill_(0.25)
+        second.boundary_gate_head.weight.fill_(-0.05)
+        second.boundary_gate_head.bias.fill_(0.35)
+        second.boundary_residual_head.weight.fill_(-0.04)
+        second.boundary_residual_head.bias.fill_(-0.30)
+    inputs = _inputs(batch=1)
+
+    first_output = first(*inputs)
+    second_output = second(*inputs)
+    expected_edges = apply_edge_update(
+        first_output.stock_edges,
+        first_output.base_gate_raw.sigmoid(),
+        first_output.base_residual_raw.tanh(),
+        rho=0.05,
+    )
+    expected_boxes = first_output.stock_boxes + (
+        xyxy_to_cxcywh(expected_edges)
+        - xyxy_to_cxcywh(first_output.stock_edges)
+    )
+
+    assert torch.count_nonzero(expected_edges - first_output.stock_edges) > 0
+    torch.testing.assert_close(
+        first_output.boundary_off_edges, expected_edges, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_boxes, expected_boxes, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_edges,
+        second_output.boundary_off_edges,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_boxes,
+        second_output.boundary_off_boxes,
+        rtol=0,
+        atol=0,
+    )
+    assert not torch.equal(first_output.refined_edges, second_output.refined_edges)
 
 
 def test_existing_private_loss_accepts_real_iber_output() -> None:
