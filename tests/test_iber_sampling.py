@@ -30,6 +30,16 @@ def _repeat_per_channel(
     return torch.tensor(values, dtype=torch.float32).view(4, 1).expand(4, channels)
 
 
+def _channelwise_x_ramp(
+    scales: torch.Tensor, offsets: torch.Tensor, *, size: int = 64
+) -> torch.Tensor:
+    x = ((torch.arange(size, dtype=torch.float32) + 0.5) / size).view(
+        1, 1, 1, size
+    )
+    values = offsets.view(1, -1, 1, 1) + scales.view(1, -1, 1, 1) * x
+    return values.expand(-1, -1, size, -1).clone()
+
+
 def test_boundary_grid_uses_exact_tangential_positions_in_ltrb_order() -> None:
     boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
     normal_positions = torch.tensor([[[-1 / 64, 0.0, 1 / 64]]])
@@ -60,6 +70,34 @@ def test_boundary_grid_uses_exact_tangential_positions_in_ltrb_order() -> None:
     expected_ltrb = torch.tensor((0.25, 0.375, 0.75, 0.625)).view(4, 1)
     torch.testing.assert_close(
         ordered_edge_coordinates, expected_ltrb.expand(4, 3), rtol=0, atol=0
+    )
+
+
+@pytest.mark.parametrize(
+    ("sampler", "channels"),
+    [
+        pytest.param(sample_rgb_boundary_evidence, 3, id="rgb"),
+        pytest.param(sample_f3_boundary_evidence, 32, id="f3"),
+    ],
+)
+def test_public_samplers_average_three_tangential_stripes_not_midpoint(
+    sampler: Callable[..., torch.Tensor], channels: int
+) -> None:
+    row_values = torch.tensor((0.0, 0.0, 2.0, 100.0, 8.0, 0.0, 0.0, 0.0))
+    raster = row_values.view(1, 1, 8, 1).expand(1, channels, 8, 8).clone()
+    boxes = torch.tensor([[[0.5, 0.4375, 0.25, 0.5]]])
+
+    evidence = sampler(raster, boxes, image_size=256)
+
+    expected_three_position_mean = row_values[[2, 3, 4]].mean()
+    midpoint_only_value = row_values[3]
+    assert (expected_three_position_mean - midpoint_only_value).abs() > 60
+    expected_edge = torch.full((channels,), expected_three_position_mean)
+    torch.testing.assert_close(
+        evidence[0, 0, 0, :channels], expected_edge, rtol=0, atol=1e-5
+    )
+    torch.testing.assert_close(
+        evidence[0, 0, 2, :channels], expected_edge, rtol=0, atol=1e-5
     )
 
 
@@ -235,6 +273,66 @@ def test_f3_evidence_has_exact_edge_signed_and_absolute_slice_layout(
     torch.testing.assert_close(absolute, signed.abs(), rtol=0, atol=0)
     assert torch.all(signed[negative_edge] < 0)
     assert torch.all(absolute[negative_edge] > 0)
+
+
+def test_rgb_channel_distinct_complete_layout_matches_independent_analytic_values() -> None:
+    scales = torch.tensor((0.5, 1.25, 2.0))
+    offsets = torch.tensor((0.125, -0.75, 1.5))
+    images = _channelwise_x_ramp(scales, offsets)
+    boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
+
+    evidence = sample_rgb_boundary_evidence(images, boxes, image_size=256)
+
+    right_edge = 0.75
+    near_radius = 1 / 64
+    far_radius = 1 / 32
+    expected_edge = offsets + scales * right_edge
+    expected_near_signed = -2 * near_radius * scales
+    expected_far_signed = -2 * far_radius * scales
+    expected = torch.cat(
+        (
+            expected_edge,
+            expected_near_signed,
+            expected_near_signed.abs(),
+            expected_far_signed,
+            expected_far_signed.abs(),
+        )
+    )
+    for block in (
+        expected_edge,
+        expected_near_signed,
+        expected_near_signed.abs(),
+        expected_far_signed,
+        expected_far_signed.abs(),
+    ):
+        assert torch.unique(block).numel() == 3
+    assert torch.all(expected_near_signed < 0)
+    assert torch.all(expected_far_signed < 0)
+    assert torch.all(expected_near_signed.abs() > 0)
+    assert torch.all(expected_far_signed.abs() > 0)
+    torch.testing.assert_close(evidence[0, 0, 2], expected, rtol=0, atol=1e-6)
+
+
+def test_f3_channel_distinct_complete_layout_matches_independent_analytic_values() -> None:
+    channel = torch.arange(32, dtype=torch.float32)
+    scales = (channel + 1) / 16
+    offsets = channel / 8 - 1
+    features = _channelwise_x_ramp(scales, offsets)
+    boxes = torch.tensor([[[0.5, 0.5, 0.5, 0.25]]])
+
+    evidence = sample_f3_boundary_evidence(features, boxes, image_size=256)
+
+    right_edge = 0.75
+    radius = 1 / 64
+    expected_edge = offsets + scales * right_edge
+    expected_signed = -2 * radius * scales
+    expected_absolute = -expected_signed
+    expected = torch.cat((expected_edge, expected_signed, expected_absolute))
+    for block in (expected_edge, expected_signed, expected_absolute):
+        assert torch.unique(block).numel() == 32
+    assert torch.all(expected_signed < 0)
+    assert torch.all(expected_absolute > 0)
+    torch.testing.assert_close(evidence[0, 0, 2], expected, rtol=0, atol=2e-6)
 
 
 @pytest.mark.parametrize(
