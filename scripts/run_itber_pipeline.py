@@ -343,6 +343,17 @@ def main() -> int:
                 "--output",
                 str(output),
             ]
+        elif phase == "stock_authority":
+            command = [
+                sys.executable,
+                str(REPOSITORY_ROOT / "scripts" / "evaluate_itber_stock.py"),
+                "--baseline-checkpoint",
+                str(baseline),
+                "--dataset-root",
+                str(dataset_root),
+                "--output",
+                str(run_root / "stock-authority.json"),
+            ]
         elif phase == "cache":
             command = [
                 sys.executable,

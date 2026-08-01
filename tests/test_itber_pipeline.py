@@ -167,3 +167,10 @@ def test_atomic_state_preserves_append_only_history(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["phase"] == "cache"
     assert [row["phase"] for row in payload["history"]] == ["authority", "gate0"]
+
+
+def test_pipeline_source_runs_stock_authority_before_cache() -> None:
+    source = Path("scripts/run_itber_pipeline.py").read_text(encoding="utf-8")
+    assert 'phase == "stock_authority"' in source
+    assert "evaluate_itber_stock.py" in source
+    assert source.index('phase == "stock_authority"') < source.index('phase == "cache"')
