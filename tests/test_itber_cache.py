@@ -139,3 +139,12 @@ def test_completion_manifest_is_written_last(tmp_path, monkeypatch) -> None:
             shard_size=1,
         )
     assert not (root / "manifest.json").exists()
+
+
+def test_cache_cli_uses_fixed_hashed_train_subset_and_full_validation() -> None:
+    source = __import__("pathlib").Path("scripts/cache_itber_evidence.py").read_text(
+        encoding="utf-8"
+    )
+    assert "select_hashed_subset" in source
+    assert 'if split == "train"' in source
+    assert "fraction=0.10" in source

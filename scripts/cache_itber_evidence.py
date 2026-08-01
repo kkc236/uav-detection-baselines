@@ -27,6 +27,7 @@ from src.lpr_protocol import (  # noqa: E402
     category_mapping_sha256,
     dataset_signature,
     file_sha256,
+    select_hashed_subset,
 )
 from src.rtdetr_itber import FrozenITBERAdapter  # noqa: E402
 
@@ -107,6 +108,12 @@ def _cache_split(
     device: torch.device,
 ) -> list[dict]:
     image_paths = sorted((dataset_root / "images" / split).glob("*.jpg"))
+    if split == "train":
+        image_paths = select_hashed_subset(
+            image_paths,
+            root=dataset_root,
+            fraction=0.10,
+        )
     records: list[dict] = []
     for start in range(0, len(image_paths), batch_size):
         selected = image_paths[start : start + batch_size]
