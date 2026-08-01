@@ -19,6 +19,10 @@ sys.path.insert(0, str(ROOT))
 from src.lpr_g_evaluation import evaluate_screen_gate
 
 
+SCREEN_CUTOFF_EPOCHS = 30
+FORMAL_EPOCHS = 100
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         raise FileNotFoundError(f"missing paired evidence: {path}")
@@ -82,7 +86,7 @@ def load_arm_evidence(
     run: str | Path,
     *,
     method: bool,
-    expected_epochs: int = 50,
+    expected_epochs: int = SCREEN_CUTOFF_EPOCHS,
 ) -> dict[str, Any]:
     """Load one arm while rejecting duplicates, gaps, and post-fit rows."""
     run = Path(run).resolve()
@@ -149,7 +153,7 @@ def compare_runs(
     *,
     ablation: dict[str, Any],
     benchmark: dict[str, Any] | None,
-    expected_epochs: int = 50,
+    expected_epochs: int = SCREEN_CUTOFF_EPOCHS,
 ) -> dict[str, Any]:
     """Compare paired artifacts and return the frozen decision plus raw evidence."""
     control = load_arm_evidence(control_run, method=False, expected_epochs=expected_epochs)
@@ -246,7 +250,9 @@ def main() -> None:
         args.method_run,
         ablation=ablation,
         benchmark=benchmark,
-        expected_epochs=50 if args.stage == "screen" else 100,
+        expected_epochs=(
+            SCREEN_CUTOFF_EPOCHS if args.stage == "screen" else FORMAL_EPOCHS
+        ),
     )
     write_immutable_report(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
