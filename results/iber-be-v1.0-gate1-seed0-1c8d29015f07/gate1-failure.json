@@ -1,0 +1,21 @@
+{
+  "design_version": "iber-be-v1.0",
+  "format_version": 1,
+  "gate1_decision": {
+    "conditions": {
+      "b3_best_primary": true,
+      "edge_over_b0": false,
+      "edge_over_b1": false,
+      "finite_activity": true,
+      "matched_iou": true,
+      "small_direction": false,
+      "tiny_direction": false
+    },
+    "path": "/data/uav/runs/iber-be-v1/1c8d29015f07-seed0-amended/probe/gate1-decision.json"
+  },
+  "gate1_decision_sha256": "A894B127BA977FE0DBFBCCE155FC665E07144C56BF8924ED8D129A9D0EEBE82B",
+  "run_name": "iber-be-v1.0-gate1-seed0-1c8d29015f07",
+  "source_commit": "1c8d29015f0747bd88f6c7285dc2ebdd911bb4dc",
+  "stage": "gate1_decision",
+  "status": "scientific_failed"
+}
