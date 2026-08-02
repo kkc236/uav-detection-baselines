@@ -201,7 +201,7 @@ loss；不修改 Gate 阈值、head 容量、采样、matcher 或 detector：
 
 ```text
 L_private = L_box + 1.0 L_direction + 0.25 L_gate + 0.05 L_noop
-          + 1.0 L_boundary_direction + 1.0 L_boundary_margin
+          + 0.01 L_boundary_direction + 0.01 L_boundary_margin
 L_box     = L1(refined,gt) + GIoU(refined,gt)
 ```
 
