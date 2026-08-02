@@ -103,6 +103,13 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert hasattr(model, "direction_calibration")
     assert hasattr(model, "context_path")
     assert len(model.scale_experts) == 3
+    assert len(model.edge_direction_experts) == 4
+    for expert in model.edge_direction_experts:
+        assert len(expert) == 4
+        _assert_linear(expert[0], 176, 128)
+        assert isinstance(expert[1], nn.SiLU)
+        _assert_linear(expert[2], 128, 64)
+        assert isinstance(expert[3], nn.SiLU)
     assert len(model.scale_gate_heads) == 3
     assert len(model.scale_residual_heads) == 3
     assert model.boundary_gain.shape == torch.Size([])
@@ -144,11 +151,17 @@ def test_b3_per_edge_boundary_heads_can_differ_from_shared_heads() -> None:
             residual_head.weight.fill_(0.02 * (edge_index + 1))
 
     edge_gate_outputs = torch.cat(
-        [head(edge_features[:, edge_index]) for edge_index, head in enumerate(model.boundary_edge_gate_heads)],
+        [
+            head(edge_features[:, edge_index])
+            for edge_index, head in enumerate(model.boundary_edge_gate_heads)
+        ],
         dim=-1,
     )
     edge_residual_outputs = torch.cat(
-        [head(edge_features[:, edge_index]) for edge_index, head in enumerate(model.boundary_edge_residual_heads)],
+        [
+            head(edge_features[:, edge_index])
+            for edge_index, head in enumerate(model.boundary_edge_residual_heads)
+        ],
         dim=-1,
     )
     shared_gate_outputs = model.boundary_gate_head(edge_features).squeeze(-1)
@@ -158,7 +171,9 @@ def test_b3_per_edge_boundary_heads_can_differ_from_shared_heads() -> None:
     assert edge_residual_outputs.shape == (1, 4)
     assert torch.unique(edge_gate_outputs).numel() == 4
     assert torch.unique(edge_residual_outputs).numel() == 4
-    assert not torch.allclose(edge_gate_outputs, shared_gate_outputs, rtol=0, atol=0)
+    assert not torch.allclose(
+        edge_gate_outputs, shared_gate_outputs, rtol=0, atol=0
+    )
     assert not torch.allclose(
         edge_residual_outputs, shared_residual_outputs, rtol=0, atol=0
     )

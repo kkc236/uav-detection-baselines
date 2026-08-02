@@ -156,6 +156,17 @@ class IBERRefiner(nn.Module):
                     for _ in range(3)
                 ]
             )
+            self.edge_direction_experts = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(176, 128),
+                        nn.SiLU(),
+                        nn.Linear(128, 64),
+                        nn.SiLU(),
+                    )
+                    for _ in range(4)
+                ]
+            )
             self.boundary_gain = nn.Parameter(torch.tensor(2.0))
             self.scale_gate_heads = nn.ModuleList(
                 [nn.Linear(64, 1) for _ in range(3)]
@@ -368,7 +379,14 @@ class IBERRefiner(nn.Module):
             mixture = (
                 expert_outputs * scale_weights.unsqueeze(2).unsqueeze(-1)
             ).sum(dim=-2)
-            return shared + mixture
+            edge_outputs = torch.stack(
+                [
+                    expert(direction_input[..., edge_id, :])
+                    for edge_id, expert in enumerate(self.edge_direction_experts)
+                ],
+                dim=-2,
+            )
+            return shared + mixture + edge_outputs
 
         def calibrated_head(
             head: nn.Linear,
