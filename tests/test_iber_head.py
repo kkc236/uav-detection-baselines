@@ -103,6 +103,8 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert hasattr(model, "direction_calibration")
     assert hasattr(model, "context_path")
     assert len(model.scale_experts) == 3
+    assert len(model.scale_gate_heads) == 3
+    assert len(model.scale_residual_heads) == 3
     assert model.boundary_gain.shape == torch.Size([])
     assert float(model.boundary_gain.detach()) == pytest.approx(2.0)
     parameter_names = dict(model.named_parameters())
@@ -191,6 +193,10 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
         assert isinstance(expert[1], nn.SiLU)
         _assert_linear(expert[2], 64, 64)
         assert isinstance(expert[3], nn.SiLU)
+    for head in (*model.scale_gate_heads, *model.scale_residual_heads):
+        _assert_linear(head, 64, 1)
+        torch.testing.assert_close(head.weight, torch.zeros_like(head.weight), rtol=0, atol=0)
+        torch.testing.assert_close(head.bias, torch.zeros_like(head.bias), rtol=0, atol=0)
 
     head_names = {
         "base_gate_head",
