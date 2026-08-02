@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from src.iber_protocol import (
+    BOUNDARY_LOSS_CONTRACT,
     DESIGN_VERSION,
     EXECUTION_ENVIRONMENT,
     EXPECTED_BASELINE_SHA256,
@@ -42,6 +43,15 @@ def _json_compatible(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_json_compatible(item) for item in value]
     return value
+
+
+def test_boundary_loss_contract_is_frozen_into_protocol() -> None:
+    assert PROTOCOL_PAYLOAD["boundary_loss_contract"] == BOUNDARY_LOSS_CONTRACT
+    assert BOUNDARY_LOSS_CONTRACT["direction_margin"] == 0.05
+    assert BOUNDARY_LOSS_CONTRACT["edge_relative_margin"] == 0.10
+    assert BOUNDARY_LOSS_CONTRACT["reference_floor_pixels"] == 1.0
+    with pytest.raises(TypeError):
+        BOUNDARY_LOSS_CONTRACT["direction_margin"] = 0.50
 
 
 def _assert_recursively_immutable(value: object) -> None:
@@ -136,7 +146,7 @@ def test_protocol_sha256_covers_canonical_iber_payload() -> None:
     ).encode("utf-8")
     assert PROTOCOL_SHA256 == hashlib.sha256(serialized).hexdigest().upper()
     assert PROTOCOL_SHA256 == (
-        "34C8E5EE7D517276DBF44856D2B66DD3347CD9380C27D1D38F88514FDFA93D68"
+        "48EE20831DAA8B56806B6CED402752993136F208A56E3A6BB0F8D806B820978A"
     )
     assert len(PROTOCOL_SHA256) == 64
     assert PROTOCOL_PAYLOAD["design_version"] == DESIGN_VERSION

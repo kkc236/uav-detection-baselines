@@ -407,6 +407,7 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
         tuple(model.f3_encoder.parameters()),
         tuple(model.rgb_encoder.parameters()),
         tuple(model.area_calibration.parameters()),
+        tuple(model.context_path.parameters()),
         tuple(model.direction_calibration.parameters()),
     )
     for parameters in parameter_groups:
@@ -414,6 +415,26 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
         assert all(gradient is not None for gradient in gradients)
         assert all(torch.isfinite(gradient).all() for gradient in gradients)
         assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
+
+
+def test_eval_reuses_boundary_raw_without_auxiliary_graph_or_extra_parameters() -> None:
+    model = _refiner("b3").eval()
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+
+    output = model(*_inputs())
+
+    torch.testing.assert_close(
+        output.boundary_aux_gate_raw, output.boundary_gate_raw, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        output.boundary_aux_residual_raw,
+        output.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    assert output.boundary_aux_gate_raw.requires_grad is False
+    assert output.boundary_aux_residual_raw.requires_grad is False
+    assert sum(parameter.numel() for parameter in model.parameters()) == parameter_count
 
 
 def test_first_private_loss_step_updates_all_four_zero_initialized_heads() -> None:

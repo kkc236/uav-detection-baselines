@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -15,7 +16,9 @@ import torch
 
 from src.iber_cache import EvidenceCache, image_rgb_for_probe
 from src.iber_head import IBEROutput, IBERRefiner
+from src.iber_loss import IBERBucketCounts, boundary_bucket_counts, iber_private_loss
 from src.iber_protocol import (
+    BOUNDARY_LOSS_CONTRACT,
     DESIGN_VERSION,
     PRIVATE_OPTIMIZER,
     PRIVATE_SEED,
@@ -25,8 +28,7 @@ from src.iber_protocol import (
     module_state_sha256,
     write_immutable_report,
 )
-from src.itber_geometry import correction_targets
-from src.itber_loss import itber_private_loss
+from src.itber_geometry import correction_targets, cxcywh_to_xyxy
 from src.itber_metrics import aligned_iou, direction_accuracy, edge_area_bucket
 
 
@@ -112,6 +114,31 @@ def _valid_cache_authority(value: object) -> bool:
     return re.fullmatch(r"[0-9a-f]{40}", str(value["source_commit"])) is not None
 
 
+def _valid_boundary_loss_authority(value: object) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "contract",
+        "bucket_counts",
+        "batches_per_epoch",
+    }:
+        return False
+    contract = value["contract"]
+    if not isinstance(contract, Mapping) or json.dumps(
+        dict(contract), sort_keys=True
+    ) != json.dumps(dict(BOUNDARY_LOSS_CONTRACT), sort_keys=True):
+        return False
+    counts = value["bucket_counts"]
+    if not isinstance(counts, Mapping) or set(counts) != {"direction", "margin"}:
+        return False
+    for values in counts.values():
+        if (
+            not isinstance(values, (list, tuple))
+            or len(values) != 3
+            or any(type(item) is not int or item < 0 for item in values)
+        ):
+            return False
+    return type(value["batches_per_epoch"]) is int and value["batches_per_epoch"] > 0
+
+
 def evaluate_gate1(reports: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     """Apply every pre-registered Gate-1 condition without rounding."""
     exact_arms = isinstance(reports, Mapping) and set(reports) == set(ARM_ORDER)
@@ -161,6 +188,7 @@ def evaluate_gate1(reports: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     parameter_counts = [report.get("parameter_count") for report in ordered]
     fingerprints = [report.get("initialization_sha256") for report in ordered]
     cache_authorities = [report.get("cache_authority") for report in ordered]
+    boundary_loss_authorities = [report.get("boundary_loss") for report in ordered]
     engineering["equal_capacity"] = (
         all(type(value) is int and value > 0 for value in parameter_counts)
         and len(set(parameter_counts)) == 1
@@ -176,6 +204,14 @@ def evaluate_gate1(reports: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     engineering["equal_cache_authority"] = (
         all(_valid_cache_authority(value) for value in cache_authorities)
         and all(dict(value) == dict(cache_authorities[0]) for value in cache_authorities)
+    )
+    engineering["equal_boundary_loss_authority"] = (
+        all(_valid_boundary_loss_authority(value) for value in boundary_loss_authorities)
+        and all(
+            json.dumps(dict(value), sort_keys=True)
+            == json.dumps(dict(boundary_loss_authorities[0]), sort_keys=True)
+            for value in boundary_loss_authorities
+        )
     )
     engineering["finite_metrics"] = all(
         isinstance(report.get("metrics"), Mapping)
@@ -236,6 +272,30 @@ def _batches(
     records: Sequence[Mapping[str, Any]], size: int = PRIVATE_BATCH
 ) -> Sequence[Sequence[Mapping[str, Any]]]:
     return [records[start : start + size] for start in range(0, len(records), size)]
+
+
+def _fixed_boundary_bucket_counts(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    rho: float,
+    image_size: int,
+) -> IBERBucketCounts:
+    """Aggregate cache-global counts from immutable stock assignments."""
+    total = IBERBucketCounts(direction=(0, 0, 0), margin=(0, 0, 0))
+    for record in records:
+        source = record["match_source"].to(dtype=torch.long)
+        destination = record["match_target"].to(dtype=torch.long)
+        if not len(source):
+            continue
+        stock_edges = cxcywh_to_xyxy(record["stock_boxes"].float())[source]
+        target_edges = record["target_edges"].float()[destination]
+        total = total + boundary_bucket_counts(
+            stock_edges,
+            target_edges,
+            rho=rho,
+            image_size=image_size,
+        )
+    return total
 
 
 def _move_batch(
@@ -451,6 +511,10 @@ def train_probe_arm(
         growth_interval=int(AMP_AUTHORITY["growth_interval"]),
     )
     history: list[dict[str, float | int]] = []
+    bucket_counts = _fixed_boundary_bucket_counts(
+        cache.records["train"], rho=refiner.rho, image_size=refiner.image_size
+    )
+    batches_per_epoch = len(_batches(cache.records["train"]))
     refiner.train()
     for epoch in range(1, PROBE_EPOCHS + 1):
         losses: list[float] = []
@@ -464,11 +528,15 @@ def train_probe_arm(
                 enabled=device.type == "cuda",
             ):
                 output: IBEROutput = refiner(**evidence)
-                private_losses = itber_private_loss(
+                private_losses = iber_private_loss(
                     output,
                     target_edges=target_edges,
                     match_indices=matches,
                     rho=refiner.rho,
+                    image_size=refiner.image_size,
+                    boundary_supervision=arm != "b0",
+                    bucket_counts=bucket_counts,
+                    batches_per_epoch=batches_per_epoch,
                 )
             scaler.scale(private_losses.total).backward()
             scaler.unscale_(optimizer)
@@ -520,6 +588,11 @@ def train_probe_arm(
             "optimizer": optimizer.state_dict(),
             "scaler": scaler.state_dict(),
             "history": history,
+            "boundary_loss": {
+                "contract": dict(BOUNDARY_LOSS_CONTRACT),
+                "bucket_counts": bucket_counts.as_dict(),
+                "batches_per_epoch": batches_per_epoch,
+            },
         },
     )
     report = {
@@ -543,6 +616,11 @@ def train_probe_arm(
             "sha256": file_sha256(checkpoint),
         },
         "history": history,
+        "boundary_loss": {
+            "contract": dict(BOUNDARY_LOSS_CONTRACT),
+            "bucket_counts": bucket_counts.as_dict(),
+            "batches_per_epoch": batches_per_epoch,
+        },
         "metrics": metrics,
     }
     write_immutable_report(output_root / f"{arm}-report.json", report)

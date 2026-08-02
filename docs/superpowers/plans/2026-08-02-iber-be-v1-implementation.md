@@ -17,6 +17,7 @@ Create the following focused units:
 - `src/iber_protocol.py`: immutable design/environment/data/checkpoint/training authority.
 - `src/iber_sampling.py`: F3 and RGB boundary grids and sparse evidence extraction.
 - `src/iber_head.py`: equal-capacity B0–B3 dual-route refiner and output diagnostics.
+- `src/iber_loss.py`: cache-global balanced boundary direction and counterfactual edge supervision.
 - `src/rtdetr_iber.py`: frozen detector adapter and last-layer-only evidence recorder.
 - `src/iber_cache.py`: trajectory-free sharded Probe cache with RGB `uint8 CHW` records.
 - `src/iber_probe.py`: 12-epoch B0–B3 private training, metrics, and Gate-1 decision.
@@ -36,8 +37,9 @@ Create the following focused units:
 - `deploy/iber/*`: bare-server bootstrap, verification, bundle, and publication templates.
 - `docs/IBER_BE_SERVER_GUIDE.md`: exact deployment, monitoring, recovery, and stop rules.
 
-The implementation may import the already-tested pure functions from `src/itber_geometry.py`,
-`src/itber_metrics.py`, and `src/itber_loss.py`. It must not modify those files or import
+The implementation may import the already-tested pure functions from `src/itber_geometry.py`
+and `src/itber_metrics.py`. IBER owns an independent `src/iber_loss.py`; Probe must not import
+`src/itber_loss.py`. It must not modify legacy I-TBER files or import
 `ITBERRefiner`, `ITBERRecordingDecoder`, `trajectory_state`, or any I-TBER protocol/publication class.
 
 ### Task 1: Freeze the independent IBER-BE protocol
@@ -305,9 +307,10 @@ rgb_raw = sample_rgb_boundary_evidence(...) if use_rgb else torch.zeros(..., 15)
 
 - [ ] **Step 4: Run head/loss/geometry tests**
 
-Run: `python -m pytest tests/test_iber_head.py tests/test_itber_loss.py tests/test_itber_geometry.py -q`
+Run: `python -m pytest tests/test_iber_head.py tests/test_iber_loss.py tests/test_itber_geometry.py -q`
 
-Expected: all tests pass; the reused private loss accepts `IBEROutput` structurally.
+Expected: all tests pass; the independent IBER loss accepts `IBEROutput`, keeps B0 graph-zero,
+and isolates boundary auxiliary gradients from the shared base path.
 
 - [ ] **Step 5: Commit the head**
 
@@ -355,7 +358,7 @@ Use `src/rtdetr_itber.py:75` as the local parity reference for the exact Ultraly
 equations, but delete all trajectory accumulation and record only the final normal 300 queries.
 `FrozenIBERAdapter.forward_evidence(image)` must call the frozen detector once, capture head input
 F3 via a forward pre-hook, and pass the same detached `image` tensor to `IBERRefiner`. Use the
-stock matcher once in `training_step()` and call the existing isolated private loss.
+stock matcher once in `training_step()` and call the independent isolated IBER private loss.
 
 - [ ] **Step 4: Run adapter and stock decoder parity tests**
 

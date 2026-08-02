@@ -20,6 +20,7 @@ from src.iber_probe import (
     evaluate_gate1,
 )
 from src.iber_protocol import (
+    BOUNDARY_LOSS_CONTRACT,
     DESIGN_VERSION,
     PRIVATE_OPTIMIZER,
     PRIVATE_SEED,
@@ -82,6 +83,14 @@ def _report(arm: str, metrics: dict[str, float]) -> dict:
             {"epoch": epoch, "total_loss": 2.0 - epoch / 20}
             for epoch in range(1, PROBE_EPOCHS + 1)
         ],
+        "boundary_loss": {
+            "contract": dict(BOUNDARY_LOSS_CONTRACT),
+            "bucket_counts": {
+                "direction": [100, 200, 300],
+                "margin": [80, 160, 240],
+            },
+            "batches_per_epoch": 81,
+        },
         "metrics": metrics,
     }
 
@@ -192,10 +201,13 @@ def test_gate1_forbids_best_epoch_substitution_even_with_twelve_history_rows() -
         lambda report: report.update(parameter_count=report["parameter_count"] + 1),
         lambda report: report.update(initialization_sha256="2" * 64),
         lambda report: report.update(cache_authority={**report["cache_authority"], "source_commit": "f" * 40}),
+        lambda report: report["boundary_loss"]["contract"].update(
+            direction_margin=0.50
+        ),
         lambda report: report.update(history=report["history"][:-1]),
     ],
 )
-def test_gate1_rejects_optimizer_amp_capacity_initialization_cache_or_history_drift(mutate) -> None:
+def test_gate1_rejects_optimizer_amp_capacity_initialization_cache_loss_or_history_drift(mutate) -> None:
     reports = passing_reports()
     mutate(reports["b2"])
     assert evaluate_gate1(reports)["status"] == "engineering_invalid"

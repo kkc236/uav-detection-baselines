@@ -195,11 +195,13 @@ rho      = 0.05
 
 ## 7. 匹配与私有损失
 
-只复用最后一层 normal-query stock Hungarian 索引，不进行第二次匹配。损失沿用已验证的
-显式监督：
+只复用最后一层 normal-query stock Hungarian 索引，不进行第二次匹配。首次 Gate-1 的
+IoU 条件通过、edge MAE 与 tiny/small direction 条件失败后，下一候选冻结为独立 IBER
+loss；不修改 Gate 阈值、head 容量、采样、matcher 或 detector：
 
 ```text
 L_private = L_box + 1.0 L_direction + 0.25 L_gate + 0.05 L_noop
+          + 1.0 L_boundary_direction + 1.0 L_boundary_margin
 L_box     = L1(refined,gt) + GIoU(refined,gt)
 ```
 
@@ -207,6 +209,14 @@ L_box     = L1(refined,gt) + GIoU(refined,gt)
 - matched gate 使用 correction magnitude 软标签；
 - matched/unmatched gate 独立归一化；
 - unmatched 使用 detached stock quality 加权 no-op；
+- B0 的两个 boundary auxiliary 精确为 graph-zero；B1–B3 使用相同 auxiliary；
+- boundary direction 使用固定 cache 的 tiny/small/other 全局有效边计数做逆频率归一化，
+  对符号使用 `0.05` hinge margin，达到安全符号裕量后停止继续放大；
+- boundary margin 使用 `min(detached stock error, detached boundary_off error)` 作为不可获利
+  恶化的反事实参照，忽略 stock 误差小于 1 像素的边，并要求 10% 相对改善；
+- boundary auxiliary 使用训练期专用的 detached area/context 条件，只向 boundary 参数路径传播梯度；
+  原主 refinement 路径保留共享上下文梯度，eval/inference 不计算 auxiliary 专用分支；
+- 上述常数、启用臂、全局桶计数和 batch 归一化写入 protocol SHA、checkpoint 和 Probe report；
 - 不使用 HQ 困难样本加权、Top-K、focal reweight 或新的 AP surrogate；
 - 不修改 stock loss，也不向 detector 传播梯度。
 

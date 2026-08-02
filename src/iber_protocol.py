@@ -51,6 +51,20 @@ PRIVATE_OPTIMIZER = _freeze(
         "clip": 10.0,
     }
 )
+BOUNDARY_LOSS_CONTRACT = _freeze(
+    {
+        "identity": "global-balanced-counterfactual-boundary-v1",
+        "enabled_arms": ("b1", "b2", "b3"),
+        "direction_margin": 0.05,
+        "edge_relative_margin": 0.10,
+        "reference_floor_pixels": 1.0,
+        "direction_weight": 1.0,
+        "edge_margin_weight": 1.0,
+        "bucket_balance": "fixed-cache-global-edge-counts",
+        "edge_reference": "min(detached_stock,detached_boundary_off)",
+        "shared_context_gradient": "detached_auxiliary_only",
+    }
+)
 EXPECTED_BASELINE_SHA256 = (
     "54CE60289DD34C6750B8BA5F7516EEFCF3AFEF6C174C6E4F3B1EF810C883099B"
 )
@@ -124,6 +138,7 @@ PROTOCOL_PAYLOAD = _freeze(
         "screen_val_count": SCREEN_VAL_COUNT,
         "private_seed": PRIVATE_SEED,
         "private_optimizer": PRIVATE_OPTIMIZER,
+        "boundary_loss_contract": BOUNDARY_LOSS_CONTRACT,
         "expected_sha256": {
             "baseline": EXPECTED_BASELINE_SHA256,
             "dataset": EXPECTED_DATASET_SHA256,

@@ -48,6 +48,8 @@ class IBEROutput:
     boundary_gate_raw: torch.Tensor
     base_residual_raw: torch.Tensor
     boundary_residual_raw: torch.Tensor
+    boundary_aux_gate_raw: torch.Tensor
+    boundary_aux_residual_raw: torch.Tensor
 
     def select_boxes(self, mode: str) -> torch.Tensor:
         """Select one of the stock, full, or area-only box outputs."""
@@ -360,9 +362,19 @@ class IBERRefiner(nn.Module):
             torch.finfo(scale_weights.dtype).eps
         )
 
-        def direction(features_f3: torch.Tensor, features_rgb: torch.Tensor) -> torch.Tensor:
+        def direction(
+            features_f3: torch.Tensor,
+            features_rgb: torch.Tensor,
+            *,
+            detach_context: bool = False,
+        ) -> torch.Tensor:
+            direction_area = area_context.detach() if detach_context else area_context
+            direction_context = (
+                context_per_edge.detach() if detach_context else context_per_edge
+            )
             direction_input = torch.cat(
-                (features_f3, features_rgb, area_context, context_per_edge), dim=-1
+                (features_f3, features_rgb, direction_area, direction_context),
+                dim=-1,
             )
             shared = self.direction_calibration(direction_input)
             expert_outputs = torch.stack(
@@ -439,6 +451,45 @@ class IBERRefiner(nn.Module):
             (evidence_residual - zero_residual)
             * self.boundary_gain.clamp(0.5, 4.0)
         )
+        if self.training and torch.is_grad_enabled():
+            aux_zero_direction = direction(
+                zero_f3_features, zero_rgb_features, detach_context=True
+            )
+            aux_evidence_direction = direction(
+                f3_boundary_features, rgb_boundary_features, detach_context=True
+            )
+            aux_zero_gate = calibrated_head(
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                aux_zero_direction,
+            ).squeeze(-1)
+            aux_evidence_gate = calibrated_head(
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                aux_evidence_direction,
+            ).squeeze(-1)
+            boundary_aux_gate_raw = aux_evidence_gate - aux_zero_gate
+            aux_zero_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
+                aux_zero_direction,
+            ).squeeze(-1)
+            aux_evidence_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
+                aux_evidence_direction,
+            ).squeeze(-1)
+            boundary_aux_residual_raw = (
+                (aux_evidence_residual - aux_zero_residual)
+                * self.boundary_gain.clamp(0.5, 4.0)
+            )
+        else:
+            boundary_aux_gate_raw = boundary_gate_raw.detach()
+            boundary_aux_residual_raw = boundary_residual_raw.detach()
         residual_raw = base_residual_raw + boundary_residual_raw
         residuals = residual_raw.tanh()
         effective_correction = gates * residuals
@@ -487,4 +538,6 @@ class IBERRefiner(nn.Module):
             boundary_gate_raw=boundary_gate_raw,
             base_residual_raw=base_residual_raw,
             boundary_residual_raw=boundary_residual_raw,
+            boundary_aux_gate_raw=boundary_aux_gate_raw,
+            boundary_aux_residual_raw=boundary_aux_residual_raw,
         )
