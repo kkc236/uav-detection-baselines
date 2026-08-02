@@ -340,7 +340,11 @@ def compute_detection_metrics(
 
 
 def _build_validation_loader(
-    dataset_root: Path, baseline_checkpoint: Path, device: torch.device
+    dataset_root: Path,
+    baseline_checkpoint: Path,
+    device: torch.device,
+    *,
+    save_dir: Path,
 ):
     from ultralytics.models.rtdetr.val import RTDETRValidator
 
@@ -353,6 +357,7 @@ def _build_validation_loader(
         "channels": 3,
     }
     validator = RTDETRValidator(
+        save_dir=save_dir,
         args={
             "model": str(baseline_checkpoint.resolve()),
             "data": data,
@@ -457,7 +462,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         image_size=EVALUATION_CONSTANTS["imgsz"],
         rho=0.05,
     ).to(device).eval() as adapter:
-        loader, validator = _build_validation_loader(dataset_root, baseline, device)
+        loader, validator = _build_validation_loader(
+            dataset_root,
+            baseline,
+            device,
+            save_dir=args.output.resolve().parent / "stock-validator",
+        )
         repeats = [
             _evaluate_stock_once(adapter, loader, validator, device=device)
             for _ in range(EVALUATION_CONSTANTS["repeats"])

@@ -104,6 +104,8 @@ def _build_validation_loader(
     dataset_root: Path,
     baseline_checkpoint: Path,
     device: torch.device,
+    *,
+    save_dir: Path,
 ):
     """Use the exact Ultralytics RT-DETR validation preprocessing and classes."""
     from ultralytics.models.rtdetr.val import RTDETRValidator
@@ -117,6 +119,7 @@ def _build_validation_loader(
         "channels": 3,
     }
     validator = RTDETRValidator(
+        save_dir=save_dir,
         args={
             "model": str(baseline_checkpoint.resolve()),
             "data": data,
@@ -492,7 +495,10 @@ def evaluate_checkpoint(
         if artifact.get("detector_sha_after") != detector_sha_before:
             raise ValueError("IBER-BE private checkpoint detector authority mismatch")
         loader, validator = _build_validation_loader(
-            dataset_root, baseline_checkpoint, device
+            dataset_root,
+            baseline_checkpoint,
+            device,
+            save_dir=output_path.resolve().parent / "validator",
         )
         repeats = [
             _evaluate_once(adapter, loader, validator, device=device)

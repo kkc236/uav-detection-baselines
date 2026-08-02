@@ -110,5 +110,7 @@ def test_stock_authority_cli_exposes_only_artifact_paths() -> None:
 def test_stock_source_refuses_old_itber_identity() -> None:
     source = Path("scripts/evaluate_iber_stock.py").read_text(encoding="utf-8")
     assert "FrozenIBERAdapter" in source
+    assert "save_dir=save_dir" in source
+    assert 'args.output.resolve().parent / "stock-validator"' in source
     assert "rtdetr_itber" not in source
     assert "itber-v1.1" not in source

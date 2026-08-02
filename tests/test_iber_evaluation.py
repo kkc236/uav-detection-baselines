@@ -494,6 +494,8 @@ def test_evaluator_source_is_independent_safe_and_same_checkpoint() -> None:
         "PROTOCOL_SHA256",
         "last5_stock_map",
         "last5_refined_map",
+        "save_dir=save_dir",
+        'output_path.resolve().parent / "validator"',
     ):
         assert marker in source
     assert "FrozenITBERAdapter" not in source
