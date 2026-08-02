@@ -1,0 +1,52 @@
+{
+  "files": {
+    "authority.json": {
+      "bytes": 620,
+      "sha256": "E587CFB4997BEEF24D64985A33DD9C2CF136C5737162BCE29356B22A83E428F4"
+    },
+    "cache/manifest.json": {
+      "bytes": 14681,
+      "sha256": "A45492F28B3533391D7D4B2708E7EDC59160FC783FA8662256415F05403EE4D7"
+    },
+    "gate0/attempt-001.json": {
+      "bytes": 1620,
+      "sha256": "D83DE94116D2FEBCAA47D06F05666C17CFC134FBFB91C0AEBE94B8DA68EF91A0"
+    },
+    "logs/probe.log": {
+      "bytes": 13536,
+      "sha256": "024932EE0A28D72F7BC53F3D0A11A8BF219474755903D6D0FF188BB1EA3D386F"
+    },
+    "pipeline-state.json": {
+      "bytes": 1497,
+      "sha256": "9B9166AD46EB797459486E3A80618F2AB1EFD51B8EDE25AF88A2F375ABD5A8AE"
+    },
+    "probe/b0-report.json": {
+      "bytes": 3183,
+      "sha256": "398F9372374743514920ED6AA9E63EA8B491DE9DDFFB8A67CEB38EDAC7F2A94A"
+    },
+    "probe/b1-report.json": {
+      "bytes": 3160,
+      "sha256": "597360A0C1ADA0C04E6323E6337C504BDAB9020301E637626CA4075426DF6CFC"
+    },
+    "probe/b2-report.json": {
+      "bytes": 3132,
+      "sha256": "03306B4F846993D5F22625A1AA763C3794F1DA2FEE592E08C8BF7695BC2B9DAC"
+    },
+    "probe/b3-report.json": {
+      "bytes": 3163,
+      "sha256": "7E337725AEC35EA1902F1BAB12D0110D24680E2E19AA15C2324D518FBA406B5F"
+    },
+    "probe/gate1-decision.json": {
+      "bytes": 13255,
+      "sha256": "8B89F3C4A4779F5C41CDD50FAA14FF6C2E623EEE30DC56A832299AF136886972"
+    },
+    "stock-authority.json": {
+      "bytes": 1633,
+      "sha256": "5BF80B539E9A7ED1A5C5B27722935F1B80573520FD830AEB6FE33B2CB038BDE3"
+    }
+  },
+  "format_version": 1,
+  "identity": "IBER-BE",
+  "outcome": "scientific_failed",
+  "source_commit": "2a82e14dcc46db47c842601d9b71e1360865a461"
+}
