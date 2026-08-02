@@ -50,8 +50,8 @@ def test_boundary_loss_contract_is_frozen_into_protocol() -> None:
     assert BOUNDARY_LOSS_CONTRACT["direction_margin"] == 0.05
     assert BOUNDARY_LOSS_CONTRACT["edge_relative_margin"] == 0.10
     assert BOUNDARY_LOSS_CONTRACT["reference_floor_pixels"] == 1.0
-    assert BOUNDARY_LOSS_CONTRACT["direction_weight"] == 0.01
-    assert BOUNDARY_LOSS_CONTRACT["edge_margin_weight"] == 0.01
+    assert BOUNDARY_LOSS_CONTRACT["direction_weight"] == 0.10
+    assert BOUNDARY_LOSS_CONTRACT["edge_margin_weight"] == 0.10
     with pytest.raises(TypeError):
         BOUNDARY_LOSS_CONTRACT["direction_margin"] = 0.50
 
@@ -148,7 +148,7 @@ def test_protocol_sha256_covers_canonical_iber_payload() -> None:
     ).encode("utf-8")
     assert PROTOCOL_SHA256 == hashlib.sha256(serialized).hexdigest().upper()
     assert PROTOCOL_SHA256 == (
-        "CD886E082DB13B3DD4A9757B06128BE602E674A2C3BD37C85983B5790BF40123"
+        "18EEED506F940E7102CFD2542001BD811E2E374963626E4D92FBC9EB7A0B2655"
     )
     assert len(PROTOCOL_SHA256) == 64
     assert PROTOCOL_PAYLOAD["design_version"] == DESIGN_VERSION
