@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "design_version": "iber-be-v1.0",
+  "stage": "screen",
+  "probe": "b3",
+  "seed": 0,
+  "expected_private_epochs": 30,
+  "repo": "kkc236/uav-detection-baselines",
+  "repo_url": "https://github.com/kkc236/uav-detection-baselines.git",
+  "source_branch": "codex/iber-be",
+  "source_commit": "REPLACE_WITH_VERIFIED_40_CHARACTER_COMMIT_SHA",
+  "results_branch": "iber-be-v1-results",
+  "tag": "iber-be-v1-rtdetr-l-live",
+  "asset_prefix": "iber-be-v1.0-screen-seed0-b3",
+  "run_name": "iber-be-v1.0-screen-seed0-b3-SOURCE_SHORT_SHA",
+  "token_file": "/data/uav/HANDOFFS/secrets/github_token",
+  "results_repo": "/data/uav/results/iber-be-v1-SOURCE_SHORT_SHA",
+  "gate1_decision": "/data/uav/runs/iber-be-v1/SOURCE_SHORT_SHA-seed0-amended/gate1-decision.json",
+  "retain": 3
+}
+
