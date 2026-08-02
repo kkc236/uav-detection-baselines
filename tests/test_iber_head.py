@@ -711,17 +711,16 @@ def test_b0_disables_boundary_outputs_even_when_boundary_heads_are_nonzero() -> 
     torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("probe", sorted(PROBES))
-def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(probe: str) -> None:
-    model = _refiner(probe)
+def test_b0_boundary_outputs_are_exact_zero_for_arbitrary_model_parameters() -> None:
+    model = _refiner("b0")
+    generator = torch.Generator().manual_seed(90210)
     with torch.no_grad():
-        model.boundary_gate_head.weight.fill_(0.07)
-        model.boundary_gate_head.bias.fill_(0.13)
-        model.boundary_residual_head.weight.fill_(-0.05)
-        model.boundary_residual_head.bias.fill_(0.21)
+        for parameter in model.parameters():
+            parameter.copy_(
+                torch.empty_like(parameter).uniform_(-0.25, 0.25, generator=generator)
+            )
 
-    hidden, boxes, scores, f3, image = _inputs(batch=1)
-    output = model(hidden, boxes, scores, torch.zeros_like(f3), torch.zeros_like(image))
+    output = model(*_inputs(batch=1))
 
     torch.testing.assert_close(
         output.boundary_gate_raw,
@@ -736,6 +735,125 @@ def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(probe: str)
         atol=0,
     )
     torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+def test_sampled_boundary_evidence_is_not_masked_by_raw_input_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner("b3")
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_residual_head.weight.fill_(-0.05)
+
+    def nonzero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_ones((features.shape[0], boxes.shape[1], 4, 96))
+
+    def nonzero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_ones((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", nonzero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", nonzero_rgb)
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+
+    output = model(
+        hidden,
+        boxes,
+        scores,
+        torch.zeros_like(f3),
+        torch.zeros_like(image),
+    )
+
+    assert torch.count_nonzero(output.boundary_gate_raw) > 0
+    assert torch.count_nonzero(output.boundary_residual_raw) > 0
+
+
+@pytest.mark.parametrize("probe", sorted(PROBES))
+def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(
+    probe: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner(probe)
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_gate_head.bias.fill_(0.13)
+        model.boundary_residual_head.weight.fill_(-0.05)
+        model.boundary_residual_head.bias.fill_(0.21)
+
+    def zero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_zeros((features.shape[0], boxes.shape[1], 4, 96))
+
+    def zero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_zeros((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", zero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", zero_rgb)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    output = model(hidden, boxes, scores, f3, image)
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+def test_b3_zero_sampled_evidence_exactly_degrades_to_boundary_off_for_arbitrary_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner("b3")
+    generator = torch.Generator().manual_seed(314159)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.copy_(
+                torch.empty_like(parameter).uniform_(-0.20, 0.20, generator=generator)
+            )
+
+    def zero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_zeros((features.shape[0], boxes.shape[1], 4, 96))
+
+    def zero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_zeros((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", zero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", zero_rgb)
+
+    output = model(*_inputs(batch=1))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+    torch.testing.assert_close(output.refined_boxes, output.boundary_off_boxes, rtol=0, atol=0)
 
 
 def test_b3_uses_true_joint_modality_fusion() -> None:

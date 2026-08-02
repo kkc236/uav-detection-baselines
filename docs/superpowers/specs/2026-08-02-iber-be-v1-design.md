@@ -55,7 +55,7 @@ backbone/encoder/decoder，仅供私有边界细化器使用。
 - GPU：NVIDIA GeForce RTX 4090；
 - Python `3.10.12`、PyTorch `2.5.1+cu121`、Torchvision
   `0.20.1+cu121`、CUDA `12.1`、Ultralytics `8.4.90`；
-- 当前执行驱动 `570.133.07`，继续绑定已批准 runtime amendment；
+- 当前执行驱动 `550.142`、显存上报 `24564 MiB`，与 baseline 完全一致，使用 baseline-aligned runtime identity；
 - imgsz `640`、batch `8`、workers `8`、device `0`、AMP 固定 scale
   `128`、seed0、deterministic、cache=False；
 - query 数 `300`、max_det `300`、NMS=False；
@@ -110,8 +110,8 @@ stock box 转为归一化 `xyxy`。每条边沿切向固定取：
 2. 法向距离
    `d_f3 = clip(0.08 * min(w,h), 1/640, 4/640)`；
 3. 每个切向位置读取 outside/edge/inside；
-4. 每条边形成
-   `[edge, inside-outside, abs(inside-outside)]`；
+4. 每条边形成非对称方向证据
+   `[edge, outside→edge, edge→inside]`；
 5. `Linear(96,32) -> SiLU` 得到 F3 boundary embedding。
 
 ### 5.3 RGB 高分辨率边界证据
@@ -127,12 +127,12 @@ d_far  = clip(0.20 * min(w,h), 2/640, 8/640)
 其中 `w,h` 为归一化 stock box 尺寸。每条边对三个切向位置取均值后形成：
 
 ```text
-edge_rgb                         3
-near_inside - near_outside      3
-abs(near_inside-near_outside)   3
-far_inside - far_outside        3
-abs(far_inside-far_outside)     3
-总计                            15
+edge_rgb                        3
+near_outside→edge               3
+near_edge→inside                3
+far_outside→edge                3
+far_edge→inside                 3
+总计                           15
 ```
 
 编码器固定为：

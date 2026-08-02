@@ -38,8 +38,8 @@ def _complete_tree(root: Path) -> None:
             "ultralytics": "8.4.90",
             "cuda": "12.1",
             "gpu": "NVIDIA GeForce RTX 4090",
-            "reported_memory_mib": 49140,
-            "driver": "570.133.07",
+            "reported_memory_mib": 24564,
+            "driver": "550.142",
         },
         "files": [],
     }
@@ -90,6 +90,9 @@ def _complete_tree(root: Path) -> None:
             "http.version=HTTP/1.1",
             "git-http.env",
             "GIT_CONFIG_COUNT",
+            "兼容状态，不表示存在硬件差异",
+            "`-seed0-amended` 是旧路径标签",
+            "iber-be-v1.0-baseline-aligned-runtime-2026-08-02",
         )
     )
     (root / "docs/IBER_BE_SERVER_GUIDE.md").write_text(guide, encoding="utf-8")
@@ -192,6 +195,8 @@ def test_repository_guide_documents_monitoring_recovery_and_gate1_prohibition() 
         "http.version=HTTP/1.1",
         "git-http.env",
         "GIT_CONFIG_COUNT",
+        "兼容状态，不表示存在硬件差异",
+        "`-seed0-amended` 是旧路径标签",
     ):
         assert marker in guide
     assert "github_pat_" not in guide

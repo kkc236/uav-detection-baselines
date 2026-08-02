@@ -45,8 +45,8 @@ def _write_manifest(root: Path, relative: str, *, source_commit: str = SOURCE_CO
             "ultralytics": "8.4.90",
             "cuda": "12.1",
             "gpu": "NVIDIA GeForce RTX 4090",
-            "reported_memory_mib": 49140,
-            "driver": "570.133.07",
+            "reported_memory_mib": 24564,
+            "driver": "550.142",
         },
         "files": [
             {
@@ -71,13 +71,13 @@ def test_scripts_exist_use_strict_bash_and_embed_no_credentials() -> None:
         assert "a1314520" not in content
 
 
-def test_host_verifier_is_read_only_and_locks_amended_runtime() -> None:
+def test_host_verifier_is_read_only_and_locks_baseline_runtime() -> None:
     content = SCRIPTS[0].read_text(encoding="utf-8")
     for required in (
         "NVIDIA GeForce RTX 4090",
-        "expected_gpu_memory_mib=49140",
+        "expected_gpu_memory_mib=24564",
         'baseline_reference_driver="550.142"',
-        'expected_driver="570.133.07"',
+        'expected_driver="550.142"',
         "passed_with_runtime_amendment",
         "Python 3.10.12",
         "torch==2.5.1+cu121",
@@ -86,13 +86,30 @@ def test_host_verifier_is_read_only_and_locks_amended_runtime() -> None:
         "CUDA 12.1",
         "df -Pk /data",
         "MemTotal",
-        "github.com",
+        "api.github.com",
         "mirrors.aliyun.com",
         "download.pytorch.org",
     ):
         assert required in content
     for mutation in ("apt-get", "mkdir", "touch", "chmod", "install -d", "rm -"):
         assert mutation not in content
+    assert "49140" not in content
+    assert "570.133.07" not in content
+    assert 'for key in ("github_reachable", "mirror_reachable", "pytorch_reachable")' not in content
+
+
+def test_active_spec_and_plan_lock_baseline_runtime_and_asymmetric_evidence() -> None:
+    paths = (
+        Path("docs/superpowers/specs/2026-08-02-iber-be-v1-design.md"),
+        Path("docs/superpowers/plans/2026-08-02-iber-be-v1-implementation.md"),
+    )
+    contents = [path.read_text(encoding="utf-8") for path in paths]
+    for content in contents:
+        assert "570.133.07" not in content
+        assert "49140" not in content
+        assert "550.142" in content
+    assert "outside→edge" in contents[0]
+    assert "edge→inside" in contents[0]
 
 
 def test_wheelhouse_is_mirror_first_and_exactly_version_pinned() -> None:
@@ -149,9 +166,13 @@ def test_bootstrap_uses_immutable_source_and_run_roots_and_mode_600_secrets() ->
         "GIT_CONFIG_COUNT=1",
         "GIT_CONFIG_KEY_0=http.version",
         "GIT_CONFIG_VALUE_0=HTTP/1.1",
+        'expected_driver="550.142"',
+        "expected_gpu_memory_mib=24564",
     ):
         assert required in content
     assert not re.search(r"/data/uav/(?:runs|results|cache)/itber(?:/|[-_.])", content, re.I)
+    assert "49140" not in content
+    assert "570.133.07" not in content
 
 
 def test_bootstrap_rechecks_completed_marker_and_uses_only_public_remote() -> None:
@@ -187,9 +208,22 @@ def test_artifact_manifest_template_locks_all_scientific_authorities() -> None:
         "ultralytics": "8.4.90",
         "cuda": "12.1",
         "gpu": "NVIDIA GeForce RTX 4090",
-        "reported_memory_mib": 49140,
-        "driver": "570.133.07",
+        "reported_memory_mib": 24564,
+        "driver": "550.142",
     }
+
+
+def test_server_guide_describes_amendment_names_as_compatibility_only() -> None:
+    guide = Path("docs/IBER_BE_SERVER_GUIDE.md").read_text(encoding="utf-8")
+
+    assert "24564 MiB" in guide
+    assert "baseline 与 execution driver 均为 `550.142`" in guide
+    assert "兼容状态，不表示存在硬件差异" in guide
+    assert "`-seed0-amended` 是旧路径标签" in guide
+    assert "iber-be-v1.0-baseline-aligned-runtime-2026-08-02" in guide
+    assert "这些网络诊断不作为科学或工程通过条件" in guide
+    assert "49140 MiB" not in guide
+    assert "570.133.07" not in guide
 
 
 def test_publication_template_is_iber_only_credential_free_and_gate_locked() -> None:

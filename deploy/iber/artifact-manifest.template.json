@@ -21,9 +21,8 @@
     "ultralytics": "8.4.90",
     "cuda": "12.1",
     "gpu": "NVIDIA GeForce RTX 4090",
-    "reported_memory_mib": 49140,
-    "driver": "570.133.07"
+    "reported_memory_mib": 24564,
+    "driver": "550.142"
   },
   "files": []
 }
-

@@ -4,7 +4,7 @@
 
 **Goal:** Build, verify, deploy, and run the trajectory-free IBER-BE boundary refiner through B0–B3 Gate-1 and, only if Gate-1 passes, a fixed-subset seed0 30-epoch same-checkpoint stock/refined screen.
 
-**Architecture:** Keep the matched RT-DETR-L checkpoint permanently frozen. Combine stride-8 F3 semantic boundary samples with sparse input-resolution RGB inside/edge/outside contrasts in a private dual-route per-edge gate/residual head. Use separate `iber_*` protocols, checkpoints, reports, GitHub assets, and run roots so no I-TBER v1.1 evidence can be overwritten or reinterpreted.
+**Architecture:** Keep the matched RT-DETR-L checkpoint permanently frozen. Combine stride-8 F3 semantic boundary samples with sparse input-resolution RGB one-sided outside→edge and edge→inside directions in a private dual-route per-edge gate/residual head. Use separate `iber_*` protocols, checkpoints, reports, GitHub assets, and run roots so no I-TBER v1.1 evidence can be overwritten or reinterpreted.
 
 **Tech Stack:** Python 3.10.12, PyTorch 2.5.1+cu121, Torchvision 0.20.1+cu121, Ultralytics 8.4.90, CUDA 12.1, pytest, Git/GitHub Releases, Bash deployment scripts, NVIDIA RTX 4090.
 
@@ -72,7 +72,8 @@ def test_iber_protocol_is_independent_and_frozen():
     assert EXPECTED_BASELINE_SHA256.startswith("54CE6028")
     assert EXPECTED_DATASET_SHA256.startswith("FD92E9FF")
     assert EXPECTED_SUBSET_SHA256.startswith("52660F55")
-    assert execution_environment()["driver"] == "570.133.07"
+    assert execution_environment()["driver"] == "550.142"
+    assert execution_environment()["reported_memory_mib"] == 24564
 
 
 def test_screen_contract_rejects_scientific_overrides():
@@ -143,7 +144,7 @@ Cover left/top/right/bottom normal orientation, near/far radii, exact output sha
 `align_corners=False`, border padding, gradients, and no full-image learned operator:
 
 ```python
-def test_rgb_boundary_evidence_has_exact_shape_and_signed_contrast():
+def test_rgb_boundary_evidence_has_exact_shape_and_one_sided_directions():
     image = torch.zeros(1, 3, 640, 640)
     image[:, :, :, 320:] = 1.0
     # The left edge is exactly on the synthetic x=0.5 intensity boundary.
@@ -186,13 +187,13 @@ def rgb_normal_radii(boxes: torch.Tensor, image_size: int) -> tuple[torch.Tensor
 def sample_rgb_boundary_evidence(
     images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
 ) -> torch.Tensor:
-    """Return [edge, near contrast/abs, far contrast/abs] as [B,Q,4,15]."""
+    """Return [edge, near outside→edge/edge→inside, far outside→edge/edge→inside] as [B,Q,4,15]."""
 
 
 def sample_f3_boundary_evidence(
     features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
 ) -> torch.Tensor:
-    """Return v1.1-compatible F3 evidence as [B,Q,4,96]."""
+    """Return [edge, outside→edge, edge→inside] F3 evidence as [B,Q,4,96]."""
 ```
 
 Use three along-edge positions `(0.25, 0.50, 0.75)`, `grid_sample(...,

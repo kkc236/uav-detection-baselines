@@ -64,8 +64,8 @@ EXPECTED_SUBSET_SHA256 = (
 EXECUTION_ENVIRONMENT = _freeze(
     {
         "gpu": "NVIDIA GeForce RTX 4090",
-        "reported_memory_mib": 49140,
-        "driver": "570.133.07",
+        "reported_memory_mib": 24564,
+        "driver": "550.142",
         "python": "3.10.12",
         "torch": "2.5.1+cu121",
         "torchvision": "0.20.1+cu121",
@@ -75,11 +75,11 @@ EXECUTION_ENVIRONMENT = _freeze(
 )
 RUNTIME_AMENDMENT = _freeze(
     {
-        "amendment_id": "iber-be-v1.0-runtime-driver-2026-08-01",
-        "approved_on": "2026-08-01",
+        "amendment_id": "iber-be-v1.0-baseline-aligned-runtime-2026-08-02",
+        "approved_on": "2026-08-02",
         "baseline_driver": "550.142",
-        "execution_driver": "570.133.07",
-        "allowed_differences": ["driver", "reported_memory_mib"],
+        "execution_driver": "550.142",
+        "allowed_differences": [],
         "comparison": "same-checkpoint-stock-vs-refined",
     }
 )

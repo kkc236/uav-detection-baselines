@@ -292,14 +292,6 @@ class IBERRefiner(nn.Module):
         self._validate_inputs(hidden, stock_boxes, stock_scores, f3, image_rgb)
 
         batch, queries = hidden.shape[:2]
-        boundary_signal = torch.zeros(
-            (batch, 1, 1), device=hidden.device, dtype=torch.bool
-        )
-        if self.use_f3:
-            boundary_signal |= f3.abs().flatten(1).sum(dim=1).gt(0).view(-1, 1, 1)
-        if self.use_rgb:
-            boundary_signal |= image_rgb.abs().flatten(1).sum(dim=1).gt(0).view(-1, 1, 1)
-
         geometry, quality, entropy = _geometry_quality(stock_boxes, stock_scores)
         stock_edges = cxcywh_to_xyxy(stock_boxes)
         edge_ids = torch.arange(4, device=hidden.device)
@@ -411,9 +403,7 @@ class IBERRefiner(nn.Module):
             return shared + scale_mix + edge_outputs
 
         zero_direction = direction(zero_f3_features, zero_rgb_features)
-        f3_direction = direction(f3_boundary_features, zero_rgb_features)
-        rgb_direction = direction(zero_f3_features, rgb_boundary_features)
-        joint_direction = direction(f3_boundary_features, rgb_boundary_features)
+        evidence_direction = direction(f3_boundary_features, rgb_boundary_features)
         base_gate_raw = self.base_gate_head(area_context).squeeze(-1)
         zero_gate = calibrated_head(
             self.boundary_gate_head,
@@ -421,39 +411,14 @@ class IBERRefiner(nn.Module):
             self.boundary_edge_gate_heads,
             zero_direction,
         ).squeeze(-1)
-        f3_gate = calibrated_head(
+        evidence_gate = calibrated_head(
             self.boundary_gate_head,
             self.scale_gate_heads,
             self.boundary_edge_gate_heads,
-            f3_direction,
+            evidence_direction,
         ).squeeze(-1)
-        rgb_gate = calibrated_head(
-            self.boundary_gate_head,
-            self.scale_gate_heads,
-            self.boundary_edge_gate_heads,
-            rgb_direction,
-        ).squeeze(-1)
-        if self.probe == "b3":
-            joint_gate = calibrated_head(
-                self.boundary_gate_head,
-                self.scale_gate_heads,
-                self.boundary_edge_gate_heads,
-                joint_direction,
-            ).squeeze(-1)
-            boundary_gate_delta = joint_gate - zero_gate
-            boundary_hidden = joint_direction
-        elif self.probe == "b1":
-            boundary_gate_delta = f3_gate - zero_gate
-            boundary_hidden = f3_direction
-        elif self.probe == "b2":
-            boundary_gate_delta = rgb_gate - zero_gate
-            boundary_hidden = rgb_direction
-        else:
-            boundary_gate_delta = torch.zeros_like(zero_gate)
-            boundary_hidden = zero_direction
-        boundary_gate_raw = torch.where(
-            boundary_signal, boundary_gate_delta, torch.zeros_like(boundary_gate_delta)
-        )
+        boundary_gate_raw = evidence_gate - zero_gate
+        boundary_hidden = evidence_direction
         gate_logits = base_gate_raw + boundary_gate_raw
         gates = gate_logits.sigmoid()
 
@@ -464,41 +429,17 @@ class IBERRefiner(nn.Module):
             self.boundary_edge_residual_heads,
             zero_direction,
         ).squeeze(-1)
-        f3_residual = calibrated_head(
+        evidence_residual = calibrated_head(
             self.boundary_residual_head,
             self.scale_residual_heads,
             self.boundary_edge_residual_heads,
-            f3_direction,
+            evidence_direction,
         ).squeeze(-1)
-        rgb_residual = calibrated_head(
-            self.boundary_residual_head,
-            self.scale_residual_heads,
-            self.boundary_edge_residual_heads,
-            rgb_direction,
-        ).squeeze(-1)
-        if self.probe == "b3":
-            joint_residual = calibrated_head(
-                self.boundary_residual_head,
-                self.scale_residual_heads,
-                self.boundary_edge_residual_heads,
-                joint_direction,
-            ).squeeze(-1)
-            boundary_residual_delta = joint_residual - zero_residual
-        elif self.probe == "b1":
-            boundary_residual_delta = f3_residual - zero_residual
-        elif self.probe == "b2":
-            boundary_residual_delta = rgb_residual - zero_residual
-        else:
-            boundary_residual_delta = torch.zeros_like(zero_residual)
-        boundary_residual_raw = torch.where(
-            boundary_signal,
-            boundary_residual_delta * self.boundary_gain.clamp(0.5, 4.0),
-            torch.zeros_like(boundary_residual_delta),
+        boundary_residual_raw = (
+            (evidence_residual - zero_residual)
+            * self.boundary_gain.clamp(0.5, 4.0)
         )
         residual_raw = base_residual_raw + boundary_residual_raw
-        if self.probe != "b0":
-            small_mix = scale_weights[..., :2].sum(dim=-1).unsqueeze(-1)
-            residual_raw = (1.0 - small_mix) * residual_raw + small_mix * boundary_residual_raw
         residuals = residual_raw.tanh()
         effective_correction = gates * residuals
 

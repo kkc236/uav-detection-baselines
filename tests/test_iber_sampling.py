@@ -128,7 +128,7 @@ def test_rgb_normal_radii_use_exact_clipped_formulas_at_non_640_size(
     )
 
 
-def test_rgb_shape_and_left_edge_signed_contrast() -> None:
+def test_rgb_shape_and_left_edge_one_sided_directions() -> None:
     images = torch.zeros(1, 3, 640, 640)
     images[..., 320:] = 1
     boxes = torch.tensor([[[0.625, 0.5, 0.25, 0.25]]])
@@ -137,8 +137,10 @@ def test_rgb_shape_and_left_edge_signed_contrast() -> None:
 
     assert evidence.shape == (1, 1, 4, 15)
     assert torch.isfinite(evidence).all()
-    left_near_signed = evidence[0, 0, 0, 3:6]
-    assert torch.all(left_near_signed > 0.9)
+    left_outside_to_edge = evidence[0, 0, 0, 3:6]
+    left_edge_to_inside = evidence[0, 0, 0, 6:9]
+    assert torch.all(left_outside_to_edge > 0.45)
+    assert torch.all(left_edge_to_inside > 0.45)
 
 
 @pytest.mark.parametrize(
@@ -160,16 +162,21 @@ def test_coordinate_fields_verify_every_edge_normal_orientation(
     if modality == "rgb":
         values = _coordinate_field(axis, channels=3)
         evidence = sample_rgb_boundary_evidence(values, boxes, image_size=640)
-        signed_contrasts = (
+        signed_directions = (
             evidence[0, 0, :, 3:6].mean(dim=-1),
+            evidence[0, 0, :, 6:9].mean(dim=-1),
             evidence[0, 0, :, 9:12].mean(dim=-1),
+            evidence[0, 0, :, 12:15].mean(dim=-1),
         )
     else:
         values = _coordinate_field(axis, channels=32)
         evidence = sample_f3_boundary_evidence(values, boxes, image_size=640)
-        signed_contrasts = (evidence[0, 0, :, 32:64].mean(dim=-1),)
+        signed_directions = (
+            evidence[0, 0, :, 32:64].mean(dim=-1),
+            evidence[0, 0, :, 64:96].mean(dim=-1),
+        )
 
-    for signed in signed_contrasts:
+    for signed in signed_directions:
         assert signed[positive_edge] > 0
         assert signed[negative_edge] < 0
         assert signed[orthogonal_edges[0]].abs() < 1e-6
@@ -182,22 +189,22 @@ def test_coordinate_fields_verify_every_edge_normal_orientation(
         pytest.param(
             "x",
             (0.25, 0.50, 0.75, 0.50),
+            (1 / 64, 0.0, -1 / 64, 0.0),
             (1 / 32, 0.0, -1 / 32, 0.0),
-            (1 / 16, 0.0, -1 / 16, 0.0),
             2,
             id="left-right",
         ),
         pytest.param(
             "y",
             (0.50, 0.375, 0.50, 0.625),
+            (0.0, 1 / 64, 0.0, -1 / 64),
             (0.0, 1 / 32, 0.0, -1 / 32),
-            (0.0, 1 / 16, 0.0, -1 / 16),
             3,
             id="top-bottom",
         ),
     ],
 )
-def test_rgb_evidence_has_exact_edge_signed_and_absolute_slice_layout(
+def test_rgb_evidence_has_exact_edge_and_one_sided_direction_slice_layout(
     axis: str,
     expected_edge: tuple[float, float, float, float],
     expected_near: tuple[float, float, float, float],
@@ -210,25 +217,44 @@ def test_rgb_evidence_has_exact_edge_signed_and_absolute_slice_layout(
     evidence = sample_rgb_boundary_evidence(images, boxes, image_size=256)[0, 0]
 
     edge = evidence[:, 0:3]
-    near_signed = evidence[:, 3:6]
-    near_absolute = evidence[:, 6:9]
-    far_signed = evidence[:, 9:12]
-    far_absolute = evidence[:, 12:15]
+    near_outside_to_edge = evidence[:, 3:6]
+    near_edge_to_inside = evidence[:, 6:9]
+    far_outside_to_edge = evidence[:, 9:12]
+    far_edge_to_inside = evidence[:, 12:15]
     torch.testing.assert_close(
         edge, _repeat_per_channel(expected_edge, 3), rtol=0, atol=1e-6
     )
     torch.testing.assert_close(
-        near_signed, _repeat_per_channel(expected_near, 3), rtol=0, atol=1e-6
+        near_outside_to_edge,
+        _repeat_per_channel(expected_near, 3),
+        rtol=0,
+        atol=1e-6,
     )
     torch.testing.assert_close(
-        far_signed, _repeat_per_channel(expected_far, 3), rtol=0, atol=1e-6
+        near_edge_to_inside,
+        _repeat_per_channel(expected_near, 3),
+        rtol=0,
+        atol=1e-6,
     )
-    torch.testing.assert_close(near_absolute, near_signed.abs(), rtol=0, atol=0)
-    torch.testing.assert_close(far_absolute, far_signed.abs(), rtol=0, atol=0)
-    assert torch.all(near_signed[negative_edge] < 0)
-    assert torch.all(far_signed[negative_edge] < 0)
-    assert torch.all(near_absolute[negative_edge] > 0)
-    assert torch.all(far_absolute[negative_edge] > 0)
+    torch.testing.assert_close(
+        far_outside_to_edge,
+        _repeat_per_channel(expected_far, 3),
+        rtol=0,
+        atol=1e-6,
+    )
+    torch.testing.assert_close(
+        far_edge_to_inside,
+        _repeat_per_channel(expected_far, 3),
+        rtol=0,
+        atol=1e-6,
+    )
+    for direction in (
+        near_outside_to_edge,
+        near_edge_to_inside,
+        far_outside_to_edge,
+        far_edge_to_inside,
+    ):
+        assert torch.all(direction[negative_edge] < 0)
 
 
 @pytest.mark.parametrize(
@@ -237,20 +263,20 @@ def test_rgb_evidence_has_exact_edge_signed_and_absolute_slice_layout(
         pytest.param(
             "x",
             (0.25, 0.50, 0.75, 0.50),
-            (1 / 32, 0.0, -1 / 32, 0.0),
+            (1 / 64, 0.0, -1 / 64, 0.0),
             2,
             id="left-right",
         ),
         pytest.param(
             "y",
             (0.50, 0.375, 0.50, 0.625),
-            (0.0, 1 / 32, 0.0, -1 / 32),
+            (0.0, 1 / 64, 0.0, -1 / 64),
             3,
             id="top-bottom",
         ),
     ],
 )
-def test_f3_evidence_has_exact_edge_signed_and_absolute_slice_layout(
+def test_f3_evidence_has_exact_edge_and_one_sided_direction_slice_layout(
     axis: str,
     expected_edge: tuple[float, float, float, float],
     expected_signed: tuple[float, float, float, float],
@@ -262,17 +288,25 @@ def test_f3_evidence_has_exact_edge_signed_and_absolute_slice_layout(
     evidence = sample_f3_boundary_evidence(features, boxes, image_size=256)[0, 0]
 
     edge = evidence[:, 0:32]
-    signed = evidence[:, 32:64]
-    absolute = evidence[:, 64:96]
+    outside_to_edge = evidence[:, 32:64]
+    edge_to_inside = evidence[:, 64:96]
     torch.testing.assert_close(
         edge, _repeat_per_channel(expected_edge, 32), rtol=0, atol=1e-6
     )
     torch.testing.assert_close(
-        signed, _repeat_per_channel(expected_signed, 32), rtol=0, atol=1e-6
+        outside_to_edge,
+        _repeat_per_channel(expected_signed, 32),
+        rtol=0,
+        atol=1e-6,
     )
-    torch.testing.assert_close(absolute, signed.abs(), rtol=0, atol=0)
-    assert torch.all(signed[negative_edge] < 0)
-    assert torch.all(absolute[negative_edge] > 0)
+    torch.testing.assert_close(
+        edge_to_inside,
+        _repeat_per_channel(expected_signed, 32),
+        rtol=0,
+        atol=1e-6,
+    )
+    assert torch.all(outside_to_edge[negative_edge] < 0)
+    assert torch.all(edge_to_inside[negative_edge] < 0)
 
 
 def test_rgb_channel_distinct_complete_layout_matches_independent_analytic_values() -> None:
@@ -287,29 +321,25 @@ def test_rgb_channel_distinct_complete_layout_matches_independent_analytic_value
     near_radius = 1 / 64
     far_radius = 1 / 32
     expected_edge = offsets + scales * right_edge
-    expected_near_signed = -2 * near_radius * scales
-    expected_far_signed = -2 * far_radius * scales
+    expected_near_direction = -near_radius * scales
+    expected_far_direction = -far_radius * scales
     expected = torch.cat(
         (
             expected_edge,
-            expected_near_signed,
-            expected_near_signed.abs(),
-            expected_far_signed,
-            expected_far_signed.abs(),
+            expected_near_direction,
+            expected_near_direction,
+            expected_far_direction,
+            expected_far_direction,
         )
     )
     for block in (
         expected_edge,
-        expected_near_signed,
-        expected_near_signed.abs(),
-        expected_far_signed,
-        expected_far_signed.abs(),
+        expected_near_direction,
+        expected_far_direction,
     ):
         assert torch.unique(block).numel() == 3
-    assert torch.all(expected_near_signed < 0)
-    assert torch.all(expected_far_signed < 0)
-    assert torch.all(expected_near_signed.abs() > 0)
-    assert torch.all(expected_far_signed.abs() > 0)
+    assert torch.all(expected_near_direction < 0)
+    assert torch.all(expected_far_direction < 0)
     torch.testing.assert_close(evidence[0, 0, 2], expected, rtol=0, atol=1e-6)
 
 
@@ -325,13 +355,11 @@ def test_f3_channel_distinct_complete_layout_matches_independent_analytic_values
     right_edge = 0.75
     radius = 1 / 64
     expected_edge = offsets + scales * right_edge
-    expected_signed = -2 * radius * scales
-    expected_absolute = -expected_signed
-    expected = torch.cat((expected_edge, expected_signed, expected_absolute))
-    for block in (expected_edge, expected_signed, expected_absolute):
+    expected_direction = -radius * scales
+    expected = torch.cat((expected_edge, expected_direction, expected_direction))
+    for block in (expected_edge, expected_direction):
         assert torch.unique(block).numel() == 32
-    assert torch.all(expected_signed < 0)
-    assert torch.all(expected_absolute > 0)
+    assert torch.all(expected_direction < 0)
     torch.testing.assert_close(evidence[0, 0, 2], expected, rtol=0, atol=2e-6)
 
 
@@ -351,13 +379,45 @@ def test_f3_public_sampler_uses_image_size_for_exact_radius_regimes(
 
     evidence = sample_f3_boundary_evidence(features, boxes, image_size=256)
 
-    left_signed_contrast = evidence[0, 0, 0, 32:64]
+    left_outside_to_edge = evidence[0, 0, 0, 32:64]
+    left_edge_to_inside = evidence[0, 0, 0, 64:96]
     torch.testing.assert_close(
-        left_signed_contrast,
-        torch.full_like(left_signed_contrast, 2 * expected_radius),
+        left_outside_to_edge,
+        torch.full_like(left_outside_to_edge, expected_radius),
         rtol=0,
         atol=1e-6,
     )
+    torch.testing.assert_close(
+        left_edge_to_inside,
+        torch.full_like(left_edge_to_inside, expected_radius),
+        rtol=0,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize(
+    ("sampler", "channels", "first_slice", "second_slice"),
+    [
+        pytest.param(sample_rgb_boundary_evidence, 3, slice(3, 6), slice(6, 9), id="rgb"),
+        pytest.param(sample_f3_boundary_evidence, 32, slice(32, 64), slice(64, 96), id="f3"),
+    ],
+)
+def test_one_sided_directions_preserve_asymmetric_normal_evidence(
+    sampler: Callable[..., torch.Tensor],
+    channels: int,
+    first_slice: slice,
+    second_slice: slice,
+) -> None:
+    x = (torch.arange(64, dtype=torch.float32) + 0.5) / 64
+    nonlinear = x.square().view(1, 1, 1, 64).expand(1, channels, 64, 64).clone()
+    boxes = torch.tensor([[[0.5578125, 0.5, 0.1, 0.1]]])
+
+    evidence = sampler(nonlinear, boxes, image_size=64)[0, 0, 0]
+
+    outside_to_edge = evidence[first_slice]
+    edge_to_inside = evidence[second_slice]
+    assert torch.all(outside_to_edge > 0)
+    assert torch.all(edge_to_inside > outside_to_edge)
 
 
 def test_f3_shape_and_constant_features_have_zero_contrasts() -> None:

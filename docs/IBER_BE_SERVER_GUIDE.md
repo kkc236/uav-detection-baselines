@@ -9,16 +9,16 @@
 | 项目 | 固定值 |
 | --- | --- |
 | GPU | NVIDIA GeForce RTX 4090 |
-| 上报显存 | 49140 MiB |
+| 上报显存 | 24564 MiB |
 | baseline 历史驱动 | 550.142 |
-| 本次执行驱动 | 570.133.07 |
+| 本次执行驱动 | 550.142 |
 | Python | 3.10.12 |
 | PyTorch | 2.5.1+cu121 |
 | Torchvision | 0.20.1+cu121 |
 | CUDA | 12.1 |
 | Ultralytics | 8.4.90 |
 
-驱动和上报显存是已批准的 runtime amendment；主机与运行库全部吻合时状态必须是 `passed_with_runtime_amendment`。除此以外的偏差一律记为 `engineering_invalid`，不能降级成警告后继续。
+当前 baseline 与 execution driver 均为 `550.142`，`allowed_differences=[]`，运行时身份为 `iber-be-v1.0-baseline-aligned-runtime-2026-08-02`。`passed_with_runtime_amendment` 是兼容状态，不表示存在硬件差异；`-seed0-amended` 是旧路径标签，仅为避免扩大状态机与路径迁移范围而保留。主机与运行库全部吻合时仍返回该兼容状态；任何实际偏差一律记为 `engineering_invalid`，不能降级成警告后继续。
 
 科学资产必须同时匹配：
 
@@ -75,6 +75,8 @@ bash deploy/iber/verify_host.sh
 ```
 
 bootstrap 优先使用阿里云 PyPI 镜像，PyTorch CUDA 12.1 wheel 使用官方索引作为受控补充/回退。可预先在前台生成 wheelhouse：
+
+`verify_host.sh` 会记录 GitHub API、阿里云镜像与 PyTorch 索引的可达性，但这些网络诊断不作为科学或工程通过条件；已有不可变 bundle、wheelhouse 与校验通过的数据镜像时允许离线验证。发布阶段仍必须单独验证实际 GitHub API 上传链路。
 
 ```bash
 bash deploy/iber/build_wheelhouse.sh

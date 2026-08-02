@@ -147,7 +147,7 @@ def _require_sampling_inputs(
 def sample_rgb_boundary_evidence(
     images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
 ) -> torch.Tensor:
-    """Return edge and dual-radius RGB contrasts with shape [B, Q, 4, 15]."""
+    """Return edge and one-sided dual-radius RGB directions [B, Q, 4, 15]."""
     _require_sampling_inputs(
         images, boxes, name="images", channels=3, image_size=image_size
     )
@@ -161,15 +161,17 @@ def sample_rgb_boundary_evidence(
     edge = sampled[..., 2]
     near_inside = sampled[..., 3]
     far_inside = sampled[..., 4]
-    near_contrast = near_inside - near_outside
-    far_contrast = far_inside - far_outside
+    near_outside_to_edge = edge - near_outside
+    near_edge_to_inside = near_inside - edge
+    far_outside_to_edge = edge - far_outside
+    far_edge_to_inside = far_inside - edge
     evidence = torch.cat(
         (
             edge,
-            near_contrast,
-            near_contrast.abs(),
-            far_contrast,
-            far_contrast.abs(),
+            near_outside_to_edge,
+            near_edge_to_inside,
+            far_outside_to_edge,
+            far_edge_to_inside,
         ),
         dim=-1,
     )
@@ -179,7 +181,7 @@ def sample_rgb_boundary_evidence(
 def sample_f3_boundary_evidence(
     features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
 ) -> torch.Tensor:
-    """Return edge and one-radius F3 contrasts with shape [B, Q, 4, 96]."""
+    """Return edge and one-sided F3 directions with shape [B, Q, 4, 96]."""
     _require_sampling_inputs(
         features, boxes, name="features", channels=32, image_size=image_size
     )
@@ -192,6 +194,7 @@ def sample_f3_boundary_evidence(
     outside = sampled[..., 0]
     edge = sampled[..., 1]
     inside = sampled[..., 2]
-    contrast = inside - outside
-    evidence = torch.cat((edge, contrast, contrast.abs()), dim=-1)
+    outside_to_edge = edge - outside
+    edge_to_inside = inside - edge
+    evidence = torch.cat((edge, outside_to_edge, edge_to_inside), dim=-1)
     return evidence.to(dtype=features.dtype)

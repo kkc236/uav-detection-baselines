@@ -27,6 +27,7 @@ from src.iber_protocol import (
     PROTOCOL_SHA256,
     RUNTIME_AMENDMENT,
     RUNTIME_AMENDMENT_SHA256,
+    execution_environment,
 )
 from src.iber_head import IBERRefiner
 
@@ -303,11 +304,7 @@ def test_report_contains_honest_nonblocking_targets_and_runtime_authority() -> N
         "stock": latency_summary([10.0, 10.2]),
         "refined": latency_summary([10.4, 10.6]),
     }
-    environment = {
-        "gpu": "NVIDIA GeForce RTX 4090",
-        "driver": "570.133.07",
-        "reported_memory_mib": 49140,
-    }
+    environment = execution_environment()
 
     report = build_report(
         parameters=parameters,

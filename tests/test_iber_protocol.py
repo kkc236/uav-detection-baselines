@@ -98,8 +98,8 @@ def test_iber_protocol_is_independent_and_frozen() -> None:
 def test_execution_environment_and_runtime_amendment_are_iber_owned() -> None:
     assert execution_environment() == {
         "gpu": "NVIDIA GeForce RTX 4090",
-        "reported_memory_mib": 49140,
-        "driver": "570.133.07",
+        "reported_memory_mib": 24564,
+        "driver": "550.142",
         "python": "3.10.12",
         "torch": "2.5.1+cu121",
         "torchvision": "0.20.1+cu121",
@@ -108,11 +108,11 @@ def test_execution_environment_and_runtime_amendment_are_iber_owned() -> None:
     }
     assert execution_environment() is not EXECUTION_ENVIRONMENT
     assert RUNTIME_AMENDMENT == {
-        "amendment_id": "iber-be-v1.0-runtime-driver-2026-08-01",
-        "approved_on": "2026-08-01",
+        "amendment_id": "iber-be-v1.0-baseline-aligned-runtime-2026-08-02",
+        "approved_on": "2026-08-02",
         "baseline_driver": "550.142",
-        "execution_driver": "570.133.07",
-        "allowed_differences": ("driver", "reported_memory_mib"),
+        "execution_driver": "550.142",
+        "allowed_differences": (),
         "comparison": "same-checkpoint-stock-vs-refined",
     }
     serialized = json.dumps(
@@ -123,7 +123,7 @@ def test_execution_environment_and_runtime_amendment_are_iber_owned() -> None:
     ).encode("utf-8")
     assert RUNTIME_AMENDMENT_SHA256 == hashlib.sha256(serialized).hexdigest().upper()
     assert RUNTIME_AMENDMENT_SHA256 == (
-        "3B1DE94AB38955CAC309A5E3685B46801ECBC79CDEB907E23CCF36789A37C6BF"
+        "74038820ED44A2FA8E36F80FDAE6789ADDBFFE7236BD382ECE3F600464460ABD"
     )
 
 
@@ -136,7 +136,7 @@ def test_protocol_sha256_covers_canonical_iber_payload() -> None:
     ).encode("utf-8")
     assert PROTOCOL_SHA256 == hashlib.sha256(serialized).hexdigest().upper()
     assert PROTOCOL_SHA256 == (
-        "D273BAAA90C734FB497AA11536F1AAD2142F532BCB347CC155F915B23988E097"
+        "34C8E5EE7D517276DBF44856D2B66DD3347CD9380C27D1D38F88514FDFA93D68"
     )
     assert len(PROTOCOL_SHA256) == 64
     assert PROTOCOL_PAYLOAD["design_version"] == DESIGN_VERSION

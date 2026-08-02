@@ -83,7 +83,7 @@ def test_stock_authority_rejects_repeat_artifact_or_environment_drift() -> None:
     with pytest.raises(ValueError, match="artifact"):
         _report(dataset_sha256="0" * 64)
     with pytest.raises(ValueError, match="environment"):
-        _report(execution_environment={**execution_environment(), "driver": "550.142"})
+        _report(execution_environment={**execution_environment(), "driver": "550.143"})
 
 
 def test_stock_authority_cli_exposes_only_artifact_paths() -> None:

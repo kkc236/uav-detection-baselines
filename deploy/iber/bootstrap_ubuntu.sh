@@ -24,8 +24,8 @@ freeze_path="/data/uav/deploy/iber-be-v1/pip-freeze-${source_short_sha}.txt"
 mirror_index="https://mirrors.aliyun.com/pypi/simple"
 pytorch_index="https://download.pytorch.org/whl/cu121"
 expected_gpu="NVIDIA GeForce RTX 4090"
-expected_driver="570.133.07"
-expected_gpu_memory_mib=49140
+expected_driver="550.142"
+expected_gpu_memory_mib=24564
 minimum_disk_kib=$((80 * 1024 * 1024))
 cache_root="/data/uav/cache/iber-be-v1-${source_short_sha}"
 run_root="/data/uav/runs/iber-be-v1/${source_short_sha}-seed0-amended"
@@ -52,7 +52,7 @@ gpu="$(nvidia-smi --query-gpu=name --format=csv,noheader | sed -n '1p' | xargs)"
 driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | sed -n '1p' | xargs)"
 gpu_memory_mib="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | sed -n '1p' | xargs)"
 if [[ "$gpu" != "$expected_gpu" || "$driver" != "$expected_driver" || "$gpu_memory_mib" != "$expected_gpu_memory_mib" ]]; then
-    printf 'amended GPU contract mismatch: gpu=%s driver=%s memory=%s\n' \
+    printf 'GPU contract mismatch: gpu=%s driver=%s memory=%s\n' \
         "$gpu" "$driver" "$gpu_memory_mib" >&2
     exit 3
 fi
