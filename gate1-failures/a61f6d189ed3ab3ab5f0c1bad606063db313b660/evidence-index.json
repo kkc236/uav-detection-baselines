@@ -1,0 +1,44 @@
+{
+  "files": {
+    "authority.json": {
+      "bytes": 620,
+      "sha256": "AAFAB94F3CB167F1C14AD5D79209C24241F07643B8D8E64AA5C59F2320D18625"
+    },
+    "gate0/attempt-001.json": {
+      "bytes": 1620,
+      "sha256": "96BF69BE7DAB76379C5433D2F65E832B75012DE41239D1B5E4AC69B5D7F27E59"
+    },
+    "pipeline-state.json": {
+      "bytes": 1497,
+      "sha256": "A32EE1D70C19F36C0AEAFD7E7F7AC5A3CA55EF6EBE8DD485FED32FE8820115D9"
+    },
+    "probe/b0-report.json": {
+      "bytes": 2672,
+      "sha256": "D99E6C32AF60C278A9A6CE5869A684449A9523BEDC3CB1BC272AD8E42CA0B6A8"
+    },
+    "probe/b1-report.json": {
+      "bytes": 2677,
+      "sha256": "B4B18EF7273219930C25C05E09B40098C1A101D769F626BEA68DFC55826AD87C"
+    },
+    "probe/b2-report.json": {
+      "bytes": 2675,
+      "sha256": "122CEE64C9E2912C1C96AB9AA7098F0A703C381A28231488F9DC8145CE2A5A0F"
+    },
+    "probe/b3-report.json": {
+      "bytes": 2677,
+      "sha256": "B3FF1F34DBF38818331662C7CDDC738BF6F93354652A9FE36ABD1008C54C598D"
+    },
+    "probe/gate1-decision.json": {
+      "bytes": 11279,
+      "sha256": "E742C2403E25053B87F97B05C0718238862BEFF9009EC9793B73CD68AC84576E"
+    },
+    "stock-authority.json": {
+      "bytes": 1633,
+      "sha256": "DE0AAABCCF51245E41FF284AF12B6C5BFD1DB9A9633AB93B6DAF7FAA3C012680"
+    }
+  },
+  "format_version": 1,
+  "identity": "IBER-BE",
+  "outcome": "scientific_failed",
+  "source_commit": "a61f6d189ed3ab3ab5f0c1bad606063db313b660"
+}
