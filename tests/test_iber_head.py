@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import inspect
 
 import pytest
@@ -110,7 +109,7 @@ def test_private_initialization_never_seeds_accelerators(
     torch.testing.assert_close(torch.random.get_rng_state(), before, rtol=0, atol=0)
 
 
-def test_exact_architecture_and_six_zero_initialized_final_heads() -> None:
+def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     model = _refiner()
 
     assert len(model.query_path) == 3
@@ -169,37 +168,6 @@ def test_exact_architecture_and_six_zero_initialized_final_heads() -> None:
         _assert_linear(head, 64, 1)
         torch.testing.assert_close(head.weight, torch.zeros_like(head.weight), rtol=0, atol=0)
         torch.testing.assert_close(head.bias, torch.zeros_like(head.bias), rtol=0, atol=0)
-
-
-def test_area_conditioned_boundary_calibration_is_shared_and_zero_initialized() -> None:
-    models = {probe: _refiner(probe) for probe in sorted(PROBES)}
-
-    for model in models.values():
-        assert len(model.area_path) == 4
-        _assert_linear(model.area_path[0], 4, 32)
-        assert isinstance(model.area_path[1], nn.SiLU)
-        _assert_linear(model.area_path[2], 32, 32)
-        assert isinstance(model.area_path[3], nn.SiLU)
-        assert len(model.area_boundary_trunk) == 4
-        _assert_linear(model.area_boundary_trunk[0], 72, 128)
-        assert isinstance(model.area_boundary_trunk[1], nn.SiLU)
-        _assert_linear(model.area_boundary_trunk[2], 128, 64)
-        assert isinstance(model.area_boundary_trunk[3], nn.SiLU)
-        for name in ("area_gate_head", "area_residual_head"):
-            head = getattr(model, name)
-            _assert_linear(head, 64, 1)
-            torch.testing.assert_close(head.weight, torch.zeros_like(head.weight), rtol=0, atol=0)
-            torch.testing.assert_close(head.bias, torch.zeros_like(head.bias), rtol=0, atol=0)
-
-    counts = {sum(parameter.numel() for parameter in model.parameters()) for model in models.values()}
-    assert len(counts) == 1
-    fingerprints = {
-        hashlib.sha256(
-            b"".join(parameter.detach().cpu().numpy().tobytes() for parameter in model.parameters())
-        ).hexdigest()
-        for model in models.values()
-    }
-    assert len(fingerprints) == 1
 
 
 def test_zero_initialization_is_exact_identity_even_outside_image() -> None:
@@ -337,15 +305,13 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
         assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
 
 
-def test_first_private_loss_step_updates_all_six_zero_initialized_heads() -> None:
+def test_first_private_loss_step_updates_all_four_zero_initialized_heads() -> None:
     model = _refiner()
     head_names = (
         "base_gate_head",
         "boundary_gate_head",
         "base_residual_head",
         "boundary_residual_head",
-        "area_gate_head",
-        "area_residual_head",
     )
     for name in head_names:
         head = getattr(model, name)
