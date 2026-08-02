@@ -94,13 +94,16 @@ def test_probe_initialization_is_equal_capacity_reproducible_and_rng_private() -
 
 def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence() -> None:
     source = inspect.getsource(iber_head).lower()
-    for forbidden in ("trajectory", "query_path", "encoder", "decoder"):
+    for forbidden in ("trajectory", "query_path", "decoder"):
         assert forbidden not in source
     assert not any(token.lower() == "p3" for token in source.split())
 
     model = _refiner()
     assert hasattr(model, "area_calibration")
     assert hasattr(model, "direction_calibration")
+    parameter_names = dict(model.named_parameters())
+    assert any(name.startswith("f3_encoder.") for name in parameter_names)
+    assert any(name.startswith("rgb_encoder.") for name in parameter_names)
 
 
 def test_candidate_c_is_independent_of_detector_hidden_state() -> None:
@@ -152,15 +155,15 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     assert model.f3_projection.in_channels == 4
     assert model.f3_projection.out_channels == 32
     assert model.f3_projection.kernel_size == (1, 1)
-    assert len(model.f3_calibration) == 2
-    _assert_linear(model.f3_calibration[0], 96, 32)
-    assert isinstance(model.f3_calibration[1], nn.SiLU)
+    assert len(model.f3_encoder) == 2
+    _assert_linear(model.f3_encoder[0], 96, 32)
+    assert isinstance(model.f3_encoder[1], nn.SiLU)
 
-    assert len(model.rgb_calibration) == 3
-    _assert_linear(model.rgb_calibration[0], 15, 16)
-    assert isinstance(model.rgb_calibration[1], nn.LayerNorm)
-    assert model.rgb_calibration[1].normalized_shape == (16,)
-    assert isinstance(model.rgb_calibration[2], nn.SiLU)
+    assert len(model.rgb_encoder) == 3
+    _assert_linear(model.rgb_encoder[0], 15, 16)
+    assert isinstance(model.rgb_encoder[1], nn.LayerNorm)
+    assert model.rgb_encoder[1].normalized_shape == (16,)
+    assert isinstance(model.rgb_encoder[2], nn.SiLU)
 
     assert len(model.direction_calibration) == 4
     _assert_linear(model.direction_calibration[0], 112, 96)
@@ -307,8 +310,8 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
     assert all(value.grad is None for value in inputs)
     parameter_groups = (
         tuple(model.f3_projection.parameters()),
-        tuple(model.f3_calibration.parameters()),
-        tuple(model.rgb_calibration.parameters()),
+        tuple(model.f3_encoder.parameters()),
+        tuple(model.rgb_encoder.parameters()),
         tuple(model.area_calibration.parameters()),
         tuple(model.direction_calibration.parameters()),
     )
@@ -700,7 +703,7 @@ def test_only_f3_projection_is_convolutional_and_rgb_is_pointwise_calibrated() -
         if isinstance(module, nn.Conv2d)
     }
     assert convolutions == {"f3_projection": model.f3_projection}
-    assert not any(isinstance(module, nn.Conv2d) for module in model.rgb_calibration.modules())
+    assert not any(isinstance(module, nn.Conv2d) for module in model.rgb_encoder.modules())
     assert not any(isinstance(module, nn.MultiheadAttention) for module in model.modules())
 
     source_without_docstrings = ast.parse(inspect.getsource(iber_head))

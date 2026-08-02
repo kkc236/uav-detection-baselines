@@ -122,8 +122,10 @@ class IBERRefiner(nn.Module):
             )
             self.edge_embedding = nn.Embedding(4, 8)
             self.f3_projection = nn.Conv2d(f3_channels, 32, kernel_size=1)
-            self.f3_calibration = nn.Sequential(nn.Linear(96, 32), nn.SiLU())
-            self.rgb_calibration = nn.Sequential(
+            # Keep the established parameter prefixes: Gate-0 uses them to
+            # verify that both evidence modalities receive gradients.
+            self.f3_encoder = nn.Sequential(nn.Linear(96, 32), nn.SiLU())
+            self.rgb_encoder = nn.Sequential(
                 nn.Linear(15, 16),
                 nn.LayerNorm(16),
                 nn.SiLU(),
@@ -286,16 +288,16 @@ class IBERRefiner(nn.Module):
         f3_input_evidence = f3_boundary_evidence if self.use_f3 else zero_f3_boundary_evidence
         rgb_input_evidence = rgb_boundary_evidence if self.use_rgb else zero_rgb_boundary_evidence
 
-        f3_boundary_features = self.f3_calibration(
+        f3_boundary_features = self.f3_encoder(
             f3_input_evidence.to(dtype=hidden.dtype)
         )
-        rgb_boundary_features = self.rgb_calibration(
+        rgb_boundary_features = self.rgb_encoder(
             rgb_input_evidence.to(dtype=hidden.dtype)
         )
-        zero_f3_features = self.f3_calibration(
+        zero_f3_features = self.f3_encoder(
             zero_f3_boundary_evidence.to(dtype=hidden.dtype)
         )
-        zero_rgb_features = self.rgb_calibration(
+        zero_rgb_features = self.rgb_encoder(
             zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
 
