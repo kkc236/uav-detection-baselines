@@ -120,6 +120,11 @@ class IBERRefiner(nn.Module):
                 nn.Linear(96, 64),
                 nn.SiLU(),
             )
+            self.context_path = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, 64),
+                nn.SiLU(),
+            )
             self.edge_embedding = nn.Embedding(4, 8)
             self.f3_projection = nn.Conv2d(f3_channels, 32, kernel_size=1)
             # Keep the established parameter prefixes: Gate-0 uses them to
@@ -131,7 +136,7 @@ class IBERRefiner(nn.Module):
                 nn.SiLU(),
             )
             self.direction_calibration = nn.Sequential(
-                nn.Linear(112, 96),
+                nn.Linear(176, 96),
                 nn.SiLU(),
                 nn.Linear(96, 64),
                 nn.SiLU(),
@@ -142,7 +147,7 @@ class IBERRefiner(nn.Module):
             self.scale_experts = nn.ModuleList(
                 [
                     nn.Sequential(
-                        nn.Linear(112, 64),
+                        nn.Linear(176, 64),
                         nn.SiLU(),
                         nn.Linear(64, 64),
                         nn.SiLU(),
@@ -278,6 +283,9 @@ class IBERRefiner(nn.Module):
         area_context = self.area_calibration(
             torch.cat((geometry_per_edge, edge_features), dim=-1)
         )
+        context_per_edge = self.context_path(hidden).unsqueeze(2).expand(
+            -1, -1, 4, -1
+        )
 
         empty = batch == 0 or queries == 0
         if self.use_f3 and not empty:
@@ -326,7 +334,9 @@ class IBERRefiner(nn.Module):
         scale_weights = torch.stack((tiny, small, other), dim=-1).to(dtype=hidden.dtype)
 
         def direction(features_f3: torch.Tensor, features_rgb: torch.Tensor) -> torch.Tensor:
-            direction_input = torch.cat((features_f3, features_rgb, area_context), dim=-1)
+            direction_input = torch.cat(
+                (features_f3, features_rgb, area_context, context_per_edge), dim=-1
+            )
             shared = self.direction_calibration(direction_input)
             expert_outputs = torch.stack(
                 [expert(direction_input) for expert in self.scale_experts], dim=-2

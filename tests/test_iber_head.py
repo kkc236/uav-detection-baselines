@@ -101,6 +101,7 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     model = _refiner()
     assert hasattr(model, "area_calibration")
     assert hasattr(model, "direction_calibration")
+    assert hasattr(model, "context_path")
     assert len(model.scale_experts) == 3
     assert model.boundary_gain.shape == torch.Size([])
     assert float(model.boundary_gain.detach()) == pytest.approx(2.0)
@@ -109,17 +110,21 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
 
 
-def test_candidate_c_is_independent_of_detector_hidden_state() -> None:
+def test_boundary_direction_uses_detached_hidden_context() -> None:
     model = _refiner()
     hidden, boxes, scores, f3, image = _inputs(batch=1)
     changed_hidden = hidden + 17.0
+    with torch.no_grad():
+        model.boundary_residual_head.weight.fill_(0.05)
+        model.boundary_residual_head.bias.fill_(0.01)
 
     first = model(hidden, boxes, scores, f3, image)
     second = model(changed_hidden, boxes, scores, f3, image)
 
-    torch.testing.assert_close(first.refined_boxes, second.refined_boxes, rtol=0, atol=0)
-    torch.testing.assert_close(first.gate_logits, second.gate_logits, rtol=0, atol=0)
-    torch.testing.assert_close(first.residual_raw, second.residual_raw, rtol=0, atol=0)
+    assert not torch.equal(first.refined_boxes, second.refined_boxes)
+    assert not torch.equal(first.residual_raw, second.residual_raw)
+    first.refined_boxes.sum().backward()
+    assert hidden.grad is None
 
 
 def test_private_initialization_never_seeds_accelerators(
@@ -154,6 +159,11 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     _assert_linear(model.area_calibration[2], 96, 64)
     assert isinstance(model.area_calibration[3], nn.SiLU)
 
+    assert len(model.context_path) == 3
+    assert isinstance(model.context_path[0], nn.LayerNorm)
+    _assert_linear(model.context_path[1], 8, 64)
+    assert isinstance(model.context_path[2], nn.SiLU)
+
     assert isinstance(model.f3_projection, nn.Conv2d)
     assert model.f3_projection.in_channels == 4
     assert model.f3_projection.out_channels == 32
@@ -169,14 +179,14 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     assert isinstance(model.rgb_encoder[2], nn.SiLU)
 
     assert len(model.direction_calibration) == 4
-    _assert_linear(model.direction_calibration[0], 112, 96)
+    _assert_linear(model.direction_calibration[0], 176, 96)
     assert isinstance(model.direction_calibration[1], nn.SiLU)
     _assert_linear(model.direction_calibration[2], 96, 64)
     assert isinstance(model.direction_calibration[3], nn.SiLU)
     assert len(model.scale_experts) == 3
     for expert in model.scale_experts:
         assert len(expert) == 4
-        _assert_linear(expert[0], 112, 64)
+        _assert_linear(expert[0], 176, 64)
         assert isinstance(expert[1], nn.SiLU)
         _assert_linear(expert[2], 64, 64)
         assert isinstance(expert[3], nn.SiLU)
