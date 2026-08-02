@@ -119,14 +119,42 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
 
 
-def test_signed_evidence_trunk_preserves_directional_contrasts() -> None:
+def test_signed_evidence_paths_are_modality_separated_before_fusion() -> None:
     model = _refiner()
 
-    assert len(model.signed_evidence_path) == 4
-    _assert_linear(model.signed_evidence_path[0], 111, 128)
-    assert isinstance(model.signed_evidence_path[1], nn.SiLU)
-    _assert_linear(model.signed_evidence_path[2], 128, 64)
-    assert isinstance(model.signed_evidence_path[3], nn.SiLU)
+    assert not hasattr(model, "signed_evidence_path")
+    assert len(model.f3_signed_path) == 4
+    _assert_linear(model.f3_signed_path[0], 96, 64)
+    assert isinstance(model.f3_signed_path[1], nn.SiLU)
+    _assert_linear(model.f3_signed_path[2], 64, 64)
+    assert isinstance(model.f3_signed_path[3], nn.SiLU)
+    assert len(model.rgb_signed_path) == 4
+    _assert_linear(model.rgb_signed_path[0], 15, 32)
+    assert isinstance(model.rgb_signed_path[1], nn.SiLU)
+    _assert_linear(model.rgb_signed_path[2], 32, 64)
+    assert isinstance(model.rgb_signed_path[3], nn.SiLU)
+    assert len(model.f3_reliability_head) == 3
+    _assert_linear(model.f3_reliability_head[0], 128, 64)
+    assert isinstance(model.f3_reliability_head[1], nn.SiLU)
+    _assert_linear(model.f3_reliability_head[2], 64, 1)
+    torch.testing.assert_close(
+        model.f3_reliability_head[2].weight,
+        torch.zeros_like(model.f3_reliability_head[2].weight),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        model.f3_reliability_head[2].bias,
+        torch.zeros_like(model.f3_reliability_head[2].bias),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        model.f3_increment_gain,
+        torch.zeros_like(model.f3_increment_gain),
+        rtol=0,
+        atol=0,
+    )
     _assert_linear(model.direction_calibration[0], 240, 96)
     for expert in model.scale_experts:
         _assert_linear(expert[0], 240, 64)
@@ -744,6 +772,12 @@ def test_b0_disables_boundary_outputs_even_when_boundary_heads_are_nonzero() -> 
         rtol=0,
         atol=0,
     )
+    torch.testing.assert_close(
+        output.boundary_features,
+        torch.zeros_like(output.boundary_features),
+        rtol=0,
+        atol=0,
+    )
     torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
 
 
@@ -892,8 +926,8 @@ def test_b3_zero_sampled_evidence_exactly_degrades_to_boundary_off_for_arbitrary
     torch.testing.assert_close(output.refined_boxes, output.boundary_off_boxes, rtol=0, atol=0)
 
 
-def test_b3_uses_true_joint_modality_fusion() -> None:
-    models = {probe: _refiner(probe) for probe in ("b1", "b2", "b3")}
+def test_b3_starts_from_the_rgb_anchor_without_f3_interference() -> None:
+    models = {probe: _refiner(probe) for probe in ("b2", "b3")}
     with torch.no_grad():
         for model in models.values():
             model.boundary_gate_head.weight.fill_(0.07)
@@ -902,27 +936,83 @@ def test_b3_uses_true_joint_modality_fusion() -> None:
             model.boundary_residual_head.bias.fill_(0.21)
 
     hidden, boxes, scores, f3, image = _inputs(batch=1)
-    zeros_f3 = torch.zeros_like(f3)
-    zeros_image = torch.zeros_like(image)
+    b2 = models["b2"](hidden, boxes, scores, f3, image)
     b3_full = models["b3"](hidden, boxes, scores, f3, image)
-    b3_f3_only = models["b3"](hidden, boxes, scores, f3, zeros_image)
-    b3_rgb_only = models["b3"](hidden, boxes, scores, zeros_f3, image)
-    b3_zero = models["b3"](hidden, boxes, scores, zeros_f3, zeros_image)
-    assert not torch.allclose(
+
+    torch.testing.assert_close(
+        b3_full.boundary_gate_raw,
+        b2.boundary_gate_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
         b3_full.boundary_residual_raw,
-        b3_f3_only.boundary_residual_raw
-        + b3_rgb_only.boundary_residual_raw
-        - b3_zero.boundary_residual_raw,
+        b2.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(b3_full.refined_edges, b2.refined_edges, rtol=0, atol=0)
+
+
+def test_b3_adds_f3_only_through_the_explicit_reliability_gate() -> None:
+    model = _refiner("b3")
+    with torch.no_grad():
+        model.f3_increment_gain.fill_(2.0)
+        model.f3_reliability_head[2].bias.fill_(8.0)
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_residual_head.weight.fill_(-0.05)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    full = model(hidden, boxes, scores, f3, image)
+    no_f3 = model(hidden, boxes, scores, torch.zeros_like(f3), image)
+
+    assert not torch.allclose(
+        full.boundary_residual_raw,
+        no_f3.boundary_residual_raw,
         rtol=0,
         atol=1e-6,
     )
     assert not torch.allclose(
-        b3_full.boundary_gate_raw,
-        b3_f3_only.boundary_gate_raw
-        + b3_rgb_only.boundary_gate_raw
-        - b3_zero.boundary_gate_raw,
+        full.boundary_gate_raw,
+        no_f3.boundary_gate_raw,
         rtol=0,
         atol=1e-6,
+    )
+
+
+def test_b3_degrades_exactly_to_rgb_only_path_when_f3_evidence_is_absent() -> None:
+    models = {probe: _refiner(probe) for probe in ("b2", "b3")}
+    with torch.no_grad():
+        for model in models.values():
+            model.boundary_gate_head.weight.fill_(0.07)
+            model.boundary_gate_head.bias.fill_(0.13)
+            model.boundary_residual_head.weight.fill_(-0.05)
+            model.boundary_residual_head.bias.fill_(0.21)
+            for head in (
+                *model.scale_gate_heads,
+                *model.scale_residual_heads,
+                *model.boundary_edge_gate_heads,
+                *model.boundary_edge_residual_heads,
+            ):
+                head.weight.fill_(0.03)
+                head.bias.fill_(0.01)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    zero_f3 = torch.zeros_like(f3)
+    b2_output = models["b2"](hidden, boxes, scores, zero_f3, image)
+    b3_output = models["b3"](hidden, boxes, scores, zero_f3, image)
+
+    torch.testing.assert_close(
+        b3_output.boundary_gate_raw, b2_output.boundary_gate_raw, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        b3_output.boundary_residual_raw,
+        b2_output.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        b3_output.refined_edges, b2_output.refined_edges, rtol=0, atol=0
     )
 
 

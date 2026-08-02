@@ -138,11 +138,22 @@ class IBERRefiner(nn.Module):
                 nn.LayerNorm(16),
                 nn.SiLU(),
             )
-            self.signed_evidence_path = nn.Sequential(
-                nn.Linear(111, 128),
+            self.f3_signed_path = nn.Sequential(
+                nn.Linear(96, 64),
                 nn.SiLU(),
+                nn.Linear(64, 64),
+                nn.SiLU(),
+            )
+            self.rgb_signed_path = nn.Sequential(
+                nn.Linear(15, 32),
+                nn.SiLU(),
+                nn.Linear(32, 64),
+                nn.SiLU(),
+            )
+            self.f3_reliability_path = nn.Sequential(
                 nn.Linear(128, 64),
                 nn.SiLU(),
+                nn.Linear(64, 1),
             )
             self.direction_calibration = nn.Sequential(
                 nn.Linear(240, 96),
@@ -192,6 +203,7 @@ class IBERRefiner(nn.Module):
             self.boundary_gate_head = nn.Linear(64, 1)
             self.base_residual_head = nn.Linear(64, 1)
             self.boundary_residual_head = nn.Linear(64, 1)
+            self.f3_increment_gain = nn.Parameter(torch.zeros(()))
 
         for head in (
             self.base_gate_head,
@@ -205,6 +217,8 @@ class IBERRefiner(nn.Module):
         ):
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
+        nn.init.zeros_(self.f3_reliability_path[-1].weight)
+        nn.init.zeros_(self.f3_reliability_path[-1].bias)
 
         self.hidden_dim = int(hidden_dim)
         self.__dict__["".join(("q", "uery_path"))] = (
@@ -216,6 +230,11 @@ class IBERRefiner(nn.Module):
         self.use_rgb = probe in {"b2", "b3"}
         self.image_size = int(image_size)
         self.rho = float(rho)
+
+    @property
+    def f3_reliability_head(self) -> nn.Sequential:
+        """Expose the reliability MLP without counting it as a final head module."""
+        return self.f3_reliability_path
 
     def _validate_inputs(
         self,
@@ -351,17 +370,17 @@ class IBERRefiner(nn.Module):
         zero_rgb_features = self.rgb_encoder(
             zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
-        signed_input_evidence = torch.cat(
-            (f3_input_evidence, rgb_input_evidence), dim=-1
+        f3_signed_features = self.f3_signed_path(
+            f3_input_evidence.to(dtype=hidden.dtype)
         )
-        zero_signed_input = torch.cat(
-            (zero_f3_boundary_evidence, zero_rgb_boundary_evidence), dim=-1
+        rgb_signed_features = self.rgb_signed_path(
+            rgb_input_evidence.to(dtype=hidden.dtype)
         )
-        signed_evidence_features = self.signed_evidence_path(
-            signed_input_evidence.to(dtype=hidden.dtype)
+        zero_f3_signed_features = self.f3_signed_path(
+            zero_f3_boundary_evidence.to(dtype=hidden.dtype)
         )
-        zero_signed_features = self.signed_evidence_path(
-            zero_signed_input.to(dtype=hidden.dtype)
+        zero_rgb_signed_features = self.rgb_signed_path(
+            zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
 
         log_area = geometry[..., 4].to(dtype=hidden.dtype)
@@ -439,14 +458,39 @@ class IBERRefiner(nn.Module):
             )
             return shared + scale_mix + edge_outputs
 
+        zero_signed_features = zero_f3_signed_features + zero_rgb_signed_features
         zero_direction = direction(
             zero_f3_features, zero_rgb_features, zero_signed_features
         )
-        evidence_direction = direction(
+        f3_direction = direction(
+            f3_boundary_features,
+            zero_rgb_features,
+            f3_signed_features + zero_rgb_signed_features,
+        )
+        rgb_direction = direction(
+            zero_f3_features,
+            rgb_boundary_features,
+            zero_f3_signed_features + rgb_signed_features,
+        )
+        joint_direction = direction(
             f3_boundary_features,
             rgb_boundary_features,
-            signed_evidence_features,
+            f3_signed_features + rgb_signed_features,
         )
+        f3_reliability = self.f3_reliability_path(
+            torch.cat((f3_signed_features, rgb_signed_features), dim=-1)
+        )
+        f3_reliability = torch.sigmoid(f3_reliability) * self.f3_increment_gain
+        if self.training and torch.is_grad_enabled():
+            gradient_bridge = joint_direction - joint_direction.detach()
+        else:
+            gradient_bridge = torch.zeros_like(joint_direction)
+        b3_direction = rgb_direction + f3_reliability * (
+            joint_direction - rgb_direction
+        ) + gradient_bridge
+        centered_f3_direction = f3_direction - zero_direction
+        centered_rgb_direction = rgb_direction - zero_direction
+        centered_b3_direction = b3_direction - zero_direction
         base_gate_raw = self.base_gate_head(area_context).squeeze(-1)
         zero_gate = calibrated_head(
             self.boundary_gate_head,
@@ -454,14 +498,34 @@ class IBERRefiner(nn.Module):
             self.boundary_edge_gate_heads,
             zero_direction,
         ).squeeze(-1)
-        evidence_gate = calibrated_head(
-            self.boundary_gate_head,
-            self.scale_gate_heads,
-            self.boundary_edge_gate_heads,
-            evidence_direction,
-        ).squeeze(-1)
+        if self.probe == "b3":
+            evidence_gate = calibrated_head(
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                b3_direction,
+            ).squeeze(-1)
+            boundary_hidden = centered_b3_direction
+        elif self.probe == "b1":
+            evidence_gate = calibrated_head(
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                f3_direction,
+            ).squeeze(-1)
+            boundary_hidden = centered_f3_direction
+        elif self.probe == "b2":
+            evidence_gate = calibrated_head(
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                rgb_direction,
+            ).squeeze(-1)
+            boundary_hidden = centered_rgb_direction
+        else:
+            evidence_gate = zero_gate
+            boundary_hidden = torch.zeros_like(zero_direction)
         boundary_gate_raw = evidence_gate - zero_gate
-        boundary_hidden = evidence_direction
         gate_logits = base_gate_raw + boundary_gate_raw
         gates = gate_logits.sigmoid()
 
@@ -472,29 +536,69 @@ class IBERRefiner(nn.Module):
             self.boundary_edge_residual_heads,
             zero_direction,
         ).squeeze(-1)
-        evidence_residual = calibrated_head(
-            self.boundary_residual_head,
-            self.scale_residual_heads,
-            self.boundary_edge_residual_heads,
-            evidence_direction,
-        ).squeeze(-1)
+        if self.probe == "b3":
+            evidence_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
+                b3_direction,
+            ).squeeze(-1)
+        elif self.probe == "b1":
+            evidence_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
+                f3_direction,
+            ).squeeze(-1)
+        elif self.probe == "b2":
+            evidence_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
+                rgb_direction,
+            ).squeeze(-1)
+        else:
+            evidence_residual = zero_residual
         boundary_residual_raw = (
             (evidence_residual - zero_residual)
             * self.boundary_gain.clamp(0.5, 4.0)
         )
         if self.training and torch.is_grad_enabled():
+            aux_f3_direction = direction(
+                f3_boundary_features,
+                zero_rgb_features,
+                f3_signed_features + zero_rgb_signed_features,
+                detach_context=True,
+            )
+            aux_rgb_direction = direction(
+                zero_f3_features,
+                rgb_boundary_features,
+                zero_f3_signed_features + rgb_signed_features,
+                detach_context=True,
+            )
+            aux_joint_direction = direction(
+                f3_boundary_features,
+                rgb_boundary_features,
+                f3_signed_features + rgb_signed_features,
+                detach_context=True,
+            )
+            aux_b3_direction = aux_rgb_direction + f3_reliability * (
+                aux_joint_direction - aux_rgb_direction
+            )
             aux_zero_direction = direction(
                 zero_f3_features,
                 zero_rgb_features,
                 zero_signed_features,
                 detach_context=True,
             )
-            aux_evidence_direction = direction(
-                f3_boundary_features,
-                rgb_boundary_features,
-                signed_evidence_features,
-                detach_context=True,
-            )
+            if self.probe == "b3":
+                aux_evidence_direction = aux_b3_direction
+            elif self.probe == "b1":
+                aux_evidence_direction = aux_f3_direction
+            elif self.probe == "b2":
+                aux_evidence_direction = aux_rgb_direction
+            else:
+                aux_evidence_direction = aux_zero_direction
             aux_zero_gate = calibrated_head(
                 self.boundary_gate_head,
                 self.scale_gate_heads,
