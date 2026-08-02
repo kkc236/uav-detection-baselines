@@ -140,16 +140,36 @@ class IBERRefiner(nn.Module):
                 nn.Linear(64, 64),
                 nn.SiLU(),
             )
+            # Shared capacity for area-conditioned boundary calibration.  The
+            # area path is present in every arm so the private parameter
+            # budget and initialization fingerprint remain comparable; only
+            # non-zero boundary evidence can activate its delta below.
+            self.area_path = nn.Sequential(
+                nn.Linear(4, 32),
+                nn.SiLU(),
+                nn.Linear(32, 32),
+                nn.SiLU(),
+            )
+            self.area_boundary_trunk = nn.Sequential(
+                nn.Linear(72, 128),
+                nn.SiLU(),
+                nn.Linear(128, 64),
+                nn.SiLU(),
+            )
             self.base_gate_head = nn.Linear(64, 1)
             self.boundary_gate_head = nn.Linear(64, 1)
             self.base_residual_head = nn.Linear(64, 1)
             self.boundary_residual_head = nn.Linear(64, 1)
+            self.area_gate_head = nn.Linear(64, 1)
+            self.area_residual_head = nn.Linear(64, 1)
 
         for head in (
             self.base_gate_head,
             self.boundary_gate_head,
             self.base_residual_head,
             self.boundary_residual_head,
+            self.area_gate_head,
+            self.area_residual_head,
         ):
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
@@ -258,6 +278,9 @@ class IBERRefiner(nn.Module):
         geometry_features = self.geometry_path(
             geometry.to(dtype=query_features.dtype)
         )
+        area_features = self.area_path(
+            geometry[..., 2:6].to(dtype=query_features.dtype)
+        )
         stock_edges = cxcywh_to_xyxy(stock_boxes)
         batch, queries = hidden.shape[:2]
 
@@ -268,6 +291,7 @@ class IBERRefiner(nn.Module):
         )
         query_per_edge = query_features.unsqueeze(2).expand(-1, -1, 4, -1)
         geometry_per_edge = geometry_features.unsqueeze(2).expand(-1, -1, 4, -1)
+        area_per_edge = area_features.unsqueeze(2).expand(-1, -1, 4, -1)
         base_features = self.base_trunk(
             torch.cat((query_per_edge, geometry_per_edge, edge_features), dim=-1)
         )
@@ -341,6 +365,22 @@ class IBERRefiner(nn.Module):
         )
         zero_boundary_hidden = self.boundary_trunk(zero_boundary_condition)
 
+        area_condition = torch.cat(
+            (boundary_features, area_per_edge, edge_features), dim=-1
+        )
+        zero_area_condition = torch.cat(
+            (zero_boundary_features, area_per_edge, edge_features), dim=-1
+        )
+        area_hidden = self.area_boundary_trunk(area_condition)
+        zero_area_hidden = self.area_boundary_trunk(zero_area_condition)
+        area_gate_delta = (
+            self.area_gate_head(area_hidden) - self.area_gate_head(zero_area_hidden)
+        ).squeeze(-1)
+        area_residual_delta = (
+            self.area_residual_head(area_hidden)
+            - self.area_residual_head(zero_area_hidden)
+        ).squeeze(-1)
+
         if self.probe == "b3":
             f3_only_features = self.boundary_encoder(
                 torch.cat((f3_boundary_features, zero_rgb_features), dim=-1)
@@ -373,6 +413,9 @@ class IBERRefiner(nn.Module):
                 self.boundary_residual_head(boundary_hidden)
                 - self.boundary_residual_head(zero_boundary_hidden)
             ).squeeze(-1)
+
+        boundary_gate_delta = boundary_gate_delta + area_gate_delta
+        boundary_residual_delta = boundary_residual_delta + area_residual_delta
 
         base_gate_raw = self.base_gate_head(base_features).squeeze(-1)
         boundary_gate_raw = torch.where(
