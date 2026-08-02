@@ -575,6 +575,58 @@ def test_boundary_off_uses_only_nonzero_base_heads() -> None:
     assert not torch.equal(first_output.refined_edges, second_output.refined_edges)
 
 
+def test_b0_disables_boundary_outputs_even_when_boundary_heads_are_nonzero() -> None:
+    model = _refiner("b0")
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_gate_head.bias.fill_(0.13)
+        model.boundary_residual_head.weight.fill_(-0.05)
+        model.boundary_residual_head.bias.fill_(0.21)
+
+    output = model(*_inputs(batch=1))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("probe", sorted(PROBES))
+def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(probe: str) -> None:
+    model = _refiner(probe)
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_gate_head.bias.fill_(0.13)
+        model.boundary_residual_head.weight.fill_(-0.05)
+        model.boundary_residual_head.bias.fill_(0.21)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    output = model(hidden, boxes, scores, torch.zeros_like(f3), torch.zeros_like(image))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
 def test_existing_private_loss_accepts_real_iber_output() -> None:
     model = _refiner()
     output = model(*_inputs(batch=2))

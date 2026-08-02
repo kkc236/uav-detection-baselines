@@ -245,6 +245,14 @@ class IBERRefiner(nn.Module):
         image_rgb = image_rgb.detach()
         self._validate_inputs(hidden, stock_boxes, stock_scores, f3, image_rgb)
 
+        boundary_signal = torch.zeros(
+            (hidden.shape[0], 1, 1), device=hidden.device, dtype=torch.bool
+        )
+        if self.use_f3:
+            boundary_signal |= f3.abs().flatten(1).sum(dim=1).gt(0).view(-1, 1, 1)
+        if self.use_rgb:
+            boundary_signal |= image_rgb.abs().flatten(1).sum(dim=1).gt(0).view(-1, 1, 1)
+
         query_features = self.query_path(hidden)
         geometry, quality, entropy = _geometry_quality(stock_boxes, stock_scores)
         geometry_features = self.geometry_path(
@@ -272,16 +280,29 @@ class IBERRefiner(nn.Module):
                 stock_boxes,
                 image_size=self.image_size,
             )
+            if self.f3_projection.bias is None:
+                zero_f3_edge = torch.zeros_like(f3_boundary_evidence[..., :32])
+            else:
+                zero_f3_edge = self.f3_projection.bias.to(
+                    dtype=f3_boundary_evidence.dtype
+                ).view(1, 1, 1, 32).expand(batch, queries, 4, -1)
+            zero_f3_boundary_evidence = torch.cat(
+                (zero_f3_edge, torch.zeros_like(f3_boundary_evidence[..., 32:])),
+                dim=-1,
+            )
         else:
             f3_boundary_evidence = f3.new_zeros((batch, queries, 4, 96))
+            zero_f3_boundary_evidence = torch.zeros_like(f3_boundary_evidence)
         if self.use_rgb and not empty:
             rgb_boundary_evidence = sample_rgb_boundary_evidence(
                 image_rgb,
                 stock_boxes,
                 image_size=self.image_size,
             )
+            zero_rgb_boundary_evidence = torch.zeros_like(rgb_boundary_evidence)
         else:
             rgb_boundary_evidence = image_rgb.new_zeros((batch, queries, 4, 15))
+            zero_rgb_boundary_evidence = torch.zeros_like(rgb_boundary_evidence)
 
         f3_boundary_features = self.f3_encoder(
             f3_boundary_evidence.to(dtype=query_features.dtype)
@@ -298,15 +319,42 @@ class IBERRefiner(nn.Module):
         )
         boundary_hidden = self.boundary_trunk(boundary_condition)
 
+        zero_f3_features = self.f3_encoder(
+            zero_f3_boundary_evidence.to(dtype=query_features.dtype)
+        )
+        zero_rgb_features = self.rgb_encoder(
+            zero_rgb_boundary_evidence.to(dtype=query_features.dtype)
+        )
+        zero_boundary_features = self.boundary_encoder(
+            torch.cat((zero_f3_features, zero_rgb_features), dim=-1)
+        )
+        zero_boundary_condition = torch.cat(
+            (zero_boundary_features, query_per_edge[..., :32], edge_features),
+            dim=-1,
+        )
+        zero_boundary_hidden = self.boundary_trunk(zero_boundary_condition)
+
         base_gate_raw = self.base_gate_head(base_features).squeeze(-1)
-        boundary_gate_raw = self.boundary_gate_head(boundary_hidden).squeeze(-1)
+        boundary_gate_delta = (
+            self.boundary_gate_head(boundary_hidden)
+            - self.boundary_gate_head(zero_boundary_hidden)
+        ).squeeze(-1)
+        boundary_gate_raw = torch.where(
+            boundary_signal, boundary_gate_delta, torch.zeros_like(boundary_gate_delta)
+        )
         gate_logits = base_gate_raw + boundary_gate_raw
         gates = gate_logits.sigmoid()
 
         base_residual_raw = self.base_residual_head(base_features).squeeze(-1)
-        boundary_residual_raw = self.boundary_residual_head(
-            boundary_hidden
+        boundary_residual_delta = (
+            self.boundary_residual_head(boundary_hidden)
+            - self.boundary_residual_head(zero_boundary_hidden)
         ).squeeze(-1)
+        boundary_residual_raw = torch.where(
+            boundary_signal,
+            boundary_residual_delta,
+            torch.zeros_like(boundary_residual_delta),
+        )
         residual_raw = base_residual_raw + boundary_residual_raw
         residuals = residual_raw.tanh()
         effective_correction = gates * residuals
