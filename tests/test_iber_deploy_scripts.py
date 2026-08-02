@@ -85,6 +85,7 @@ def test_host_verifier_is_read_only_and_locks_baseline_runtime() -> None:
         "ultralytics==8.4.90",
         "CUDA 12.1",
         "minimum_disk_kib=$((70 * 1024 * 1024))",
+        "minimum_memory_kib=$((31 * 1024 * 1024))",
         "df -Pk /data",
         "MemTotal",
         "api.github.com",
@@ -97,6 +98,7 @@ def test_host_verifier_is_read_only_and_locks_baseline_runtime() -> None:
     assert "49140" not in content
     assert "570.133.07" not in content
     assert "minimum_disk_kib=$((80 * 1024 * 1024))" not in content
+    assert "minimum_memory_kib=$((32 * 1024 * 1024))" not in content
     assert 'for key in ("github_reachable", "mirror_reachable", "pytorch_reachable")' not in content
 
 
@@ -227,6 +229,7 @@ def test_server_guide_describes_amendment_names_as_compatibility_only() -> None:
     assert "iber-be-v1.0-baseline-aligned-runtime-2026-08-02" in guide
     assert "这些网络诊断不作为科学或工程通过条件" in guide
     assert "准备完成后至少保留 `70 GiB` 可用空间" in guide
+    assert "Linux `MemTotal` 至少为 `31 GiB`" in guide
     assert "49140 MiB" not in guide
     assert "570.133.07" not in guide
 

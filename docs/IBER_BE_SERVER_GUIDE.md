@@ -80,6 +80,8 @@ bootstrap 优先使用阿里云 PyPI 镜像，PyTorch CUDA 12.1 wheel 使用官�
 
 磁盘门禁按完成 wheelhouse、数据镜像与解压后的启动时点计算：准备完成后至少保留 `70 GiB` 可用空间。该门禁只保护后续 cache、checkpoint 和日志空间，不改变任何训练或评价参数。
 
+标称 32GB 云主机通常会向 Linux 保留部分内存，因此主机门禁要求 Linux `MemTotal` 至少为 `31 GiB`；这只校验物理主机容量，不使用训练时动态空闲内存，也不改变固定 batch、AMP 或 workers。
+
 ```bash
 bash deploy/iber/build_wheelhouse.sh
 ```
