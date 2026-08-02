@@ -43,7 +43,7 @@ pinned_requirements=(
     "opencv-python-headless==4.12.0.88"
     "PyYAML==6.0.3"
     "psutil==7.2.2"
-    "thop==0.1.1.post2209072238"
+    "ultralytics-thop==2.0.18"
 )
 requirements_sha="$(printf '%s\n' "${pinned_requirements[@]}" | sha256sum | awk '{print $1}')"
 marker_path="${marker_root}/bootstrap-${source_commit}-${requirements_sha}.complete"

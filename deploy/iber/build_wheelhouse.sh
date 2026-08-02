@@ -19,7 +19,7 @@ pinned_requirements=(
     "opencv-python-headless==4.12.0.88"
     "PyYAML==6.0.3"
     "psutil==7.2.2"
-    "thop==0.1.1.post2209072238"
+    "ultralytics-thop==2.0.18"
 )
 
 if [[ -x /data/uav/venvs/iber-be-v1/bin/python ]]; then
@@ -52,4 +52,3 @@ find "$wheelhouse" -maxdepth 1 -type f ! -name 'sha256-*' -print0 \
     > "${wheelhouse}/sha256-${requirements_sha}.txt"
 printf '%s\n' "$requirements_sha" > "${marker_path}.tmp"
 mv "${marker_path}.tmp" "$marker_path"
-

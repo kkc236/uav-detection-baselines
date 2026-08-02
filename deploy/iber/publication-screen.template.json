@@ -15,7 +15,6 @@
   "run_name": "iber-be-v1.0-screen-seed0-b3-SOURCE_SHORT_SHA",
   "token_file": "/data/uav/HANDOFFS/secrets/github_token",
   "results_repo": "/data/uav/results/iber-be-v1-SOURCE_SHORT_SHA",
-  "gate1_decision": "/data/uav/runs/iber-be-v1/SOURCE_SHORT_SHA-seed0-amended/gate1-decision.json",
+  "gate1_decision": "/data/uav/runs/iber-be-v1/SOURCE_SHORT_SHA-seed0-amended/probe/gate1-decision.json",
   "retain": 3
 }
-

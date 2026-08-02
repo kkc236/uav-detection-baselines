@@ -116,6 +116,12 @@ export YOLO_CONFIG_DIR=/data/uav/config/Ultralytics
 source /data/uav/config/iber-be-v1/git-http.env
 nohup /data/uav/venvs/iber-be-v1/bin/python \
   scripts/run_iber_pipeline.py \
+  --baseline-checkpoint /data/uav/weights/matched_baseline/matched-baseline-best-epoch-0100.pt \
+  --dataset-root /data/uav/datasets/VisDrone \
+  --run-root /data/uav/runs/iber-be-v1/<shortsha>-seed0-amended \
+  --cache-root /data/uav/cache/iber-be-v1-<shortsha> \
+  --publication-config /data/uav/config/iber-be-v1/publication-screen.json \
+  --device 0 \
   > /data/uav/logs/iber-be-v1-<shortsha>-pipeline.log 2>&1 &
 printf '%s\n' "$!" > /data/uav/runs/iber-be-v1/<shortsha>-seed0-amended/pipeline.pid
 ```

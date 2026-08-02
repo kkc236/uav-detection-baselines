@@ -104,6 +104,7 @@ def test_wheelhouse_is_mirror_first_and_exactly_version_pinned() -> None:
         "torch==2.5.1+cu121",
         "torchvision==0.20.1+cu121",
         "ultralytics==8.4.90",
+        "ultralytics-thop==2.0.18",
         "python3.10",
         "sha256sum",
         "foreground",
@@ -112,6 +113,7 @@ def test_wheelhouse_is_mirror_first_and_exactly_version_pinned() -> None:
     assert content.index("mirrors.aliyun.com/pypi/simple") < content.index(
         "download.pytorch.org/whl/cu121"
     )
+    assert "thop==0.1.1.post2209072238" not in content
 
 
 def test_bootstrap_uses_immutable_source_and_run_roots_and_mode_600_secrets() -> None:
@@ -139,6 +141,7 @@ def test_bootstrap_uses_immutable_source_and_run_roots_and_mode_600_secrets() ->
         "torch==2.5.1+cu121",
         "torchvision==0.20.1+cu121",
         "ultralytics==8.4.90",
+        "ultralytics-thop==2.0.18",
         "YOLO_CONFIG_DIR",
         "publication_config_mode",
         "git -c http.version=HTTP/1.1 clone",
@@ -205,11 +208,27 @@ def test_publication_template_is_iber_only_credential_free_and_gate_locked() -> 
     assert payload["run_name"].startswith("iber-be-v1.0-screen-seed0-b3-")
     assert payload["token_file"] == "/data/uav/HANDOFFS/secrets/github_token"
     assert payload["results_repo"].startswith("/data/uav/results/iber-be-v1-")
-    assert payload["gate1_decision"].startswith("/data/uav/runs/iber-be-v1/")
+    assert payload["gate1_decision"] == (
+        "/data/uav/runs/iber-be-v1/"
+        "SOURCE_SHORT_SHA-seed0-amended/probe/gate1-decision.json"
+    )
     content = path.read_text(encoding="utf-8")
     assert "github_pat_" not in content
     assert "a1314520" not in content
     assert not re.search(r"(?:^|[-_/])itber(?:$|[-_./])", content, re.I)
+
+
+def test_server_guide_pipeline_command_contains_every_required_path() -> None:
+    guide = Path("docs/IBER_BE_SERVER_GUIDE.md").read_text(encoding="utf-8")
+    for option in (
+        "--baseline-checkpoint",
+        "--dataset-root",
+        "--run-root",
+        "--cache-root",
+        "--publication-config",
+        "--device 0",
+    ):
+        assert option in guide
 
 
 def test_bundle_verifier_accepts_exact_authorities_and_source_commit(tmp_path: Path) -> None:
