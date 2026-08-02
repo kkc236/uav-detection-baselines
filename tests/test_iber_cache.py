@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import re
@@ -39,6 +40,19 @@ HASH_FIELDS = (
     "subset_sha256",
     "runtime_amendment_sha256",
 )
+
+
+def _execute_marker_and_return_tensor(marker_path: str) -> torch.Tensor:
+    Path(marker_path).write_text("executed", encoding="utf-8")
+    return torch.zeros((300, 8), dtype=torch.float16)
+
+
+class _UnsupportedPicklePayload:
+    def __init__(self, marker_path: Path) -> None:
+        self.marker_path = marker_path
+
+    def __reduce__(self):
+        return (_execute_marker_and_return_tensor, (str(self.marker_path),))
 
 
 def _authority() -> dict[str, str]:
@@ -330,6 +344,36 @@ def test_loader_validates_every_shard_before_exposing_any_records(
     with pytest.raises(CacheViolation, match="bytes|sha256"):
         load_evidence_cache(root, expected_authority=_authority())
     assert loads == 0
+
+
+def test_loader_rejects_unsupported_pickle_global_without_executing_it(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    manifest = _write_small_cache(root)
+    shard = root.joinpath(*manifest.shards[0].path.split("/"))
+    artifact = torch.load(shard, map_location="cpu", weights_only=True)
+    marker = tmp_path / "payload-executed.txt"
+    artifact["records"][0]["hidden"] = _UnsupportedPicklePayload(marker)
+    torch.save(artifact, shard)
+
+    manifest_path = root / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["shards"][0]["bytes"] = shard.stat().st_size
+    payload["shards"][0]["sha256"] = hashlib.sha256(
+        shard.read_bytes()
+    ).hexdigest().upper()
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CacheViolation, match="load|pickle|shard"):
+        load_evidence_cache(root, expected_authority=_authority())
+    assert not marker.exists()
+
+
+def test_loader_source_forces_weights_only_without_fallback() -> None:
+    source = Path("src/iber_cache.py").read_text(encoding="utf-8")
+    assert "weights_only=True" in source
+    assert "weights_only=False" not in source
 
 
 def test_cache_sources_contain_no_trajectory_or_old_box_names() -> None:

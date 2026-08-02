@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pickle
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -487,7 +488,12 @@ def load_evidence_cache(
     records: dict[str, list[dict[str, Any]]] = {"train": [], "val": []}
     image_ids: set[str] = set()
     for number, (shard, path) in enumerate(zip(manifest.shards, verified_paths)):
-        artifact = torch.load(path, map_location="cpu", weights_only=False)
+        try:
+            artifact = torch.load(path, map_location="cpu", weights_only=True)
+        except (pickle.UnpicklingError, RuntimeError, EOFError) as error:
+            raise CacheViolation(
+                {f"shards.{number}.load": type(error).__name__}
+            ) from error
         if not isinstance(artifact, Mapping) or set(artifact) != _ARTIFACT_FIELDS:
             raise _schema_violation(f"shards.{number}.artifact", artifact, _ARTIFACT_FIELDS)
         metadata = {
