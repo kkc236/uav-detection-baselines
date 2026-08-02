@@ -671,7 +671,7 @@ def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(probe: str)
     torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
 
 
-def test_b3_boundary_delta_is_the_sum_of_modality_specific_deltas() -> None:
+def test_b3_uses_true_joint_modality_fusion() -> None:
     models = {probe: _refiner(probe) for probe in ("b1", "b2", "b3")}
     with torch.no_grad():
         for model in models.values():
@@ -680,20 +680,32 @@ def test_b3_boundary_delta_is_the_sum_of_modality_specific_deltas() -> None:
             model.boundary_residual_head.weight.fill_(-0.05)
             model.boundary_residual_head.bias.fill_(0.21)
 
-    inputs = _inputs(batch=1)
-    outputs = {probe: model(*inputs) for probe, model in models.items()}
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    zeros_f3 = torch.zeros_like(f3)
+    zeros_image = torch.zeros_like(image)
+    b3_full = models["b3"](hidden, boxes, scores, f3, image)
+    b3_f3_only = models["b3"](hidden, boxes, scores, f3, zeros_image)
+    b3_rgb_only = models["b3"](hidden, boxes, scores, zeros_f3, image)
+    b1 = models["b1"](hidden, boxes, scores, f3, zeros_image)
+    b2 = models["b2"](hidden, boxes, scores, zeros_f3, image)
 
     torch.testing.assert_close(
-        outputs["b3"].boundary_gate_raw,
-        outputs["b1"].boundary_gate_raw + outputs["b2"].boundary_gate_raw,
+        b3_f3_only.boundary_gate_raw,
+        b1.boundary_gate_raw,
         rtol=0,
         atol=1e-7,
     )
     torch.testing.assert_close(
-        outputs["b3"].boundary_residual_raw,
-        outputs["b1"].boundary_residual_raw + outputs["b2"].boundary_residual_raw,
+        b3_rgb_only.boundary_residual_raw,
+        b2.boundary_residual_raw,
         rtol=0,
-        atol=3e-7,
+        atol=1e-7,
+    )
+    assert not torch.allclose(
+        b3_full.boundary_residual_raw,
+        b3_f3_only.boundary_residual_raw + b3_rgb_only.boundary_residual_raw,
+        rtol=0,
+        atol=1e-6,
     )
 
 

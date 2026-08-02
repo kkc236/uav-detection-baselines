@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from types import SimpleNamespace
 
 import torch
@@ -332,14 +333,21 @@ class IBERRefiner(nn.Module):
             zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
 
-        area_pixels = (
-            stock_boxes[..., 2:].clamp_min(0).prod(dim=-1)
-            * float(self.image_size**2)
+        log_area = geometry[..., 4].to(dtype=hidden.dtype)
+        tiny_limit = math.log((16.0 / float(self.image_size)) ** 2)
+        small_limit = math.log((32.0 / float(self.image_size)) ** 2)
+        temperature = 6.0
+        tiny_score = torch.sigmoid((tiny_limit - log_area) * temperature)
+        small_score = torch.sigmoid((log_area - tiny_limit) * temperature) * torch.sigmoid(
+            (small_limit - log_area) * temperature
         )
-        tiny = area_pixels < float(16**2)
-        small = (area_pixels >= float(16**2)) & (area_pixels < float(32**2))
-        other = ~(tiny | small)
-        scale_weights = torch.stack((tiny, small, other), dim=-1).to(dtype=hidden.dtype)
+        other_score = torch.sigmoid((log_area - small_limit) * temperature)
+        scale_weights = torch.stack(
+            (tiny_score, small_score, other_score), dim=-1
+        )
+        scale_weights = scale_weights / scale_weights.sum(dim=-1, keepdim=True).clamp_min(
+            torch.finfo(scale_weights.dtype).eps
+        )
 
         def direction(features_f3: torch.Tensor, features_rgb: torch.Tensor) -> torch.Tensor:
             direction_input = torch.cat(
@@ -371,6 +379,7 @@ class IBERRefiner(nn.Module):
         zero_direction = direction(zero_f3_features, zero_rgb_features)
         f3_direction = direction(f3_boundary_features, zero_rgb_features)
         rgb_direction = direction(zero_f3_features, rgb_boundary_features)
+        joint_direction = direction(f3_boundary_features, rgb_boundary_features)
         base_gate_raw = self.base_gate_head(area_context).squeeze(-1)
         zero_gate = calibrated_head(
             self.boundary_gate_head, self.scale_gate_heads, zero_direction
@@ -382,8 +391,11 @@ class IBERRefiner(nn.Module):
             self.boundary_gate_head, self.scale_gate_heads, rgb_direction
         ).squeeze(-1)
         if self.probe == "b3":
-            boundary_gate_delta = f3_gate + rgb_gate - 2 * zero_gate
-            boundary_hidden = f3_direction + rgb_direction - zero_direction
+            joint_gate = calibrated_head(
+                self.boundary_gate_head, self.scale_gate_heads, joint_direction
+            ).squeeze(-1)
+            boundary_gate_delta = joint_gate - zero_gate
+            boundary_hidden = joint_direction
         elif self.probe == "b1":
             boundary_gate_delta = f3_gate - zero_gate
             boundary_hidden = f3_direction
@@ -410,7 +422,12 @@ class IBERRefiner(nn.Module):
             self.boundary_residual_head, self.scale_residual_heads, rgb_direction
         ).squeeze(-1)
         if self.probe == "b3":
-            boundary_residual_delta = f3_residual + rgb_residual - 2 * zero_residual
+            joint_residual = calibrated_head(
+                self.boundary_residual_head,
+                self.scale_residual_heads,
+                joint_direction,
+            ).squeeze(-1)
+            boundary_residual_delta = joint_residual - zero_residual
         elif self.probe == "b1":
             boundary_residual_delta = f3_residual - zero_residual
         elif self.probe == "b2":
@@ -424,12 +441,8 @@ class IBERRefiner(nn.Module):
         )
         residual_raw = base_residual_raw + boundary_residual_raw
         if self.probe != "b0":
-            tiny_or_small = scale_weights[..., :2].sum(dim=-1).gt(0).unsqueeze(-1)
-            residual_raw = torch.where(
-                tiny_or_small,
-                boundary_residual_raw,
-                residual_raw,
-            )
+            small_mix = scale_weights[..., :2].sum(dim=-1).unsqueeze(-1)
+            residual_raw = (1.0 - small_mix) * residual_raw + small_mix * boundary_residual_raw
         residuals = residual_raw.tanh()
         effective_correction = gates * residuals
 
