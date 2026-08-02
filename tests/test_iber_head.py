@@ -112,6 +112,58 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
 
 
+def test_b3_has_zero_initialized_per_edge_boundary_heads() -> None:
+    model = _refiner("b3")
+
+    for collection_name in (
+        "boundary_edge_gate_heads",
+        "boundary_edge_residual_heads",
+    ):
+        heads = getattr(model, collection_name)
+        assert isinstance(heads, nn.ModuleList)
+        assert len(heads) == 4
+        for head in heads:
+            _assert_linear(head, 64, 1)
+            torch.testing.assert_close(
+                head.weight, torch.zeros_like(head.weight), rtol=0, atol=0
+            )
+            torch.testing.assert_close(
+                head.bias, torch.zeros_like(head.bias), rtol=0, atol=0
+            )
+
+
+def test_b3_per_edge_boundary_heads_can_differ_from_shared_heads() -> None:
+    model = _refiner("b3")
+    edge_features = torch.ones(1, 4, 64)
+
+    with torch.no_grad():
+        for edge_index, (gate_head, residual_head) in enumerate(
+            zip(model.boundary_edge_gate_heads, model.boundary_edge_residual_heads)
+        ):
+            gate_head.weight.fill_(0.01 * (edge_index + 1))
+            residual_head.weight.fill_(0.02 * (edge_index + 1))
+
+    edge_gate_outputs = torch.cat(
+        [head(edge_features[:, edge_index]) for edge_index, head in enumerate(model.boundary_edge_gate_heads)],
+        dim=-1,
+    )
+    edge_residual_outputs = torch.cat(
+        [head(edge_features[:, edge_index]) for edge_index, head in enumerate(model.boundary_edge_residual_heads)],
+        dim=-1,
+    )
+    shared_gate_outputs = model.boundary_gate_head(edge_features).squeeze(-1)
+    shared_residual_outputs = model.boundary_residual_head(edge_features).squeeze(-1)
+
+    assert edge_gate_outputs.shape == (1, 4)
+    assert edge_residual_outputs.shape == (1, 4)
+    assert torch.unique(edge_gate_outputs).numel() == 4
+    assert torch.unique(edge_residual_outputs).numel() == 4
+    assert not torch.allclose(edge_gate_outputs, shared_gate_outputs, rtol=0, atol=0)
+    assert not torch.allclose(
+        edge_residual_outputs, shared_residual_outputs, rtol=0, atol=0
+    )
+
+
 def test_boundary_direction_uses_detached_hidden_context() -> None:
     model = _refiner()
     hidden, boxes, scores, f3, image = _inputs(batch=1)

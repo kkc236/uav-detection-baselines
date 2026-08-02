@@ -163,6 +163,12 @@ class IBERRefiner(nn.Module):
             self.scale_residual_heads = nn.ModuleList(
                 [nn.Linear(64, 1) for _ in range(3)]
             )
+            self.boundary_edge_gate_heads = nn.ModuleList(
+                [nn.Linear(64, 1) for _ in range(4)]
+            )
+            self.boundary_edge_residual_heads = nn.ModuleList(
+                [nn.Linear(64, 1) for _ in range(4)]
+            )
             self.base_gate_head = nn.Linear(64, 1)
             self.boundary_gate_head = nn.Linear(64, 1)
             self.base_residual_head = nn.Linear(64, 1)
@@ -175,6 +181,8 @@ class IBERRefiner(nn.Module):
             self.boundary_residual_head,
             *self.scale_gate_heads,
             *self.scale_residual_heads,
+            *self.boundary_edge_gate_heads,
+            *self.boundary_edge_residual_heads,
         ):
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
@@ -365,6 +373,7 @@ class IBERRefiner(nn.Module):
         def calibrated_head(
             head: nn.Linear,
             scale_heads: nn.ModuleList,
+            edge_heads: nn.ModuleList,
             features: torch.Tensor,
         ) -> torch.Tensor:
             shared = head(features)
@@ -374,7 +383,14 @@ class IBERRefiner(nn.Module):
             scale_mix = (
                 scale_outputs * scale_weights.unsqueeze(2).unsqueeze(-1)
             ).sum(dim=-2)
-            return shared + scale_mix
+            edge_outputs = torch.cat(
+                [
+                    edge_head(features[..., edge_id, :]).unsqueeze(-2)
+                    for edge_id, edge_head in enumerate(edge_heads)
+                ],
+                dim=-2,
+            )
+            return shared + scale_mix + edge_outputs
 
         zero_direction = direction(zero_f3_features, zero_rgb_features)
         f3_direction = direction(f3_boundary_features, zero_rgb_features)
@@ -382,17 +398,29 @@ class IBERRefiner(nn.Module):
         joint_direction = direction(f3_boundary_features, rgb_boundary_features)
         base_gate_raw = self.base_gate_head(area_context).squeeze(-1)
         zero_gate = calibrated_head(
-            self.boundary_gate_head, self.scale_gate_heads, zero_direction
+            self.boundary_gate_head,
+            self.scale_gate_heads,
+            self.boundary_edge_gate_heads,
+            zero_direction,
         ).squeeze(-1)
         f3_gate = calibrated_head(
-            self.boundary_gate_head, self.scale_gate_heads, f3_direction
+            self.boundary_gate_head,
+            self.scale_gate_heads,
+            self.boundary_edge_gate_heads,
+            f3_direction,
         ).squeeze(-1)
         rgb_gate = calibrated_head(
-            self.boundary_gate_head, self.scale_gate_heads, rgb_direction
+            self.boundary_gate_head,
+            self.scale_gate_heads,
+            self.boundary_edge_gate_heads,
+            rgb_direction,
         ).squeeze(-1)
         if self.probe == "b3":
             joint_gate = calibrated_head(
-                self.boundary_gate_head, self.scale_gate_heads, joint_direction
+                self.boundary_gate_head,
+                self.scale_gate_heads,
+                self.boundary_edge_gate_heads,
+                joint_direction,
             ).squeeze(-1)
             boundary_gate_delta = joint_gate - zero_gate
             boundary_hidden = joint_direction
@@ -413,18 +441,28 @@ class IBERRefiner(nn.Module):
 
         base_residual_raw = self.base_residual_head(area_context).squeeze(-1)
         zero_residual = calibrated_head(
-            self.boundary_residual_head, self.scale_residual_heads, zero_direction
+            self.boundary_residual_head,
+            self.scale_residual_heads,
+            self.boundary_edge_residual_heads,
+            zero_direction,
         ).squeeze(-1)
         f3_residual = calibrated_head(
-            self.boundary_residual_head, self.scale_residual_heads, f3_direction
+            self.boundary_residual_head,
+            self.scale_residual_heads,
+            self.boundary_edge_residual_heads,
+            f3_direction,
         ).squeeze(-1)
         rgb_residual = calibrated_head(
-            self.boundary_residual_head, self.scale_residual_heads, rgb_direction
+            self.boundary_residual_head,
+            self.scale_residual_heads,
+            self.boundary_edge_residual_heads,
+            rgb_direction,
         ).squeeze(-1)
         if self.probe == "b3":
             joint_residual = calibrated_head(
                 self.boundary_residual_head,
                 self.scale_residual_heads,
+                self.boundary_edge_residual_heads,
                 joint_direction,
             ).squeeze(-1)
             boundary_residual_delta = joint_residual - zero_residual
