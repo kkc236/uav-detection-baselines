@@ -155,7 +155,7 @@ class IBERRefiner(nn.Module):
                     for _ in range(3)
                 ]
             )
-            self.boundary_gain = nn.Parameter(torch.tensor(6.0))
+            self.boundary_gain = nn.Parameter(torch.tensor(2.0))
             self.scale_gate_heads = nn.ModuleList(
                 [nn.Linear(64, 1) for _ in range(3)]
             )
@@ -419,10 +419,17 @@ class IBERRefiner(nn.Module):
             boundary_residual_delta = torch.zeros_like(zero_residual)
         boundary_residual_raw = torch.where(
             boundary_signal,
-            boundary_residual_delta * self.boundary_gain.clamp(0.5, 8.0),
+            boundary_residual_delta * self.boundary_gain.clamp(0.5, 4.0),
             torch.zeros_like(boundary_residual_delta),
         )
         residual_raw = base_residual_raw + boundary_residual_raw
+        if self.probe != "b0":
+            tiny_or_small = scale_weights[..., :2].sum(dim=-1).gt(0).unsqueeze(-1)
+            residual_raw = torch.where(
+                tiny_or_small,
+                boundary_residual_raw,
+                residual_raw,
+            )
         residuals = residual_raw.tanh()
         effective_correction = gates * residuals
 
