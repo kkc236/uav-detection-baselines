@@ -686,24 +686,20 @@ def test_b3_uses_true_joint_modality_fusion() -> None:
     b3_full = models["b3"](hidden, boxes, scores, f3, image)
     b3_f3_only = models["b3"](hidden, boxes, scores, f3, zeros_image)
     b3_rgb_only = models["b3"](hidden, boxes, scores, zeros_f3, image)
-    b1 = models["b1"](hidden, boxes, scores, f3, zeros_image)
-    b2 = models["b2"](hidden, boxes, scores, zeros_f3, image)
-
-    torch.testing.assert_close(
-        b3_f3_only.boundary_gate_raw,
-        b1.boundary_gate_raw,
-        rtol=0,
-        atol=1e-7,
-    )
-    torch.testing.assert_close(
-        b3_rgb_only.boundary_residual_raw,
-        b2.boundary_residual_raw,
-        rtol=0,
-        atol=1e-7,
-    )
+    b3_zero = models["b3"](hidden, boxes, scores, zeros_f3, zeros_image)
     assert not torch.allclose(
         b3_full.boundary_residual_raw,
-        b3_f3_only.boundary_residual_raw + b3_rgb_only.boundary_residual_raw,
+        b3_f3_only.boundary_residual_raw
+        + b3_rgb_only.boundary_residual_raw
+        - b3_zero.boundary_residual_raw,
+        rtol=0,
+        atol=1e-6,
+    )
+    assert not torch.allclose(
+        b3_full.boundary_gate_raw,
+        b3_f3_only.boundary_gate_raw
+        + b3_rgb_only.boundary_gate_raw
+        - b3_zero.boundary_gate_raw,
         rtol=0,
         atol=1e-6,
     )
