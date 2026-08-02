@@ -102,6 +102,8 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert hasattr(model, "area_calibration")
     assert hasattr(model, "direction_calibration")
     assert len(model.scale_experts) == 3
+    assert model.boundary_gain.shape == torch.Size([])
+    assert float(model.boundary_gain.detach()) == pytest.approx(2.0)
     parameter_names = dict(model.named_parameters())
     assert any(name.startswith("f3_encoder.") for name in parameter_names)
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
