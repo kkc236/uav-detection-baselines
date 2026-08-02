@@ -1,0 +1,59 @@
+{
+  "design_version": "iber-be-v1.0",
+  "format_version": 1,
+  "history": [
+    {
+      "phase": "authority",
+      "sequence": 1,
+      "time_ns": 1785669176278607623
+    },
+    {
+      "phase": "gate0",
+      "sequence": 2,
+      "time_ns": 1785669179703222190
+    },
+    {
+      "phase": "stock_authority",
+      "sequence": 3,
+      "time_ns": 1785669188243998051
+    },
+    {
+      "phase": "cache",
+      "sequence": 4,
+      "time_ns": 1785669213856516985
+    },
+    {
+      "phase": "probe",
+      "sequence": 5,
+      "time_ns": 1785669258390101660
+    },
+    {
+      "phase": "scientific_failed",
+      "sequence": 6,
+      "time_ns": 1785669421452248082
+    }
+  ],
+  "last_process": {
+    "command": [
+      "/data/uav/venvs/iber-be-v1/bin/python",
+      "/data/uav/source/uav-detection-baselines-f06223e6/scripts/run_iber_probe.py",
+      "--cache-root",
+      "/data/uav/cache/iber-be-v1-f06223e6-joint-continuous",
+      "--output-root",
+      "/data/uav/runs/iber-be-v1/f06223e6-seed0-joint-continuous/probe",
+      "--device",
+      "0"
+    ],
+    "finished_time_ns": 1785669421448788033,
+    "log": "/data/uav/runs/iber-be-v1/f06223e6-seed0-joint-continuous/logs/probe-1785669258834069480.log",
+    "phase": "probe",
+    "pid": 79097,
+    "process_group_id": 79097,
+    "return_code": 2,
+    "started_time_ns": 1785669258834745853
+  },
+  "phase": "scientific_failed",
+  "source_commit": "f06223e6c24fdc5f4af44ea5dcfbe088dc87ce51",
+  "supervisor_pid": 78776,
+  "supervisor_process_group_id": 78775
+}
