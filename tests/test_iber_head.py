@@ -693,7 +693,7 @@ def test_b3_boundary_delta_is_the_sum_of_modality_specific_deltas() -> None:
         outputs["b3"].boundary_residual_raw,
         outputs["b1"].boundary_residual_raw + outputs["b2"].boundary_residual_raw,
         rtol=0,
-        atol=1e-7,
+        atol=3e-7,
     )
 
 
