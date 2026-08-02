@@ -92,6 +92,30 @@ def test_probe_initialization_is_equal_capacity_reproducible_and_rng_private() -
     assert len(set(fingerprints.values())) == 1
 
 
+def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence() -> None:
+    source = inspect.getsource(iber_head).lower()
+    for forbidden in ("trajectory", "query_path", "encoder", "decoder"):
+        assert forbidden not in source
+    assert not any(token.lower() == "p3" for token in source.split())
+
+    model = _refiner()
+    assert hasattr(model, "area_calibration")
+    assert hasattr(model, "direction_calibration")
+
+
+def test_candidate_c_is_independent_of_detector_hidden_state() -> None:
+    model = _refiner()
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    changed_hidden = hidden + 17.0
+
+    first = model(hidden, boxes, scores, f3, image)
+    second = model(changed_hidden, boxes, scores, f3, image)
+
+    torch.testing.assert_close(first.refined_boxes, second.refined_boxes, rtol=0, atol=0)
+    torch.testing.assert_close(first.gate_logits, second.gate_logits, rtol=0, atol=0)
+    torch.testing.assert_close(first.residual_raw, second.residual_raw, rtol=0, atol=0)
+
+
 def test_private_initialization_never_seeds_accelerators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,49 +136,37 @@ def test_private_initialization_never_seeds_accelerators(
 def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     model = _refiner()
 
-    assert len(model.query_path) == 3
-    assert isinstance(model.query_path[0], nn.LayerNorm)
-    assert model.query_path[0].normalized_shape == (8,)
-    _assert_linear(model.query_path[1], 8, 64)
-    assert isinstance(model.query_path[2], nn.SiLU)
-
-    assert len(model.geometry_path) == 2
-    _assert_linear(model.geometry_path[0], 8, 16)
-    assert isinstance(model.geometry_path[1], nn.SiLU)
     assert isinstance(model.edge_embedding, nn.Embedding)
     assert (model.edge_embedding.num_embeddings, model.edge_embedding.embedding_dim) == (
         4,
         8,
     )
 
-    assert len(model.base_trunk) == 4
-    _assert_linear(model.base_trunk[0], 88, 64)
-    assert isinstance(model.base_trunk[1], nn.SiLU)
-    _assert_linear(model.base_trunk[2], 64, 64)
-    assert isinstance(model.base_trunk[3], nn.SiLU)
+    assert len(model.area_calibration) == 4
+    _assert_linear(model.area_calibration[0], 16, 96)
+    assert isinstance(model.area_calibration[1], nn.SiLU)
+    _assert_linear(model.area_calibration[2], 96, 64)
+    assert isinstance(model.area_calibration[3], nn.SiLU)
 
     assert isinstance(model.f3_projection, nn.Conv2d)
     assert model.f3_projection.in_channels == 4
     assert model.f3_projection.out_channels == 32
     assert model.f3_projection.kernel_size == (1, 1)
-    assert len(model.f3_encoder) == 2
-    _assert_linear(model.f3_encoder[0], 96, 32)
-    assert isinstance(model.f3_encoder[1], nn.SiLU)
+    assert len(model.f3_calibration) == 2
+    _assert_linear(model.f3_calibration[0], 96, 32)
+    assert isinstance(model.f3_calibration[1], nn.SiLU)
 
-    assert len(model.rgb_encoder) == 3
-    _assert_linear(model.rgb_encoder[0], 15, 16)
-    assert isinstance(model.rgb_encoder[1], nn.LayerNorm)
-    assert model.rgb_encoder[1].normalized_shape == (16,)
-    assert isinstance(model.rgb_encoder[2], nn.SiLU)
+    assert len(model.rgb_calibration) == 3
+    _assert_linear(model.rgb_calibration[0], 15, 16)
+    assert isinstance(model.rgb_calibration[1], nn.LayerNorm)
+    assert model.rgb_calibration[1].normalized_shape == (16,)
+    assert isinstance(model.rgb_calibration[2], nn.SiLU)
 
-    assert len(model.boundary_encoder) == 2
-    _assert_linear(model.boundary_encoder[0], 48, 32)
-    assert isinstance(model.boundary_encoder[1], nn.SiLU)
-    assert len(model.boundary_trunk) == 4
-    _assert_linear(model.boundary_trunk[0], 72, 64)
-    assert isinstance(model.boundary_trunk[1], nn.SiLU)
-    _assert_linear(model.boundary_trunk[2], 64, 64)
-    assert isinstance(model.boundary_trunk[3], nn.SiLU)
+    assert len(model.direction_calibration) == 4
+    _assert_linear(model.direction_calibration[0], 112, 96)
+    assert isinstance(model.direction_calibration[1], nn.SiLU)
+    _assert_linear(model.direction_calibration[2], 96, 64)
+    assert isinstance(model.direction_calibration[3], nn.SiLU)
 
     head_names = {
         "base_gate_head",
@@ -295,8 +307,10 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
     assert all(value.grad is None for value in inputs)
     parameter_groups = (
         tuple(model.f3_projection.parameters()),
-        tuple(model.f3_encoder.parameters()),
-        tuple(model.rgb_encoder.parameters()),
+        tuple(model.f3_calibration.parameters()),
+        tuple(model.rgb_calibration.parameters()),
+        tuple(model.area_calibration.parameters()),
+        tuple(model.direction_calibration.parameters()),
     )
     for parameters in parameter_groups:
         gradients = [parameter.grad for parameter in parameters]
@@ -678,7 +692,7 @@ def test_existing_private_loss_accepts_real_iber_output() -> None:
     assert model.boundary_residual_head.weight.grad is not None
 
 
-def test_only_f3_projection_is_convolutional_and_rgb_is_pointwise_encoded() -> None:
+def test_only_f3_projection_is_convolutional_and_rgb_is_pointwise_calibrated() -> None:
     model = _refiner()
     convolutions = {
         name: module
@@ -686,7 +700,7 @@ def test_only_f3_projection_is_convolutional_and_rgb_is_pointwise_encoded() -> N
         if isinstance(module, nn.Conv2d)
     }
     assert convolutions == {"f3_projection": model.f3_projection}
-    assert not any(isinstance(module, nn.Conv2d) for module in model.rgb_encoder.modules())
+    assert not any(isinstance(module, nn.Conv2d) for module in model.rgb_calibration.modules())
     assert not any(isinstance(module, nn.MultiheadAttention) for module in model.modules())
 
     source_without_docstrings = ast.parse(inspect.getsource(iber_head))
