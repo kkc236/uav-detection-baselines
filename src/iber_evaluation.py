@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
@@ -39,6 +40,7 @@ METRIC_NAMES = (
     "precision",
     "recall",
 )
+_HEX64 = re.compile(r"[0-9A-Fa-f]{64}")
 
 
 def _finite_number(value: Any) -> bool:
@@ -228,6 +230,8 @@ def compute_refinement_diagnostics(
     residuals: torch.Tensor,
     f3_boundary_features: torch.Tensor,
     rgb_boundary_features: torch.Tensor,
+    *,
+    target_group_sizes: Sequence[int],
 ) -> dict[str, Any]:
     """Measure edge error, matched IoU direction, leakage, and route activity."""
     if (
@@ -250,6 +254,14 @@ def compute_refinement_diagnostics(
         raise ValueError("IBER-BE RGB boundary features have invalid shape")
     if len(match_indices) != stock_boxes.shape[0]:
         raise ValueError("IBER-BE match index batch count mismatch")
+    if (
+        isinstance(target_group_sizes, (str, bytes))
+        or not isinstance(target_group_sizes, Sequence)
+        or len(target_group_sizes) != stock_boxes.shape[0]
+        or any(type(value) is not int or value < 0 for value in target_group_sizes)
+        or sum(target_group_sizes) != target_boxes.shape[0]
+    ):
+        raise ValueError("IBER-BE target group sizes are invalid")
 
     device = stock_boxes.device
     matched_mask = torch.zeros(
@@ -262,10 +274,26 @@ def compute_refinement_diagnostics(
     target_edges = cxcywh_to_xyxy(
         target_boxes.to(device=device, dtype=stock_boxes.dtype)
     )
+    target_offset = 0
     for image_index, (source, destination) in enumerate(match_indices):
         source = source.to(device=device, dtype=torch.long)
         destination = destination.to(device=device, dtype=torch.long)
+        if source.numel() != destination.numel():
+            raise ValueError("IBER-BE matcher source/target lengths differ")
+        if source.numel() and (
+            int(source.min()) < 0 or int(source.max()) >= stock_boxes.shape[1]
+        ):
+            raise ValueError("IBER-BE matcher query index is out of range")
+        target_end = target_offset + target_group_sizes[image_index]
+        if destination.numel() and (
+            int(destination.min()) < target_offset
+            or int(destination.max()) >= target_end
+        ):
+            raise ValueError(
+                f"IBER-BE matcher target crosses image boundary at image {image_index}"
+            )
         if not len(source):
+            target_offset = target_end
             continue
         matched_mask[image_index, source] = True
         selected_target = target_edges[destination]
@@ -275,6 +303,7 @@ def compute_refinement_diagnostics(
         refined_iou_parts.append(aligned_iou(selected_refined, selected_target))
         stock_edge_error_parts.append((selected_stock - selected_target).abs())
         refined_edge_error_parts.append((selected_refined - selected_target).abs())
+        target_offset = target_end
     if not stock_iou_parts:
         raise ValueError("IBER-BE evaluation has no matched validation targets")
     stock_iou = torch.cat(stock_iou_parts).float()
@@ -354,7 +383,98 @@ def assert_repeated_evaluations(
 
 def _metrics_valid(metrics: Mapping[str, Any]) -> bool:
     return isinstance(metrics, Mapping) and all(
-        name in metrics and _finite_number(metrics[name]) for name in METRIC_NAMES
+        name in metrics
+        and _finite_number(metrics[name])
+        and 0.0 <= float(metrics[name]) <= 1.0
+        for name in METRIC_NAMES
+    )
+
+
+def _diagnostics_schema_valid(
+    diagnostics: Mapping[str, Any], *, require_detector_hashes: bool
+) -> bool:
+    if not isinstance(diagnostics, Mapping) or diagnostics.get("finite") is not True:
+        return False
+    count_names = (
+        "matched_count",
+        "matched_improved",
+        "matched_degraded",
+        "matched_equal",
+    )
+    if not all(
+        type(diagnostics.get(name)) is int and diagnostics[name] >= 0
+        for name in count_names
+    ):
+        return False
+    if (
+        diagnostics["matched_count"] <= 0
+        or diagnostics["matched_count"]
+        != diagnostics["matched_improved"]
+        + diagnostics["matched_degraded"]
+        + diagnostics["matched_equal"]
+    ):
+        return False
+    finite_names = (
+        "stock_iou_mean",
+        "refined_iou_mean",
+        "matched_iou_delta_mean",
+        "stock_edge_mae",
+        "refined_edge_mae",
+        "edge_mae_delta",
+        "matched_correction_rms",
+        "unmatched_correction_rms",
+        "unmatched_to_matched_rms_ratio",
+        "f3_embedding_rms",
+        "rgb_embedding_rms",
+        "gate_mean",
+        "gate_std",
+        "gate_p05",
+        "gate_p95",
+        "residual_rms",
+        "residual_abs_p95",
+    )
+    if not all(_finite_number(diagnostics.get(name)) for name in finite_names):
+        return False
+    if not (
+        0.0 <= diagnostics["stock_iou_mean"] <= 1.0
+        and 0.0 <= diagnostics["refined_iou_mean"] <= 1.0
+        and -1.0 <= diagnostics["matched_iou_delta_mean"] <= 1.0
+        and diagnostics["stock_edge_mae"] >= 0.0
+        and diagnostics["refined_edge_mae"] >= 0.0
+        and diagnostics["matched_correction_rms"] >= 0.0
+        and diagnostics["unmatched_correction_rms"] >= 0.0
+        and diagnostics["unmatched_to_matched_rms_ratio"] >= 0.0
+        and diagnostics["f3_embedding_rms"] >= 0.0
+        and diagnostics["rgb_embedding_rms"] >= 0.0
+        and 0.0 <= diagnostics["gate_mean"] <= 1.0
+        and diagnostics["gate_std"] >= 0.0
+        and 0.0 <= diagnostics["gate_p05"] <= diagnostics["gate_p95"] <= 1.0
+        and diagnostics["residual_rms"] >= 0.0
+        and 0.0 <= diagnostics["residual_abs_p95"] <= 1.0
+    ):
+        return False
+    if require_detector_hashes:
+        before = diagnostics.get("detector_sha_before")
+        after = diagnostics.get("detector_sha_after")
+        if (
+            not isinstance(before, str)
+            or _HEX64.fullmatch(before) is None
+            or not isinstance(after, str)
+            or _HEX64.fullmatch(after) is None
+        ):
+            return False
+    return True
+
+
+def _repeat_schema_valid(repeats: Sequence[Mapping[str, Any]]) -> bool:
+    return all(
+        isinstance(report, Mapping)
+        and _metrics_valid(report.get("stock"))
+        and _metrics_valid(report.get("refined"))
+        and _diagnostics_schema_valid(
+            report.get("diagnostics"), require_detector_hashes=False
+        )
+        for report in repeats
     )
 
 
@@ -429,14 +549,15 @@ def evaluate_gate2(
 ) -> dict[str, Any]:
     """Apply every frozen epoch-30 Gate-2 condition without rounding."""
     metrics_valid = _metrics_valid(stock) and _metrics_valid(refined)
-    repeatability = _exact_repeatability(repeats)
+    repeatability = _exact_repeatability(repeats) and _repeat_schema_valid(repeats)
     valid_last5 = _valid_last5(last5_stock_map) and _valid_last5(
         last5_refined_map
     )
-    detector_unchanged = (
-        isinstance(diagnostics, Mapping)
-        and isinstance(diagnostics.get("detector_sha_before"), str)
-        and diagnostics.get("detector_sha_before")
+    diagnostics_schema = _diagnostics_schema_valid(
+        diagnostics, require_detector_hashes=True
+    )
+    detector_unchanged = diagnostics_schema and (
+        diagnostics.get("detector_sha_before")
         == diagnostics.get("detector_sha_after")
     )
     epoch_valid = type(checkpoint_epoch) is int and checkpoint_epoch == 30
@@ -483,7 +604,7 @@ def evaluate_gate2(
     engineering = {
         "checkpoint_epoch30": epoch_valid,
         "finite_metric_schema": metrics_valid,
-        "diagnostics_finite": diagnostics.get("finite") is True,
+        "diagnostics_finite": diagnostics_schema,
         "detector_unchanged": detector_unchanged,
         "repeatability": repeatability,
         "last5_history": valid_last5,

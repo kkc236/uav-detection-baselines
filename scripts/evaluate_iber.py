@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import subprocess
@@ -29,6 +30,7 @@ from scripts.train_iber import (  # noqa: E402
     AUGMENTATION,
     TRAINING_CONSTANTS,
     _validate_gate1_decision,
+    highest_contiguous_verified_epoch,
     validate_resume_checkpoint,
 )
 from src.iber_evaluation import (  # noqa: E402
@@ -169,6 +171,62 @@ def _batch_predictions(
     }
 
 
+def _assert_shared_prediction_scores(
+    stock_postprocessed: torch.Tensor,
+    refined_postprocessed: torch.Tensor,
+) -> None:
+    """Reject any postprocess drift outside the box coordinates."""
+    if (
+        stock_postprocessed.shape != refined_postprocessed.shape
+        or stock_postprocessed.ndim != 3
+        or stock_postprocessed.shape[-1] < 6
+        or not torch.equal(
+            stock_postprocessed[..., 4:6], refined_postprocessed[..., 4:6]
+        )
+    ):
+        raise RuntimeError(
+            "IBER-BE stock/refined postprocess did not preserve shared scores/classes"
+        )
+
+
+def _globalize_match_indices(
+    matches: Sequence[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    groups: Sequence[int],
+    prior_target_count: int,
+    query_count: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Convert matcher batch-global GT indices to evaluation-global indices."""
+    if len(matches) != len(groups) or prior_target_count < 0 or query_count < 1:
+        raise ValueError("IBER-BE matcher batch schema is invalid")
+    converted: list[tuple[torch.Tensor, torch.Tensor]] = []
+    batch_target_offset = 0
+    for image_index, ((source, destination), group) in enumerate(
+        zip(matches, groups, strict=True)
+    ):
+        if type(group) is not int or group < 0:
+            raise ValueError("IBER-BE matcher target group is invalid")
+        source = source.detach().long().cpu().view(-1)
+        destination = destination.detach().long().cpu().view(-1)
+        if source.numel() != destination.numel():
+            raise ValueError("IBER-BE matcher source/target lengths differ")
+        if source.numel() and (
+            int(source.min()) < 0 or int(source.max()) >= query_count
+        ):
+            raise ValueError("IBER-BE matcher query index is out of range")
+        target_end = batch_target_offset + group
+        if destination.numel() and (
+            int(destination.min()) < batch_target_offset
+            or int(destination.max()) >= target_end
+        ):
+            raise ValueError(
+                f"IBER-BE matcher target crosses image boundary at image {image_index}"
+            )
+        converted.append((source, destination + prior_target_count))
+        batch_target_offset = target_end
+    return converted
+
+
 def _evaluate_once(
     adapter: FrozenIBERAdapter,
     loader: Any,
@@ -189,6 +247,7 @@ def _evaluate_once(
     f3_parts: list[torch.Tensor] = []
     rgb_parts: list[torch.Tensor] = []
     target_parts: list[torch.Tensor] = []
+    target_group_sizes: list[int] = []
     all_matches: list[tuple[torch.Tensor, torch.Tensor]] = []
     global_target_offset = 0
 
@@ -197,12 +256,14 @@ def _evaluate_once(
             batch = validator.preprocess(raw_batch)
             output = adapter.forward_evidence(batch["img"])
             head = adapter.detector.model[-1]
+            shared_scores = output.stock_scores.sigmoid()
             stock_post = head.postprocess(
-                output.stock_boxes, output.stock_scores.sigmoid()
+                output.stock_boxes, shared_scores
             )
             refined_post = head.postprocess(
-                output.refined_boxes, output.stock_scores.sigmoid()
+                output.refined_boxes, shared_scores
             )
+            _assert_shared_prediction_scores(stock_post, refined_post)
             target_boxes = batch["bboxes"].detach().to(
                 device=device, dtype=output.stock_boxes.dtype
             )
@@ -226,6 +287,16 @@ def _evaluate_once(
                 target_classes,
                 groups,
             )
+            all_matches.extend(
+                _globalize_match_indices(
+                    matches,
+                    groups=groups,
+                    prior_target_count=global_target_offset,
+                    query_count=output.stock_boxes.shape[1],
+                )
+            )
+            target_group_sizes.extend(groups)
+            global_target_offset += sum(groups)
 
             stock_parts.append(output.stock_boxes.detach().float().cpu())
             refined_parts.append(output.refined_boxes.detach().float().cpu())
@@ -237,7 +308,6 @@ def _evaluate_once(
             f3_parts.append(output.f3_boundary_features.detach().float().cpu())
             rgb_parts.append(output.rgb_boundary_features.detach().float().cpu())
             target_parts.append(target_boxes.detach().float().cpu())
-            batch_target_offset = 0
             for image_index, group in enumerate(groups):
                 targets.append(_batch_targets(batch, image_index))
                 stock_predictions.append(
@@ -246,16 +316,6 @@ def _evaluate_once(
                 refined_predictions.append(
                     _batch_predictions(refined_post, image_index)
                 )
-                source, destination = matches[image_index]
-                local_destination = destination.long().cpu() - batch_target_offset
-                all_matches.append(
-                    (
-                        source.long().cpu(),
-                        local_destination + global_target_offset,
-                    )
-                )
-                batch_target_offset += group
-                global_target_offset += group
 
     if len(targets) != 548:
         raise RuntimeError(
@@ -281,6 +341,7 @@ def _evaluate_once(
         torch.cat(residual_parts),
         torch.cat(f3_parts),
         torch.cat(rgb_parts),
+        target_group_sizes=target_group_sizes,
     )
     return {
         "stock": stock_metrics,
@@ -307,14 +368,28 @@ def _last5_history(
     current: Mapping[str, Any],
 ) -> tuple[list[float], list[float]]:
     results_path = output_path.resolve().parent.parent / "results.jsonl"
+    ledger_path = output_path.resolve().parent.parent / "publication-ledger.jsonl"
     rows = _json_rows(results_path)
-    if len(rows) != 29:
+    ledger_rows = _json_rows(ledger_path)
+    if len(rows) != 29 or len(ledger_rows) != 29:
         raise ValueError(
-            "IBER-BE epoch30 decision requires exactly 29 prior result rows"
+            "IBER-BE epoch30 decision requires exactly 29 published prior rows"
         )
+    if highest_contiguous_verified_epoch(ledger_rows) != 29:
+        raise ValueError("IBER-BE epoch30 publication ledger tip is not epoch29")
+    if current.get("design_version") != DESIGN_VERSION or current.get("epoch") != 30:
+        raise ValueError("IBER-BE current epoch30 evaluation authority mismatch")
     prior: list[Mapping[str, Any]] = []
-    for expected_epoch, row in enumerate(rows, start=1):
-        if row.get("epoch") != expected_epoch:
+    for expected_epoch, (row, publication) in enumerate(
+        zip(rows, ledger_rows, strict=True), start=1
+    ):
+        if (
+            row.get("design_version") != DESIGN_VERSION
+            or row.get("stage") != "screen"
+            or row.get("probe") != "b3"
+            or row.get("seed") != 0
+            or row.get("epoch") != expected_epoch
+        ):
             raise ValueError("IBER-BE result history epochs are not contiguous")
         evaluation = row.get("evaluation")
         if (
@@ -323,13 +398,32 @@ def _last5_history(
             or evaluation.get("epoch") != expected_epoch
         ):
             raise ValueError("IBER-BE result history authority mismatch")
+        private_checkpoint = evaluation.get("private_checkpoint")
+        published_checkpoint = publication.get("checkpoint")
+        if (
+            not isinstance(private_checkpoint, Mapping)
+            or not isinstance(published_checkpoint, Mapping)
+            or str(private_checkpoint.get("sha256", "")).lower()
+            != str(published_checkpoint.get("sha256", "")).lower()
+        ):
+            raise ValueError(
+                f"IBER-BE result history checkpoint differs at epoch {expected_epoch}"
+            )
         if expected_epoch >= 26:
             prior.append(evaluation)
     if len(prior) != 4:
         raise ValueError("IBER-BE epoch30 decision lacks epochs 26-29")
     evaluations = [*prior, current]
-    last5_stock_map = [float(value["stock"]["map"]) for value in evaluations]
-    last5_refined_map = [float(value["refined"]["map"]) for value in evaluations]
+    try:
+        last5_stock_map = [float(value["stock"]["map"]) for value in evaluations]
+        last5_refined_map = [float(value["refined"]["map"]) for value in evaluations]
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("IBER-BE epoch30 last5 metric schema is invalid") from error
+    if not all(
+        math.isfinite(value) and 0.0 <= value <= 1.0
+        for value in [*last5_stock_map, *last5_refined_map]
+    ):
+        raise ValueError("IBER-BE epoch30 last5 metrics are invalid")
     return last5_stock_map, last5_refined_map
 
 

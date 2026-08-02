@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -112,6 +113,22 @@ REQUIRED_CHECKPOINT_KEYS = {
 EXPECTED_CATEGORY_SHA256 = (
     "1455A1F5D9FA9988799815B36CF2CE6D5044B5BD7CAD7CC614D6B5E5059EF2A6"
 )
+_HEX64 = re.compile(r"[0-9A-Fa-f]{64}")
+_GIT_SHA = re.compile(r"[0-9A-Fa-f]{40}(?:[0-9A-Fa-f]{24})?")
+_PUBLICATION_IDENTITY_FIELDS = (
+    "design_version",
+    "stage",
+    "probe",
+    "seed",
+    "baseline_sha256",
+    "dataset_sha256",
+    "subset_sha256",
+    "category_sha256",
+    "protocol_sha256",
+    "runtime_amendment_sha256",
+    "gate1_decision_sha256",
+    "source_commit",
+)
 
 
 def build_private_optimizer(module: torch.nn.Module) -> torch.optim.AdamW:
@@ -127,19 +144,88 @@ def build_private_optimizer(module: torch.nn.Module) -> torch.optim.AdamW:
     )
 
 
+def _validate_verified_publication_record(
+    row: Mapping[str, Any], *, expected_epoch: int
+) -> None:
+    """Validate the complete Task10 remote-publication receipt."""
+    if row.get("completed_epoch") != expected_epoch:
+        raise ValueError("publication ledger epochs must be contiguous")
+    if row.get("verified") is not True:
+        raise ValueError("publication ledger row is not verified")
+    if row.get("result_commit_verified") is not True:
+        raise ValueError("publication ledger result commit is not verified")
+    result_commit = row.get("result_commit_sha")
+    if not isinstance(result_commit, str) or _GIT_SHA.fullmatch(result_commit) is None:
+        raise ValueError("publication ledger result commit SHA is invalid")
+
+    checkpoint = row.get("checkpoint")
+    remote = row.get("remote_verification")
+    if not isinstance(checkpoint, Mapping):
+        raise ValueError("publication ledger checkpoint receipt is missing")
+    if not isinstance(remote, Mapping):
+        raise ValueError("publication ledger remote verification is missing")
+    for name in ("checkpoint", "manifest"):
+        receipt = remote.get(name)
+        if not isinstance(receipt, Mapping):
+            raise ValueError(f"publication ledger remote {name} receipt is missing")
+        if type(receipt.get("bytes")) is not int or receipt["bytes"] < 0:
+            raise ValueError(f"publication ledger remote {name} bytes are invalid")
+        digest = receipt.get("sha256")
+        if not isinstance(digest, str) or _HEX64.fullmatch(digest) is None:
+            raise ValueError(f"publication ledger remote {name} SHA256 is invalid")
+    checkpoint_sha = checkpoint.get("sha256")
+    if (
+        type(checkpoint.get("bytes")) is not int
+        or checkpoint["bytes"] < 0
+        or not isinstance(checkpoint_sha, str)
+        or _HEX64.fullmatch(checkpoint_sha) is None
+    ):
+        raise ValueError("publication ledger checkpoint receipt is invalid")
+    remote_checkpoint = remote["checkpoint"]
+    if (
+        checkpoint["bytes"] != remote_checkpoint["bytes"]
+        or checkpoint_sha.lower() != str(remote_checkpoint["sha256"]).lower()
+    ):
+        raise ValueError("publication ledger remote checkpoint receipt differs")
+
+
 def highest_contiguous_verified_epoch(
     rows: Sequence[Mapping[str, Any]],
 ) -> int:
-    """Return the verified ledger tip, rejecting gaps and unverified rows."""
+    """Return the Task10-verified ledger tip, rejecting gaps or weak receipts."""
     if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
         raise ValueError("publication ledger must be a sequence")
+    reference_identity: dict[str, Any] | None = None
+    fixed_identity = {
+        "design_version": DESIGN_VERSION,
+        "stage": "screen",
+        "probe": "b3",
+        "seed": 0,
+        "baseline_sha256": EXPECTED_BASELINE_SHA256,
+        "dataset_sha256": EXPECTED_DATASET_SHA256,
+        "subset_sha256": EXPECTED_SUBSET_SHA256,
+        "protocol_sha256": PROTOCOL_SHA256,
+        "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
+    }
     for expected_epoch, row in enumerate(rows, start=1):
         if not isinstance(row, Mapping):
             raise ValueError("publication ledger rows must be mappings")
-        if row.get("completed_epoch") != expected_epoch:
-            raise ValueError("publication ledger epochs must be contiguous")
-        if row.get("verified") is not True:
-            raise ValueError("publication ledger row is not verified")
+        _validate_verified_publication_record(row, expected_epoch=expected_epoch)
+        for name, expected in fixed_identity.items():
+            if row.get(name) != expected:
+                raise ValueError(f"publication ledger {name} identity mismatch")
+        for name in ("category_sha256", "gate1_decision_sha256"):
+            value = row.get(name)
+            if not isinstance(value, str) or _HEX64.fullmatch(value) is None:
+                raise ValueError(f"publication ledger {name} identity is invalid")
+        source_commit = row.get("source_commit")
+        if not isinstance(source_commit, str) or _GIT_SHA.fullmatch(source_commit) is None:
+            raise ValueError("publication ledger source_commit identity is invalid")
+        identity = {name: row.get(name) for name in _PUBLICATION_IDENTITY_FIELDS}
+        if reference_identity is None:
+            reference_identity = identity
+        elif identity != reference_identity:
+            raise ValueError("publication ledger identity changed between epochs")
     if len(rows) > SCREEN_EPOCHS:
         raise ValueError("publication ledger exceeds the fixed 30 epochs")
     return len(rows)
@@ -150,6 +236,7 @@ def validate_resume_checkpoint(
     *,
     source_commit: str,
     highest_verified_epoch: int,
+    publication_record: Mapping[str, Any] | None = None,
 ) -> None:
     """Reject any resume that is not the exact remotely verified ledger tip."""
     if not isinstance(artifact, Mapping):
@@ -186,14 +273,32 @@ def validate_resume_checkpoint(
             "expected": epoch,
             "actual": highest_verified_epoch,
         }
+    if publication_record is not None:
+        try:
+            _validate_verified_publication_record(
+                publication_record, expected_epoch=epoch
+            )
+        except ValueError as error:
+            violations["publication_record"] = {
+                "expected": "complete Task10 remote receipt",
+                "actual": str(error),
+            }
+        for name, value in expected.items():
+            actual = publication_record.get(name)
+            if actual != value:
+                violations[f"publication_record.{name}"] = {
+                    "expected": value,
+                    "actual": actual,
+                }
     for name in ("refiner", "optimizer", "scaler", "rng"):
         if not isinstance(artifact.get(name), Mapping):
             violations[name] = {
                 "expected": "mapping",
                 "actual": type(artifact.get(name)).__name__,
             }
-    if "detector" in artifact:
-        violations["detector"] = {"expected": "absent", "actual": "present"}
+    for forbidden in ("detector", "model", "ema"):
+        if forbidden in artifact:
+            violations[forbidden] = {"expected": "absent", "actual": "present"}
     if violations:
         raise ValueError(
             "invalid IBER-BE resume " + ", ".join(sorted(violations))
@@ -531,25 +636,90 @@ def _correction_diagnostics(adapter: FrozenIBERAdapter) -> dict[str, float]:
 
 
 def _restore_rng(artifact: Mapping[str, Any]) -> None:
-    rng = artifact["rng"]
-    random.setstate(rng["python"])
-    numpy_state = rng["numpy"]
-    if not isinstance(numpy_state, Mapping) or not torch.is_tensor(
-        numpy_state.get("state")
+    rng = artifact.get("rng")
+    if not isinstance(rng, Mapping):
+        raise ValueError("IBER-BE checkpoint has an unsafe RNG mapping")
+
+    python_state = rng.get("python")
+    try:
+        random.Random().setstate(python_state)
+    except (TypeError, ValueError) as error:
+        raise ValueError("IBER-BE checkpoint has an unsafe Python RNG state") from error
+
+    numpy_state = rng.get("numpy")
+    if not isinstance(numpy_state, Mapping) or set(numpy_state) != {
+        "bit_generator",
+        "state",
+        "position",
+        "has_gauss",
+        "cached_gaussian",
+    }:
+        raise ValueError("IBER-BE checkpoint has an unsafe NumPy RNG state")
+    numpy_tensor = numpy_state.get("state")
+    position = numpy_state.get("position")
+    has_gauss = numpy_state.get("has_gauss")
+    cached_gaussian = numpy_state.get("cached_gaussian")
+    if (
+        numpy_state.get("bit_generator") != "MT19937"
+        or not torch.is_tensor(numpy_tensor)
+        or tuple(numpy_tensor.shape) != (624,)
+        or numpy_tensor.dtype
+        not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64, torch.uint32, torch.uint64)
+        or type(position) is not int
+        or not 0 <= position <= 624
+        or type(has_gauss) is not int
+        or has_gauss not in (0, 1)
+        or not isinstance(cached_gaussian, (int, float))
+        or isinstance(cached_gaussian, bool)
+        or not math.isfinite(float(cached_gaussian))
     ):
         raise ValueError("IBER-BE checkpoint has an unsafe NumPy RNG state")
-    np.random.set_state(
-        (
-            str(numpy_state["bit_generator"]),
-            numpy_state["state"].detach().cpu().numpy().astype(np.uint32, copy=True),
-            int(numpy_state["position"]),
-            int(numpy_state["has_gauss"]),
-            float(numpy_state["cached_gaussian"]),
-        )
+    numpy_values = numpy_tensor.detach().cpu().to(torch.int64)
+    if bool((numpy_values < 0).any()) or bool((numpy_values > 0xFFFFFFFF).any()):
+        raise ValueError("IBER-BE checkpoint has an unsafe NumPy RNG state")
+    validated_numpy_state = (
+        "MT19937",
+        numpy_values.numpy().astype(np.uint32, copy=True),
+        position,
+        has_gauss,
+        float(cached_gaussian),
     )
-    torch.set_rng_state(rng["torch"].cpu())
-    if torch.cuda.is_available() and rng.get("cuda") is not None:
-        torch.cuda.set_rng_state_all(rng["cuda"])
+    probe_numpy = np.random.RandomState()
+    probe_numpy.set_state(validated_numpy_state)
+
+    torch_state = rng.get("torch")
+    if (
+        not torch.is_tensor(torch_state)
+        or torch_state.dtype != torch.uint8
+        or torch_state.ndim != 1
+    ):
+        raise ValueError("IBER-BE checkpoint has an unsafe Torch RNG state")
+    torch_state = torch_state.detach().cpu().clone()
+    torch.Generator(device="cpu").set_state(torch_state)
+
+    cuda_states = rng.get("cuda")
+    if cuda_states is not None:
+        if isinstance(cuda_states, (str, bytes)) or not isinstance(
+            cuda_states, Sequence
+        ):
+            raise ValueError("IBER-BE checkpoint has an unsafe CUDA RNG state")
+        if torch.cuda.is_available() and len(cuda_states) != torch.cuda.device_count():
+            raise ValueError("IBER-BE checkpoint CUDA RNG device count differs")
+        for state in cuda_states:
+            if (
+                not torch.is_tensor(state)
+                or state.dtype != torch.uint8
+                or state.ndim != 1
+            ):
+                raise ValueError("IBER-BE checkpoint has an unsafe CUDA RNG state")
+
+    random.setstate(python_state)
+    np.random.set_state(validated_numpy_state)
+    torch.set_rng_state(torch_state)
+    if torch.cuda.is_available() and cuda_states is not None:
+        torch.cuda.set_rng_state_all(
+            [state.detach().cpu().clone() for state in cuda_states]
+        )
 
 
 def _rng_state() -> dict[str, Any]:
@@ -797,17 +967,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             if verified_tip < 1:
                 raise ValueError("IBER-BE has no remotely verified epoch to resume")
             ledger_checkpoint = ledger_rows[-1].get("checkpoint", {})
-            if ledger_checkpoint.get("sha256") != file_sha256(resume_path).lower():
+            if (
+                ledger_checkpoint.get("sha256") != file_sha256(resume_path).lower()
+                or ledger_checkpoint.get("bytes") != resume_path.stat().st_size
+            ):
                 raise ValueError("IBER-BE resume checkpoint SHA256 is not the ledger tip")
             artifact = torch.load(
                 resume_path,
-                map_location=device,
+                map_location="cpu",
                 weights_only=True,
             )
             validate_resume_checkpoint(
                 artifact,
                 source_commit=source_commit,
                 highest_verified_epoch=verified_tip,
+                publication_record=ledger_rows[-1],
             )
             if artifact.get("detector_sha_after") != detector_sha_before:
                 raise ValueError("IBER-BE detector resume authority mismatch")
