@@ -101,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if decision["status"] == "scientific_failed":
             return 2
         return 1
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
+    except Exception as error:
         return _engineering_failure(args.output_root, error)
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import scripts.run_iber_probe as run_iber_probe
 from scripts.run_iber_probe import _parse_args
 from src.iber_probe import (
     AMP_AUTHORITY,
@@ -358,3 +359,31 @@ def test_probe_cli_has_no_authority_overrides() -> None:
     assert args.cache_root == Path("cache")
     assert args.output_root == Path("output")
     assert args.device == "0"
+
+
+def test_probe_cli_records_floating_point_failures_as_engineering_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output"
+
+    def fail_load(*_args, **_kwargs):
+        raise FloatingPointError("NONFINITE_IBER_PROBE_GRADIENT")
+
+    monkeypatch.setattr(run_iber_probe, "_source_commit", lambda: "e" * 40)
+    monkeypatch.setattr(run_iber_probe, "load_evidence_cache", fail_load)
+    result = run_iber_probe.main(
+        [
+            "--cache-root",
+            str(tmp_path / "cache"),
+            "--output-root",
+            str(output_root),
+        ]
+    )
+    report = output_root / "gate1-engineering-invalid.json"
+    try:
+        assert result == 1
+        assert report.is_file()
+        assert "FloatingPointError" in report.read_text(encoding="utf-8")
+    finally:
+        if report.exists():
+            report.chmod(stat.S_IREAD | stat.S_IWRITE)
