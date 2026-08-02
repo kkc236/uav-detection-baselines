@@ -138,8 +138,14 @@ class IBERRefiner(nn.Module):
                 nn.LayerNorm(16),
                 nn.SiLU(),
             )
+            self.signed_evidence_path = nn.Sequential(
+                nn.Linear(111, 128),
+                nn.SiLU(),
+                nn.Linear(128, 64),
+                nn.SiLU(),
+            )
             self.direction_calibration = nn.Sequential(
-                nn.Linear(176, 96),
+                nn.Linear(240, 96),
                 nn.SiLU(),
                 nn.Linear(96, 64),
                 nn.SiLU(),
@@ -150,7 +156,7 @@ class IBERRefiner(nn.Module):
             self.scale_experts = nn.ModuleList(
                 [
                     nn.Sequential(
-                        nn.Linear(176, 64),
+                        nn.Linear(240, 64),
                         nn.SiLU(),
                         nn.Linear(64, 64),
                         nn.SiLU(),
@@ -161,7 +167,7 @@ class IBERRefiner(nn.Module):
             self.edge_direction_experts = nn.ModuleList(
                 [
                     nn.Sequential(
-                        nn.Linear(176, 128),
+                        nn.Linear(240, 128),
                         nn.SiLU(),
                         nn.Linear(128, 64),
                         nn.SiLU(),
@@ -345,6 +351,18 @@ class IBERRefiner(nn.Module):
         zero_rgb_features = self.rgb_encoder(
             zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
+        signed_input_evidence = torch.cat(
+            (f3_input_evidence, rgb_input_evidence), dim=-1
+        )
+        zero_signed_input = torch.cat(
+            (zero_f3_boundary_evidence, zero_rgb_boundary_evidence), dim=-1
+        )
+        signed_evidence_features = self.signed_evidence_path(
+            signed_input_evidence.to(dtype=hidden.dtype)
+        )
+        zero_signed_features = self.signed_evidence_path(
+            zero_signed_input.to(dtype=hidden.dtype)
+        )
 
         log_area = geometry[..., 4].to(dtype=hidden.dtype)
         tiny_limit = math.log((16.0 / float(self.image_size)) ** 2)
@@ -365,6 +383,7 @@ class IBERRefiner(nn.Module):
         def direction(
             features_f3: torch.Tensor,
             features_rgb: torch.Tensor,
+            features_signed: torch.Tensor,
             *,
             detach_context: bool = False,
         ) -> torch.Tensor:
@@ -373,7 +392,13 @@ class IBERRefiner(nn.Module):
                 context_per_edge.detach() if detach_context else context_per_edge
             )
             direction_input = torch.cat(
-                (features_f3, features_rgb, direction_area, direction_context),
+                (
+                    features_f3,
+                    features_rgb,
+                    features_signed,
+                    direction_area,
+                    direction_context,
+                ),
                 dim=-1,
             )
             shared = self.direction_calibration(direction_input)
@@ -414,8 +439,14 @@ class IBERRefiner(nn.Module):
             )
             return shared + scale_mix + edge_outputs
 
-        zero_direction = direction(zero_f3_features, zero_rgb_features)
-        evidence_direction = direction(f3_boundary_features, rgb_boundary_features)
+        zero_direction = direction(
+            zero_f3_features, zero_rgb_features, zero_signed_features
+        )
+        evidence_direction = direction(
+            f3_boundary_features,
+            rgb_boundary_features,
+            signed_evidence_features,
+        )
         base_gate_raw = self.base_gate_head(area_context).squeeze(-1)
         zero_gate = calibrated_head(
             self.boundary_gate_head,
@@ -453,10 +484,16 @@ class IBERRefiner(nn.Module):
         )
         if self.training and torch.is_grad_enabled():
             aux_zero_direction = direction(
-                zero_f3_features, zero_rgb_features, detach_context=True
+                zero_f3_features,
+                zero_rgb_features,
+                zero_signed_features,
+                detach_context=True,
             )
             aux_evidence_direction = direction(
-                f3_boundary_features, rgb_boundary_features, detach_context=True
+                f3_boundary_features,
+                rgb_boundary_features,
+                signed_evidence_features,
+                detach_context=True,
             )
             aux_zero_gate = calibrated_head(
                 self.boundary_gate_head,

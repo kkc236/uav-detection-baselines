@@ -106,7 +106,7 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     assert len(model.edge_direction_experts) == 4
     for expert in model.edge_direction_experts:
         assert len(expert) == 4
-        _assert_linear(expert[0], 176, 128)
+        _assert_linear(expert[0], 240, 128)
         assert isinstance(expert[1], nn.SiLU)
         _assert_linear(expert[2], 128, 64)
         assert isinstance(expert[3], nn.SiLU)
@@ -117,6 +117,21 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     parameter_names = dict(model.named_parameters())
     assert any(name.startswith("f3_encoder.") for name in parameter_names)
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
+
+
+def test_signed_evidence_trunk_preserves_directional_contrasts() -> None:
+    model = _refiner()
+
+    assert len(model.signed_evidence_path) == 4
+    _assert_linear(model.signed_evidence_path[0], 111, 128)
+    assert isinstance(model.signed_evidence_path[1], nn.SiLU)
+    _assert_linear(model.signed_evidence_path[2], 128, 64)
+    assert isinstance(model.signed_evidence_path[3], nn.SiLU)
+    _assert_linear(model.direction_calibration[0], 240, 96)
+    for expert in model.scale_experts:
+        _assert_linear(expert[0], 240, 64)
+    for expert in model.edge_direction_experts:
+        _assert_linear(expert[0], 240, 128)
 
 
 def test_b3_has_zero_initialized_per_edge_boundary_heads() -> None:
@@ -249,14 +264,14 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     assert isinstance(model.rgb_encoder[2], nn.SiLU)
 
     assert len(model.direction_calibration) == 4
-    _assert_linear(model.direction_calibration[0], 176, 96)
+    _assert_linear(model.direction_calibration[0], 240, 96)
     assert isinstance(model.direction_calibration[1], nn.SiLU)
     _assert_linear(model.direction_calibration[2], 96, 64)
     assert isinstance(model.direction_calibration[3], nn.SiLU)
     assert len(model.scale_experts) == 3
     for expert in model.scale_experts:
         assert len(expert) == 4
-        _assert_linear(expert[0], 176, 64)
+        _assert_linear(expert[0], 240, 64)
         assert isinstance(expert[1], nn.SiLU)
         _assert_linear(expert[2], 64, 64)
         assert isinstance(expert[3], nn.SiLU)
