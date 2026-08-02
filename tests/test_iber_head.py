@@ -627,6 +627,32 @@ def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(probe: str)
     torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
 
 
+def test_b3_boundary_delta_is_the_sum_of_modality_specific_deltas() -> None:
+    models = {probe: _refiner(probe) for probe in ("b1", "b2", "b3")}
+    with torch.no_grad():
+        for model in models.values():
+            model.boundary_gate_head.weight.fill_(0.07)
+            model.boundary_gate_head.bias.fill_(0.13)
+            model.boundary_residual_head.weight.fill_(-0.05)
+            model.boundary_residual_head.bias.fill_(0.21)
+
+    inputs = _inputs(batch=1)
+    outputs = {probe: model(*inputs) for probe, model in models.items()}
+
+    torch.testing.assert_close(
+        outputs["b3"].boundary_gate_raw,
+        outputs["b1"].boundary_gate_raw + outputs["b2"].boundary_gate_raw,
+        rtol=0,
+        atol=1e-7,
+    )
+    torch.testing.assert_close(
+        outputs["b3"].boundary_residual_raw,
+        outputs["b1"].boundary_residual_raw + outputs["b2"].boundary_residual_raw,
+        rtol=0,
+        atol=1e-7,
+    )
+
+
 def test_existing_private_loss_accepts_real_iber_output() -> None:
     model = _refiner()
     output = model(*_inputs(batch=2))

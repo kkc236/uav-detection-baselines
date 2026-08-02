@@ -273,6 +273,18 @@ class IBERRefiner(nn.Module):
         )
 
         empty = batch == 0 or queries == 0
+        if empty:
+            zero_f3_boundary_evidence = f3.new_zeros((batch, queries, 4, 96))
+        else:
+            if self.f3_projection.bias is None:
+                zero_f3_edge = f3.new_zeros((batch, queries, 4, 32))
+            else:
+                zero_f3_edge = self.f3_projection.bias.to(dtype=f3.dtype).view(
+                    1, 1, 1, 32
+                ).expand(batch, queries, 4, -1)
+            zero_f3_boundary_evidence = torch.cat(
+                (zero_f3_edge, f3.new_zeros((batch, queries, 4, 64))), dim=-1
+            )
         if self.use_f3 and not empty:
             projected_f3 = self.f3_projection(f3)
             f3_boundary_evidence = sample_f3_boundary_evidence(
@@ -280,35 +292,30 @@ class IBERRefiner(nn.Module):
                 stock_boxes,
                 image_size=self.image_size,
             )
-            if self.f3_projection.bias is None:
-                zero_f3_edge = torch.zeros_like(f3_boundary_evidence[..., :32])
-            else:
-                zero_f3_edge = self.f3_projection.bias.to(
-                    dtype=f3_boundary_evidence.dtype
-                ).view(1, 1, 1, 32).expand(batch, queries, 4, -1)
-            zero_f3_boundary_evidence = torch.cat(
-                (zero_f3_edge, torch.zeros_like(f3_boundary_evidence[..., 32:])),
-                dim=-1,
-            )
         else:
             f3_boundary_evidence = f3.new_zeros((batch, queries, 4, 96))
-            zero_f3_boundary_evidence = torch.zeros_like(f3_boundary_evidence)
         if self.use_rgb and not empty:
             rgb_boundary_evidence = sample_rgb_boundary_evidence(
                 image_rgb,
                 stock_boxes,
                 image_size=self.image_size,
             )
-            zero_rgb_boundary_evidence = torch.zeros_like(rgb_boundary_evidence)
         else:
             rgb_boundary_evidence = image_rgb.new_zeros((batch, queries, 4, 15))
-            zero_rgb_boundary_evidence = torch.zeros_like(rgb_boundary_evidence)
+        zero_rgb_boundary_evidence = torch.zeros_like(rgb_boundary_evidence)
+
+        f3_input_evidence = (
+            f3_boundary_evidence if self.use_f3 else zero_f3_boundary_evidence
+        )
+        rgb_input_evidence = (
+            rgb_boundary_evidence if self.use_rgb else zero_rgb_boundary_evidence
+        )
 
         f3_boundary_features = self.f3_encoder(
-            f3_boundary_evidence.to(dtype=query_features.dtype)
+            f3_input_evidence.to(dtype=query_features.dtype)
         )
         rgb_boundary_features = self.rgb_encoder(
-            rgb_boundary_evidence.to(dtype=query_features.dtype)
+            rgb_input_evidence.to(dtype=query_features.dtype)
         )
         boundary_features = self.boundary_encoder(
             torch.cat((f3_boundary_features, rgb_boundary_features), dim=-1)
@@ -334,11 +341,40 @@ class IBERRefiner(nn.Module):
         )
         zero_boundary_hidden = self.boundary_trunk(zero_boundary_condition)
 
+        if self.probe == "b3":
+            f3_only_features = self.boundary_encoder(
+                torch.cat((f3_boundary_features, zero_rgb_features), dim=-1)
+            )
+            f3_only_hidden = self.boundary_trunk(
+                torch.cat((f3_only_features, query_per_edge[..., :32], edge_features), dim=-1)
+            )
+            rgb_only_features = self.boundary_encoder(
+                torch.cat((zero_f3_features, rgb_boundary_features), dim=-1)
+            )
+            rgb_only_hidden = self.boundary_trunk(
+                torch.cat((rgb_only_features, query_per_edge[..., :32], edge_features), dim=-1)
+            )
+            boundary_gate_delta = (
+                self.boundary_gate_head(f3_only_hidden)
+                + self.boundary_gate_head(rgb_only_hidden)
+                - 2 * self.boundary_gate_head(zero_boundary_hidden)
+            ).squeeze(-1)
+            boundary_residual_delta = (
+                self.boundary_residual_head(f3_only_hidden)
+                + self.boundary_residual_head(rgb_only_hidden)
+                - 2 * self.boundary_residual_head(zero_boundary_hidden)
+            ).squeeze(-1)
+        else:
+            boundary_gate_delta = (
+                self.boundary_gate_head(boundary_hidden)
+                - self.boundary_gate_head(zero_boundary_hidden)
+            ).squeeze(-1)
+            boundary_residual_delta = (
+                self.boundary_residual_head(boundary_hidden)
+                - self.boundary_residual_head(zero_boundary_hidden)
+            ).squeeze(-1)
+
         base_gate_raw = self.base_gate_head(base_features).squeeze(-1)
-        boundary_gate_delta = (
-            self.boundary_gate_head(boundary_hidden)
-            - self.boundary_gate_head(zero_boundary_hidden)
-        ).squeeze(-1)
         boundary_gate_raw = torch.where(
             boundary_signal, boundary_gate_delta, torch.zeros_like(boundary_gate_delta)
         )
@@ -346,10 +382,6 @@ class IBERRefiner(nn.Module):
         gates = gate_logits.sigmoid()
 
         base_residual_raw = self.base_residual_head(base_features).squeeze(-1)
-        boundary_residual_delta = (
-            self.boundary_residual_head(boundary_hidden)
-            - self.boundary_residual_head(zero_boundary_hidden)
-        ).squeeze(-1)
         boundary_residual_raw = torch.where(
             boundary_signal,
             boundary_residual_delta,
