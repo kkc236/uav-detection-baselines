@@ -38,6 +38,8 @@ from src.rtdetr_iber import FrozenIBERAdapter  # noqa: E402
 
 
 IMAGE_SIZE = 640
+BATCH_SIZE = 8
+WORKERS = 8
 SHARD_SIZE = DEFAULT_SHARD_SIZE
 TRAIN_COUNT = 647
 VAL_COUNT = 548
@@ -51,8 +53,6 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline-checkpoint", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--batch", type=int, default=8)
-    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="0")
     return parser.parse_args(argv)
 
@@ -259,8 +259,6 @@ def _device(value: str) -> torch.device:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
-    if args.batch < 1 or args.workers < 0:
-        raise ValueError("batch must be positive and workers nonnegative")
     if args.output_root.exists() and (
         not args.output_root.is_dir() or any(args.output_root.iterdir())
     ):
@@ -286,14 +284,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             adapter,
             args.dataset_root,
             "train",
-            batch_size=args.batch,
+            batch_size=BATCH_SIZE,
             device=device,
         )
         val_records = _cache_split(
             adapter,
             args.dataset_root,
             "val",
-            batch_size=args.batch,
+            batch_size=BATCH_SIZE,
             device=device,
         )
     write_evidence_cache(

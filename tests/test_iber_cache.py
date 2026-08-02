@@ -398,7 +398,29 @@ def test_builder_cli_arguments_defaults_and_fixed_contract() -> None:
     assert args.baseline_checkpoint == Path("baseline.pt")
     assert args.dataset_root == Path("dataset")
     assert args.output_root == Path("cache")
-    assert (args.batch, args.workers, args.device) == (8, 8, "0")
+    assert not hasattr(args, "batch")
+    assert not hasattr(args, "workers")
+    assert args.device == "0"
+    with pytest.raises(SystemExit):
+        module._parse_args(
+            [
+                "--baseline-checkpoint", "baseline.pt",
+                "--dataset-root", "dataset",
+                "--output-root", "cache",
+                "--batch", "4",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        module._parse_args(
+            [
+                "--baseline-checkpoint", "baseline.pt",
+                "--dataset-root", "dataset",
+                "--output-root", "cache",
+                "--workers", "2",
+            ]
+        )
+    assert module.BATCH_SIZE == 8
+    assert module.WORKERS == 8
     assert module.IMAGE_SIZE == 640
     assert module.SHARD_SIZE == 16
     assert module.TRAIN_COUNT == 647
