@@ -49,6 +49,30 @@ class _TinyAdapter(nn.Module):
         return SimpleNamespace(total=total, box=total, gate=total * 0, noop=total * 0)
 
 
+class _PreflightMatcher:
+    def matcher(self, *_args, **_kwargs):
+        return [(torch.tensor([9]), torch.tensor([0]))]
+
+
+class _TrainingMatcherAdapter(_TinyAdapter):
+    """Expose a deliberately different preflight matcher than the AMP train path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.criterion = _PreflightMatcher()
+        self.last_match_indices = None
+
+    def forward_evidence(self, image: torch.Tensor):
+        output = super().forward_evidence(image)
+        output.stock_scores = torch.zeros(image.shape[0], 1, 1)
+        return output
+
+    def training_step(self, batch: dict[str, torch.Tensor]):
+        losses = super().training_step(batch)
+        self.last_match_indices = [(torch.tensor([0]), torch.tensor([0]))]
+        return losses
+
+
 class _UnnamedEvidenceRefiner(_TinyRefiner):
     def __init__(self) -> None:
         nn.Module.__init__(self)
@@ -79,6 +103,22 @@ def test_canary_proves_private_paths_checkpoint_and_detector_invariance() -> Non
     assert report["checks"]["detector_gradient_absent"] is True
     assert report["checks"]["checkpoint_roundtrip"] is True
     assert report["checks"]["checkpoint_mode_switching"] is True
+
+
+def test_canary_compares_matcher_before_and_after_private_step_in_same_train_path() -> None:
+    adapter = _TrainingMatcherAdapter()
+    report = run_private_step_canary(
+        adapter,
+        {
+            "img": torch.zeros(1, 3, 8, 8),
+            "cls": torch.tensor([[0.0]]),
+            "bboxes": torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+            "batch_idx": torch.tensor([0.0]),
+        },
+        use_amp=False,
+    )
+
+    assert report["checks"]["matcher_indices_same"] is True
 
 
 def test_canary_rejects_trainable_detector() -> None:

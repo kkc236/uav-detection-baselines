@@ -80,23 +80,12 @@ def _finite_nonzero_gradient(parameters: Sequence[torch.nn.Parameter]) -> bool:
     ) and any(bool(value.abs().max() > 0) for value in gradients)
 
 
-def _matcher_inputs(
-    adapter: torch.nn.Module,
-    output: Any,
-    batch: Mapping[str, torch.Tensor],
+def _clone_matches(
+    matches: list[tuple[torch.Tensor, torch.Tensor]] | None,
 ) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
-    if not hasattr(adapter, "criterion") or not hasattr(output, "stock_scores"):
+    if matches is None:
         return None
-    batch_size = int(batch["img"].shape[0])
-    batch_index = batch["batch_idx"].view(-1).long()
-    groups = [int((batch_index == index).sum()) for index in range(batch_size)]
-    return adapter.criterion.matcher(
-        output.stock_boxes.detach(),
-        output.stock_scores.detach(),
-        batch["bboxes"],
-        batch["cls"].view(-1).long(),
-        groups,
-    )
+    return [(source.detach().clone(), target.detach().clone()) for source, target in matches]
 
 
 def _same_matches(
@@ -143,7 +132,6 @@ def run_private_step_canary(
             int(decoder.normal_query_count) == 300
             and int(initial_output.stock_boxes.shape[1]) == 300
         )
-    expected_matches = _matcher_inputs(adapter, initial_output, batch)
     detector_before = module_state_sha256(adapter.detector)
     private_before = module_state_sha256(adapter.refiner)
     optimizer = torch.optim.AdamW(
@@ -164,6 +152,12 @@ def run_private_step_canary(
         device_type="cuda", dtype=torch.float16, enabled=amp_enabled
     ):
         first_losses = adapter.training_step(batch)
+    # Compare the exact AMP training path before and after the private update.
+    # A separate FP32 preflight matcher can legitimately choose a different
+    # Hungarian assignment near ties and does not test private-head isolation.
+    expected_matches = _clone_matches(
+        getattr(adapter, "last_match_indices", None)
+    )
     scaler.scale(first_losses.total).backward()
     scaler.unscale_(optimizer)
     private_gradient_present = _finite_nonzero_gradient(private_parameters)
