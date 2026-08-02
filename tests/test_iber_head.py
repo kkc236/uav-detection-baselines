@@ -101,6 +101,7 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
     model = _refiner()
     assert hasattr(model, "area_calibration")
     assert hasattr(model, "direction_calibration")
+    assert len(model.scale_experts) == 3
     parameter_names = dict(model.named_parameters())
     assert any(name.startswith("f3_encoder.") for name in parameter_names)
     assert any(name.startswith("rgb_encoder.") for name in parameter_names)
@@ -170,6 +171,13 @@ def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
     assert isinstance(model.direction_calibration[1], nn.SiLU)
     _assert_linear(model.direction_calibration[2], 96, 64)
     assert isinstance(model.direction_calibration[3], nn.SiLU)
+    assert len(model.scale_experts) == 3
+    for expert in model.scale_experts:
+        assert len(expert) == 4
+        _assert_linear(expert[0], 112, 64)
+        assert isinstance(expert[1], nn.SiLU)
+        _assert_linear(expert[2], 64, 64)
+        assert isinstance(expert[3], nn.SiLU)
 
     head_names = {
         "base_gate_head",

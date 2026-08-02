@@ -136,6 +136,20 @@ class IBERRefiner(nn.Module):
                 nn.Linear(96, 64),
                 nn.SiLU(),
             )
+            # Explicitly separate tiny, small, and larger-object correction
+            # regimes.  The three experts are shared by all probe arms; the
+            # evidence mask below is the only path that can affect B0.
+            self.scale_experts = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(112, 64),
+                        nn.SiLU(),
+                        nn.Linear(64, 64),
+                        nn.SiLU(),
+                    )
+                    for _ in range(3)
+                ]
+            )
             self.base_gate_head = nn.Linear(64, 1)
             self.boundary_gate_head = nn.Linear(64, 1)
             self.base_residual_head = nn.Linear(64, 1)
@@ -301,10 +315,25 @@ class IBERRefiner(nn.Module):
             zero_rgb_boundary_evidence.to(dtype=hidden.dtype)
         )
 
+        area_pixels = (
+            stock_boxes[..., 2:].clamp_min(0).prod(dim=-1)
+            * float(self.image_size**2)
+        )
+        tiny = area_pixels < float(16**2)
+        small = (area_pixels >= float(16**2)) & (area_pixels < float(32**2))
+        other = ~(tiny | small)
+        scale_weights = torch.stack((tiny, small, other), dim=-1).to(dtype=hidden.dtype)
+
         def direction(features_f3: torch.Tensor, features_rgb: torch.Tensor) -> torch.Tensor:
-            return self.direction_calibration(
-                torch.cat((features_f3, features_rgb, area_context), dim=-1)
+            direction_input = torch.cat((features_f3, features_rgb, area_context), dim=-1)
+            shared = self.direction_calibration(direction_input)
+            expert_outputs = torch.stack(
+                [expert(direction_input) for expert in self.scale_experts], dim=-2
             )
+            mixture = (
+                expert_outputs * scale_weights.unsqueeze(2).unsqueeze(-1)
+            ).sum(dim=-2)
+            return shared + mixture
 
         zero_direction = direction(zero_f3_features, zero_rgb_features)
         f3_direction = direction(f3_boundary_features, zero_rgb_features)
