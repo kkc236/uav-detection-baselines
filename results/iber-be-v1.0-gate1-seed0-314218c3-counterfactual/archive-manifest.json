@@ -1,0 +1,20 @@
+{
+  "archive": "/data/uav/results/iber-be-v1-314218c3-counterfactual/results/iber-be-v1.0-gate1-seed0-314218c3-counterfactual",
+  "design_version": "iber-be-v1.0",
+  "format_version": 1,
+  "includes": [
+    "authority.json",
+    "gate0/attempt-001.json",
+    "pipeline-state.json",
+    "probe/b0-report.json",
+    "probe/b1-report.json",
+    "probe/b2-report.json",
+    "probe/b3-report.json",
+    "probe/gate1-decision.json",
+    "stock-authority.json"
+  ],
+  "run_root": "/data/uav/runs/iber-be-v1/314218c3-seed0-counterfactual",
+  "source_commit": "314218c396a5dbccfdfc6f04459525b645ac30d2",
+  "stage": "gate1",
+  "status": "scientific_failed"
+}
