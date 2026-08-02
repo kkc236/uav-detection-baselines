@@ -78,6 +78,8 @@ bootstrap 优先使用阿里云 PyPI 镜像，PyTorch CUDA 12.1 wheel 使用官�
 
 `verify_host.sh` 会记录 GitHub API、阿里云镜像与 PyTorch 索引的可达性，但这些网络诊断不作为科学或工程通过条件；已有不可变 bundle、wheelhouse 与校验通过的数据镜像时允许离线验证。发布阶段仍必须单独验证实际 GitHub API 上传链路。
 
+磁盘门禁按完成 wheelhouse、数据镜像与解压后的启动时点计算：准备完成后至少保留 `70 GiB` 可用空间。该门禁只保护后续 cache、checkpoint 和日志空间，不改变任何训练或评价参数。
+
 ```bash
 bash deploy/iber/build_wheelhouse.sh
 ```

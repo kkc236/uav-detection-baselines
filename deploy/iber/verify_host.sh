@@ -12,7 +12,7 @@ expected_torchvision="torchvision==0.20.1+cu121"
 expected_ultralytics="ultralytics==8.4.90"
 expected_cuda="CUDA 12.1"
 venv_python="/data/uav/venvs/iber-be-v1/bin/python"
-minimum_disk_kib=$((80 * 1024 * 1024))
+minimum_disk_kib=$((70 * 1024 * 1024))
 minimum_memory_kib=$((32 * 1024 * 1024))
 
 os_id="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"

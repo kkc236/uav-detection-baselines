@@ -84,6 +84,7 @@ def test_host_verifier_is_read_only_and_locks_baseline_runtime() -> None:
         "torchvision==0.20.1+cu121",
         "ultralytics==8.4.90",
         "CUDA 12.1",
+        "minimum_disk_kib=$((70 * 1024 * 1024))",
         "df -Pk /data",
         "MemTotal",
         "api.github.com",
@@ -95,6 +96,7 @@ def test_host_verifier_is_read_only_and_locks_baseline_runtime() -> None:
         assert mutation not in content
     assert "49140" not in content
     assert "570.133.07" not in content
+    assert "minimum_disk_kib=$((80 * 1024 * 1024))" not in content
     assert 'for key in ("github_reachable", "mirror_reachable", "pytorch_reachable")' not in content
 
 
@@ -168,11 +170,13 @@ def test_bootstrap_uses_immutable_source_and_run_roots_and_mode_600_secrets() ->
         "GIT_CONFIG_VALUE_0=HTTP/1.1",
         'expected_driver="550.142"',
         "expected_gpu_memory_mib=24564",
+        "minimum_disk_kib=$((70 * 1024 * 1024))",
     ):
         assert required in content
     assert not re.search(r"/data/uav/(?:runs|results|cache)/itber(?:/|[-_.])", content, re.I)
     assert "49140" not in content
     assert "570.133.07" not in content
+    assert "minimum_disk_kib=$((80 * 1024 * 1024))" not in content
 
 
 def test_bootstrap_rechecks_completed_marker_and_uses_only_public_remote() -> None:
@@ -222,6 +226,7 @@ def test_server_guide_describes_amendment_names_as_compatibility_only() -> None:
     assert "`-seed0-amended` 是旧路径标签" in guide
     assert "iber-be-v1.0-baseline-aligned-runtime-2026-08-02" in guide
     assert "这些网络诊断不作为科学或工程通过条件" in guide
+    assert "准备完成后至少保留 `70 GiB` 可用空间" in guide
     assert "49140 MiB" not in guide
     assert "570.133.07" not in guide
 
