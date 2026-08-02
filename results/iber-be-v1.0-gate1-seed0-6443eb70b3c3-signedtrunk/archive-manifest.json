@@ -1,0 +1,17 @@
+{
+  "archive": "iber-be-v1.0-gate1-seed0-6443eb70b3c3-signedtrunk",
+  "source_commit": "6443eb70b3c31dbd5c51cbe6616acfdbeafb7c60",
+  "status": "scientific_failed",
+  "decision_sha256": "40163086F9368EBB597E3BB9C0C345E2369A277631502AD5DC0E7C970BD758A3",
+  "retained": [
+    "authority.json",
+    "gate0/attempt-001.json",
+    "stock-authority.json",
+    "pipeline-state.json",
+    "probe/b0-report.json",
+    "probe/b1-report.json",
+    "probe/b2-report.json",
+    "probe/b3-report.json",
+    "probe/gate1-decision.json"
+  ]
+}
