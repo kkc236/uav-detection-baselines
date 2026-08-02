@@ -113,7 +113,8 @@ def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence()
 def test_boundary_direction_uses_detached_hidden_context() -> None:
     model = _refiner()
     hidden, boxes, scores, f3, image = _inputs(batch=1)
-    changed_hidden = hidden + 17.0
+    changed_hidden = hidden.clone()
+    changed_hidden[..., 0] += 17.0
     with torch.no_grad():
         model.boundary_residual_head.weight.fill_(0.05)
         model.boundary_residual_head.bias.fill_(0.01)
