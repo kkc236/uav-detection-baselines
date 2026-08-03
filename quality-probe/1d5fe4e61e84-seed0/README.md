@@ -19,7 +19,9 @@ AP75. The fixed internal Gate required at least `+0.0050` mAP and strictly posit
 AP75 against both C0 and C1, so the probe was frozen without accessing the official
 548-image validation split.
 
-The directory includes all 40 checkpoint/sidecar pairs, cache authorities and manifests,
-hook-neutrality evidence, the immutable selection and decision reports, and the run log.
+The GitHub directory includes all 40 checkpoint sidecars and their checkpoint hashes,
+cache authorities and manifests, hook-neutrality evidence, the immutable selection and
+decision reports, and the run log. The ignored `.pt` checkpoint bytes remain in the
+server run and the local evidence copy.
 The authorized next branch is the pre-audited Ultralytics FDR-only migration; thresholds
 must not be weakened and C1 must not be promoted.
