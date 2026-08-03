@@ -342,12 +342,14 @@ def _validate_cache_record(record: Mapping[str, Any]) -> dict[str, Any]:
         or target_boxes.shape[0] != target_classes.shape[0]
     ):
         raise QualityOracleCacheViolation("record target tensor shape mismatch")
-    if not torch.is_floating_point(boxes) or not torch.is_floating_point(logits):
-        raise QualityOracleCacheViolation("boxes and logits must be floating-point")
-    if not torch.is_floating_point(target_boxes):
-        raise QualityOracleCacheViolation("target_boxes must be floating-point")
-    if target_classes.dtype not in _INTEGER_DTYPES:
-        raise QualityOracleCacheViolation("target_classes must be integer")
+    if any(value.dtype != torch.float32 for value in (boxes, logits, target_boxes)):
+        raise QualityOracleCacheViolation(
+            "boxes, logits, and target_boxes must have dtype torch.float32"
+        )
+    if target_classes.dtype != torch.int64:
+        raise QualityOracleCacheViolation(
+            "target_classes must have dtype torch.int64"
+        )
     if any(value.device.type != "cpu" for value in tensors):
         raise QualityOracleCacheViolation("record tensors must be on CPU")
     if any(value.requires_grad for value in tensors):
@@ -675,7 +677,9 @@ def decide_quality_oracle(
     return {
         "status": "passed" if passed else "scientific_failed",
         "finite": True,
-        "observed": observed,
-        "deltas": deltas,
-        "thresholds": thresholds,
+        "observed": {name: format(value, "f") for name, value in observed.items()},
+        "deltas": {name: format(value, "f") for name, value in deltas.items()},
+        "thresholds": {
+            name: format(value, "f") for name, value in thresholds.items()
+        },
     }

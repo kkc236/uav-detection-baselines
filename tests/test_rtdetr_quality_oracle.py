@@ -1178,6 +1178,36 @@ def test_quality_cache_revalidates_loaded_payload_schema(tmp_path: Path) -> None
         load_quality_oracle_cache(root, authority=authority)
 
 
+def test_quality_cache_rejects_rehashed_loaded_artifact_with_alternate_dtype(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    authority = _authority()
+    manifest = write_quality_oracle_cache(
+        root,
+        dev=_cache_records("dev", 129),
+        val=_cache_records("val", 548),
+        authority=authority,
+    )
+    dev_artifact = next(
+        artifact for artifact in manifest["artifacts"] if artifact["split"] == "dev"
+    )
+    artifact_path = root / dev_artifact["path"]
+    payload = torch.load(artifact_path, map_location="cpu", weights_only=True)
+    payload["records"][0]["target_classes"] = payload["records"][0][
+        "target_classes"
+    ].to(torch.int32)
+    torch.save(payload, artifact_path)
+    dev_artifact["bytes"] = artifact_path.stat().st_size
+    dev_artifact["sha256"] = _file_sha256(artifact_path)
+    with (root / "manifest.json").open("w", encoding="utf-8", newline="\n") as stream:
+        json.dump(manifest, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        stream.write("\n")
+
+    with pytest.raises(QualityOracleCacheViolation, match="dtype"):
+        load_quality_oracle_cache(root, authority=authority)
+
+
 def test_quality_cache_rejects_overlap_duplicates_and_wrong_counts(tmp_path: Path) -> None:
     authority = _authority()
     dev = _cache_records("dev", 129)
@@ -1209,9 +1239,13 @@ def test_quality_cache_rejects_overlap_duplicates_and_wrong_counts(tmp_path: Pat
         ("boxes", torch.zeros(4, 300).T),
         ("boxes", torch.zeros(300, 4, requires_grad=True)),
         ("boxes", torch.zeros(300, 4, dtype=torch.long)),
+        ("boxes", torch.zeros(300, 4, dtype=torch.float64)),
         ("logits", torch.full((300, 10), float("nan"))),
+        ("logits", torch.zeros(300, 10, dtype=torch.float16)),
         ("target_boxes", torch.tensor([[1.1, 0.5, 0.2, 0.2]])),
+        ("target_boxes", torch.zeros(1, 4, dtype=torch.float64)),
         ("target_classes", torch.tensor([0.0])),
+        ("target_classes", torch.tensor([0], dtype=torch.int32)),
         ("target_classes", torch.tensor([10])),
     ],
 )
@@ -1296,14 +1330,15 @@ def test_quality_gate_passes_at_exact_map_boundary_with_positive_ap75() -> None:
         "status": "passed",
         "finite": True,
         "observed": {
-            "stock_map": Decimal("0.2"),
-            "stock_ap75": Decimal("0.18"),
-            "oracle_map": Decimal("0.205"),
-            "oracle_ap75": Decimal("0.180001"),
+            "stock_map": "0.2",
+            "stock_ap75": "0.18",
+            "oracle_map": "0.205",
+            "oracle_ap75": "0.180001",
         },
-        "deltas": {"map": Decimal("0.005"), "ap75": Decimal("0.000001")},
-        "thresholds": {"map": Decimal("0.0050"), "ap75": Decimal("0")},
+        "deltas": {"map": "0.005", "ap75": "0.000001"},
+        "thresholds": {"map": "0.0050", "ap75": "0"},
     }
+    assert json.loads(json.dumps(decision, allow_nan=False)) == decision
 
 
 @pytest.mark.parametrize(
