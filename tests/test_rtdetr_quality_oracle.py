@@ -11,6 +11,7 @@ import pytest
 import torch
 from ultralytics.nn.modules.head import RTDETRDecoder
 
+import src.rtdetr_quality_oracle as quality_oracle_module
 from src.rtdetr_quality_oracle import (
     ALPHA_GRID,
     DEV_COUNT,
@@ -693,7 +694,9 @@ def _authority() -> dict[str, str]:
     }
 
 
-def _cache_records(prefix: str, count: int) -> list[dict[str, object]]:
+def _cache_records(
+    prefix: str, count: int, *, independent: bool = False
+) -> list[dict[str, object]]:
     tensors = {
         "boxes": torch.full((300, 4), 0.5),
         "logits": torch.linspace(-2.0, 2.0, 3000).reshape(300, 10),
@@ -701,13 +704,30 @@ def _cache_records(prefix: str, count: int) -> list[dict[str, object]]:
         "target_classes": torch.tensor([9], dtype=torch.long),
     }
     return [
-        {"image_id": f"{prefix}-{index:04d}", **tensors}
+        {
+            "image_id": f"{prefix}-{index:04d}",
+            **(
+                {name: value.clone() for name, value in tensors.items()}
+                if independent
+                else tensors
+            ),
+        }
         for index in range(count)
     ]
 
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def _load_cache(
+    root: Path, *, authority: dict[str, str]
+) -> dict[str, tuple[dict[str, object], ...]]:
+    return load_quality_oracle_cache(
+        root,
+        authority=authority,
+        manifest_sha256=_file_sha256(root / "manifest.json"),
+    )
 
 
 def _assert_byte_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
@@ -1024,22 +1044,40 @@ def test_quality_cache_roundtrip_is_canonical_hashed_fsynced_and_safe(
 ) -> None:
     root = tmp_path / "cache"
     authority = _authority()
+    dev = _cache_records("dev", 129, independent=True)
+    val = _cache_records("val", 548, independent=True)
+    for records in (dev, val):
+        for field in ("boxes", "logits", "target_boxes", "target_classes"):
+            assert len({record[field].data_ptr() for record in records}) == len(records)
     real_fsync = os.fsync
     fsync_calls: list[int] = []
+    directory_fsyncs: list[Path] = []
 
     def tracked_fsync(file_descriptor: int) -> None:
         fsync_calls.append(file_descriptor)
         real_fsync(file_descriptor)
 
     monkeypatch.setattr(os, "fsync", tracked_fsync)
+    monkeypatch.setattr(
+        quality_oracle_module,
+        "_fsync_directory",
+        lambda path: directory_fsyncs.append(Path(path)),
+        raising=False,
+    )
     manifest = write_quality_oracle_cache(
         root,
-        dev=_cache_records("dev", 129),
-        val=_cache_records("val", 548),
+        dev=dev,
+        val=val,
         authority=authority,
     )
 
     assert len(fsync_calls) >= 3
+    assert len(directory_fsyncs) >= 2
+    assert directory_fsyncs[-1] == root.parent
+    assert any(
+        path.parent == root.parent and path.name.startswith(".cache.staging-")
+        for path in directory_fsyncs
+    )
     assert {path.name for path in root.iterdir()} == {"dev.pt", "val.pt", "manifest.json"}
     assert manifest["complete"] is True
     assert manifest["split_counts"] == {"dev": 129, "val": 548}
@@ -1065,7 +1103,11 @@ def test_quality_cache_roundtrip_is_canonical_hashed_fsynced_and_safe(
         return real_load(*args, **kwargs)
 
     monkeypatch.setattr(torch, "load", tracked_load)
-    loaded = load_quality_oracle_cache(root, authority=authority)
+    loaded = load_quality_oracle_cache(
+        root,
+        authority=authority,
+        manifest_sha256=_file_sha256(root / "manifest.json"),
+    )
 
     assert [call["weights_only"] for call in load_calls] == [True, True]
     assert [call["map_location"] for call in load_calls] == ["cpu", "cpu"]
@@ -1073,6 +1115,8 @@ def test_quality_cache_roundtrip_is_canonical_hashed_fsynced_and_safe(
     assert len(loaded["dev"]) == 129
     assert len(loaded["val"]) == 548
     assert loaded["dev"][0]["image_id"] == "dev-0000"
+    for field in ("boxes", "logits", "target_boxes", "target_classes"):
+        assert loaded["dev"][0][field].data_ptr() != loaded["dev"][1][field].data_ptr()
     assert torch.equal(loaded["val"][-1]["logits"], torch.linspace(-2.0, 2.0, 3000).reshape(300, 10))
 
 
@@ -1092,6 +1136,51 @@ def test_quality_cache_root_is_strictly_create_only(tmp_path: Path) -> None:
         write_quality_oracle_cache(root, dev=dev, val=val, authority=authority)
 
 
+def test_quality_cache_interrupted_creation_cleans_staging_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    dev = _cache_records("dev", 129)
+    val = _cache_records("val", 548)
+    real_save = torch.save
+    save_calls = 0
+
+    def fail_second_save(*args: object, **kwargs: object) -> None:
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 2:
+            raise RuntimeError("interrupted cache creation")
+        real_save(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "save", fail_second_save)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        write_quality_oracle_cache(root, dev=dev, val=val, authority=_authority())
+
+    assert not root.exists()
+    assert not tuple(tmp_path.glob(".cache.staging-*"))
+
+    monkeypatch.setattr(torch, "save", real_save)
+    write_quality_oracle_cache(root, dev=dev, val=val, authority=_authority())
+    assert {path.name for path in root.iterdir()} == {"dev.pt", "val.pt", "manifest.json"}
+
+
+def test_atomic_publish_never_replaces_an_existing_root(tmp_path: Path) -> None:
+    staging = tmp_path / ".cache.staging-test"
+    destination = tmp_path / "cache"
+    staging.mkdir()
+    destination.mkdir()
+    (staging / "new").write_text("new", encoding="utf-8")
+    (destination / "owner").write_text("owner", encoding="utf-8")
+    publish = getattr(quality_oracle_module, "_publish_directory_no_replace", None)
+
+    assert callable(publish)
+    with pytest.raises(FileExistsError):
+        publish(staging, destination)
+    assert (destination / "owner").read_text(encoding="utf-8") == "owner"
+    assert not (destination / "new").exists()
+    assert (staging / "new").is_file()
+
+
 def test_quality_cache_requires_exact_authority_and_normalizes_hashes(
     tmp_path: Path,
 ) -> None:
@@ -1107,17 +1196,117 @@ def test_quality_cache_requires_exact_authority_and_normalizes_hashes(
     changed = dict(authority)
     changed["baseline_sha256"] = "0" * 64
     with pytest.raises(QualityOracleCacheViolation, match="authority.*baseline_sha256"):
-        load_quality_oracle_cache(root, authority=changed)
+        _load_cache(root, authority=changed)
 
     missing = dict(authority)
     missing.pop("schema_sha256")
     with pytest.raises(QualityOracleCacheViolation, match="authority schema"):
-        load_quality_oracle_cache(root, authority=missing)
+        _load_cache(root, authority=missing)
 
     invalid = dict(authority)
     invalid["source_commit"] = "not-a-commit"
     with pytest.raises(QualityOracleCacheViolation, match="source_commit"):
-        load_quality_oracle_cache(root, authority=invalid)
+        _load_cache(root, authority=invalid)
+
+
+def test_quality_cache_requires_external_manifest_digest_before_artifact_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    authority = _authority()
+    write_quality_oracle_cache(
+        root,
+        dev=_cache_records("dev", 129),
+        val=_cache_records("val", 548),
+        authority=authority,
+    )
+    load_calls: list[object] = []
+
+    def forbidden_load(*args: object, **kwargs: object) -> object:
+        load_calls.append(args[0])
+        raise AssertionError("artifact loaded before manifest authority")
+
+    monkeypatch.setattr(torch, "load", forbidden_load)
+    with pytest.raises(QualityOracleCacheViolation, match="manifest.*sha256"):
+        load_quality_oracle_cache(
+            root,
+            authority=authority,
+            manifest_sha256="0" * 64,
+        )
+    assert load_calls == []
+
+
+def test_quality_cache_rejects_symlink_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_root = tmp_path / "real-cache"
+    authority = _authority()
+    write_quality_oracle_cache(
+        real_root,
+        dev=_cache_records("dev", 129),
+        val=_cache_records("val", 548),
+        authority=authority,
+    )
+    root = tmp_path / "cache-link"
+    try:
+        root.symlink_to(real_root, target_is_directory=True)
+    except OSError:
+        root = real_root
+        real_detector = getattr(
+            quality_oracle_module, "_is_symlink_or_reparse", lambda path: False
+        )
+        monkeypatch.setattr(
+            quality_oracle_module,
+            "_is_symlink_or_reparse",
+            lambda path: Path(path) == root or real_detector(path),
+            raising=False,
+        )
+
+    with pytest.raises(QualityOracleCacheViolation, match="root.*symlink|reparse"):
+        load_quality_oracle_cache(
+            root,
+            authority=authority,
+            manifest_sha256=_file_sha256(real_root / "manifest.json"),
+        )
+
+
+def test_quality_cache_rejects_symlink_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    authority = _authority()
+    write_quality_oracle_cache(
+        root,
+        dev=_cache_records("dev", 129),
+        val=_cache_records("val", 548),
+        authority=authority,
+    )
+    manifest_path = root / "manifest.json"
+    manifest_bytes = manifest_path.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest().upper()
+    target = tmp_path / "manifest-copy.json"
+    target.write_bytes(manifest_bytes)
+    manifest_path.unlink()
+    try:
+        manifest_path.symlink_to(target)
+    except OSError:
+        manifest_path.write_bytes(manifest_bytes)
+        real_detector = getattr(
+            quality_oracle_module, "_is_symlink_or_reparse", lambda path: False
+        )
+        monkeypatch.setattr(
+            quality_oracle_module,
+            "_is_symlink_or_reparse",
+            lambda path: Path(path) == manifest_path or real_detector(path),
+            raising=False,
+        )
+
+    with pytest.raises(QualityOracleCacheViolation, match="manifest.*symlink|reparse"):
+        load_quality_oracle_cache(
+            root,
+            authority=authority,
+            manifest_sha256=manifest_sha256,
+        )
 
 
 def test_quality_cache_rejects_corruption_and_incomplete_manifest(tmp_path: Path) -> None:
@@ -1133,7 +1322,7 @@ def test_quality_cache_rejects_corruption_and_incomplete_manifest(tmp_path: Path
     with artifact_path.open("ab") as stream:
         stream.write(b"corruption")
     with pytest.raises(QualityOracleCacheViolation, match="bytes|sha256"):
-        load_quality_oracle_cache(corrupt_root, authority=authority)
+        _load_cache(corrupt_root, authority=authority)
 
     incomplete_root = tmp_path / "incomplete"
     incomplete = write_quality_oracle_cache(
@@ -1149,7 +1338,45 @@ def test_quality_cache_rejects_corruption_and_incomplete_manifest(tmp_path: Path
         json.dump(incomplete, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
         stream.write("\n")
     with pytest.raises(QualityOracleCacheViolation, match="complete"):
-        load_quality_oracle_cache(incomplete_root, authority=authority)
+        _load_cache(incomplete_root, authority=authority)
+
+
+def test_quality_cache_hashes_and_loads_the_same_open_artifact_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    authority = _authority()
+    write_quality_oracle_cache(
+        root,
+        dev=_cache_records("dev", 129),
+        val=_cache_records("val", 548),
+        authority=authority,
+    )
+    manifest_sha256 = _file_sha256(root / "manifest.json")
+    dev_path = root / "dev.pt"
+    replacement_path = tmp_path / "replacement.pt"
+    replacement = torch.load(dev_path, map_location="cpu", weights_only=True)
+    replacement["records"][0]["image_id"] = "swapped-dev"
+    torch.save(replacement, replacement_path)
+    real_load = torch.load
+    load_sources: list[object] = []
+
+    def racing_load(source: object, *args: object, **kwargs: object) -> object:
+        load_sources.append(source)
+        if isinstance(source, (str, os.PathLike)) and Path(source) == dev_path:
+            os.replace(replacement_path, dev_path)
+        return real_load(source, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "load", racing_load)
+    loaded = load_quality_oracle_cache(
+        root,
+        authority=authority,
+        manifest_sha256=manifest_sha256,
+    )
+
+    assert loaded["dev"][0]["image_id"] == "dev-0000"
+    assert load_sources
+    assert all(not isinstance(source, (str, os.PathLike)) for source in load_sources)
 
 
 def test_quality_cache_revalidates_loaded_payload_schema(tmp_path: Path) -> None:
@@ -1175,7 +1402,7 @@ def test_quality_cache_revalidates_loaded_payload_schema(tmp_path: Path) -> None
         stream.write("\n")
 
     with pytest.raises(QualityOracleCacheViolation, match="record schema"):
-        load_quality_oracle_cache(root, authority=authority)
+        _load_cache(root, authority=authority)
 
 
 def test_quality_cache_rejects_rehashed_loaded_artifact_with_alternate_dtype(
@@ -1205,7 +1432,7 @@ def test_quality_cache_rejects_rehashed_loaded_artifact_with_alternate_dtype(
         stream.write("\n")
 
     with pytest.raises(QualityOracleCacheViolation, match="dtype"):
-        load_quality_oracle_cache(root, authority=authority)
+        _load_cache(root, authority=authority)
 
 
 def test_quality_cache_rejects_overlap_duplicates_and_wrong_counts(tmp_path: Path) -> None:

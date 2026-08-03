@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import io
 import json
 import math
 import os
+import shutil
+import stat
+import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -300,6 +306,234 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+def _is_symlink_or_reparse(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
+def _open_regular_file_nofollow(path: Path, *, label: str) -> Any:
+    if _is_symlink_or_reparse(path):
+        raise QualityOracleCacheViolation(f"{label} is a symlink or reparse point")
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        generic_read = 0x80000000
+        share_all = 0x00000001 | 0x00000002 | 0x00000004
+        open_existing = 3
+        open_reparse_point = 0x00200000
+        file_attribute_reparse_point = 0x00000400
+        file_attribute_directory = 0x00000010
+        file_attribute_tag_info = 9
+        invalid_handle = ctypes.c_void_p(-1).value
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [
+                ("file_attributes", wintypes.DWORD),
+                ("reparse_tag", wintypes.DWORD),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        get_information = kernel32.GetFileInformationByHandleEx
+        get_information.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        get_information.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        handle = create_file(
+            os.path.abspath(path),
+            generic_read,
+            share_all,
+            None,
+            open_existing,
+            open_reparse_point,
+            None,
+        )
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        information = FileAttributeTagInfo()
+        if not get_information(
+            handle,
+            file_attribute_tag_info,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            error = ctypes.get_last_error()
+            close_handle(handle)
+            raise ctypes.WinError(error)
+        if information.file_attributes & file_attribute_reparse_point:
+            close_handle(handle)
+            raise QualityOracleCacheViolation(
+                f"{label} is a symlink or reparse point"
+            )
+        if information.file_attributes & file_attribute_directory:
+            close_handle(handle)
+            raise QualityOracleCacheViolation(f"{label} is not a regular file")
+        try:
+            descriptor = msvcrt.open_osfhandle(
+                int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            )
+        except Exception:
+            close_handle(handle)
+            raise
+        return os.fdopen(descriptor, "rb")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise QualityOracleCacheViolation(f"{label} is not a regular file")
+        return os.fdopen(descriptor, "rb")
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _read_regular_file_nofollow(path: Path, *, label: str) -> bytes:
+    with _open_regular_file_nofollow(path, label=label) as stream:
+        return stream.read()
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        generic_write = 0x40000000
+        share_all = 0x00000001 | 0x00000002 | 0x00000004
+        open_existing = 3
+        backup_semantics = 0x02000000
+        invalid_handle = ctypes.c_void_p(-1).value
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        flush = kernel32.FlushFileBuffers
+        flush.argtypes = [wintypes.HANDLE]
+        flush.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        handle = create_file(
+            os.path.abspath(path),
+            generic_write,
+            share_all,
+            None,
+            open_existing,
+            backup_semantics,
+            None,
+        )
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not flush(handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            close_handle(handle)
+        return
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_directory_no_replace(source: Path, destination: Path) -> None:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        movefile_write_through = 0x00000008
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        move_file = kernel32.MoveFileExW
+        move_file.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+        move_file.restype = wintypes.BOOL
+        if not move_file(
+            os.path.abspath(source),
+            os.path.abspath(destination),
+            movefile_write_through,
+        ):
+            error = ctypes.get_last_error()
+            if error in (80, 183) or os.path.lexists(destination):
+                raise FileExistsError(
+                    errno.EEXIST,
+                    f"refusing to overwrite cache root: {destination}",
+                    str(destination),
+                )
+            raise ctypes.WinError(error)
+        return
+
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(os.path.abspath(source))
+    destination_bytes = os.fsencode(os.path.abspath(destination))
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        renameat2 = libc.renameat2
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(-100, source_bytes, -100, destination_bytes, 1)
+    elif sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        renamex = libc.renamex_np
+        renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex.restype = ctypes.c_int
+        result = renamex(source_bytes, destination_bytes, 0x00000004)
+    else:
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-overwrite directory publication is unsupported",
+        )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(
+                error,
+                f"refusing to overwrite cache root: {destination}",
+                str(destination),
+            )
+        raise OSError(error, os.strerror(error), str(destination))
+
+
 def _normalize_authority(authority: Mapping[str, str]) -> dict[str, str]:
     if not isinstance(authority, Mapping) or set(authority) != set(_AUTHORITY_FIELDS):
         raise QualityOracleCacheViolation("authority schema mismatch")
@@ -422,54 +656,80 @@ def write_quality_oracle_cache(
 ) -> dict[str, Any]:
     """Create a complete immutable quality-oracle cache and manifest."""
     root = Path(root)
-    if root.exists():
+    if _is_symlink_or_reparse(root):
+        raise QualityOracleCacheViolation("cache root is a symlink or reparse point")
+    if os.path.lexists(root):
         raise FileExistsError(f"refusing to overwrite cache root: {root}")
     normalized_authority = _normalize_authority(authority)
     validated = _validate_cache_splits(dev, val)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent)
+    )
+    published = False
     try:
-        root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as error:
-        raise FileExistsError(f"refusing to overwrite cache root: {root}") from error
+        artifacts: list[dict[str, Any]] = []
+        for split in ("dev", "val"):
+            path = staging / f"{split}.pt"
+            _save_fsynced(
+                path,
+                {
+                    "format_version": _CACHE_FORMAT_VERSION,
+                    "split": split,
+                    "records": validated[split],
+                },
+            )
+            artifacts.append(
+                {
+                    "split": split,
+                    "path": path.name,
+                    "bytes": path.stat().st_size,
+                    "sha256": _file_sha256(path),
+                }
+            )
 
-    artifacts: list[dict[str, Any]] = []
-    for split in ("dev", "val"):
-        path = root / f"{split}.pt"
-        _save_fsynced(
-            path,
-            {
-                "format_version": _CACHE_FORMAT_VERSION,
-                "split": split,
-                "records": validated[split],
-            },
-        )
-        artifacts.append(
-            {
-                "split": split,
-                "path": path.name,
-                "bytes": path.stat().st_size,
-                "sha256": _file_sha256(path),
-            }
-        )
-
-    manifest = {
-        "format_version": _CACHE_FORMAT_VERSION,
-        "complete": True,
-        "authority": normalized_authority,
-        "split_counts": {"dev": DEV_COUNT, "val": _VAL_COUNT},
-        "artifacts": artifacts,
-    }
-    manifest_path = root / "manifest.json"
-    with manifest_path.open("xb") as stream:
-        stream.write(_canonical_json(manifest))
-        stream.flush()
-        os.fsync(stream.fileno())
-    return manifest
+        manifest = {
+            "format_version": _CACHE_FORMAT_VERSION,
+            "complete": True,
+            "authority": normalized_authority,
+            "split_counts": {"dev": DEV_COUNT, "val": _VAL_COUNT},
+            "artifacts": artifacts,
+        }
+        manifest_path = staging / "manifest.json"
+        with manifest_path.open("xb") as stream:
+            stream.write(_canonical_json(manifest))
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_directory(staging)
+        _fsync_directory(root.parent)
+        _publish_directory_no_replace(staging, root)
+        published = True
+        _fsync_directory(root.parent)
+        return manifest
+    except Exception:
+        if not published and os.path.lexists(staging):
+            shutil.rmtree(staging)
+            try:
+                _fsync_directory(root.parent)
+            except OSError:
+                pass
+        raise
 
 
-def _load_manifest(root: Path) -> dict[str, Any]:
+def _normalize_manifest_sha256(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in value)
+    ):
+        raise QualityOracleCacheViolation("manifest sha256 authority is invalid")
+    return value.upper()
+
+
+def _load_manifest(root: Path, *, manifest_sha256: str) -> dict[str, Any]:
     manifest_path = root / "manifest.json"
     try:
-        raw = manifest_path.read_bytes()
+        raw = _read_regular_file_nofollow(manifest_path, label="manifest")
         manifest = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise QualityOracleCacheViolation(f"manifest load failed: {error}") from error
@@ -481,16 +741,28 @@ def _load_manifest(root: Path) -> dict[str, Any]:
         raise QualityOracleCacheViolation("manifest contains unsafe values") from error
     if raw != canonical:
         raise QualityOracleCacheViolation("manifest is not canonical")
+    if hashlib.sha256(canonical).hexdigest().upper() != manifest_sha256:
+        raise QualityOracleCacheViolation("manifest sha256 authority mismatch")
     return manifest
 
 
 def load_quality_oracle_cache(
-    root: Path, *, authority: Mapping[str, str]
+    root: Path,
+    *,
+    authority: Mapping[str, str],
+    manifest_sha256: str,
 ) -> dict[str, tuple[dict[str, Any], ...]]:
     """Verify and safely load a complete immutable quality-oracle cache."""
     root = Path(root)
+    if _is_symlink_or_reparse(root):
+        raise QualityOracleCacheViolation(
+            "cache root is a symlink or reparse point"
+        )
+    if not root.is_dir():
+        raise QualityOracleCacheViolation("cache root is missing or not a directory")
     expected_authority = _normalize_authority(authority)
-    manifest = _load_manifest(root)
+    expected_manifest_sha256 = _normalize_manifest_sha256(manifest_sha256)
+    manifest = _load_manifest(root, manifest_sha256=expected_manifest_sha256)
     expected_manifest_fields = {
         "format_version",
         "complete",
@@ -568,26 +840,31 @@ def load_quality_oracle_cache(
     if set(artifacts_by_split) != set(expected_paths):
         raise QualityOracleCacheViolation("artifact split mismatch")
 
+    artifact_bytes: dict[str, bytes] = {}
     for split in ("dev", "val"):
         artifact = artifacts_by_split[split]
         path = root / expected_paths[split]
-        if path.is_symlink() or not path.is_file():
-            raise QualityOracleCacheViolation("artifact is missing or unsafe")
         try:
-            size = path.stat().st_size
-            digest = _file_sha256(path)
+            payload_bytes = _read_regular_file_nofollow(
+                path, label=f"artifact {path.name}"
+            )
         except OSError as error:
             raise QualityOracleCacheViolation(
                 f"artifact preflight failed: {error}"
             ) from error
-        if size != artifact["bytes"] or digest != artifact["sha256"]:
+        digest = hashlib.sha256(payload_bytes).hexdigest().upper()
+        if len(payload_bytes) != artifact["bytes"] or digest != artifact["sha256"]:
             raise QualityOracleCacheViolation("artifact bytes or sha256 mismatch")
+        artifact_bytes[split] = payload_bytes
 
     raw_records: dict[str, list[Mapping[str, Any]]] = {}
     for split in ("dev", "val"):
-        path = root / expected_paths[split]
         try:
-            payload = torch.load(path, map_location="cpu", weights_only=True)
+            payload = torch.load(
+                io.BytesIO(artifact_bytes[split]),
+                map_location="cpu",
+                weights_only=True,
+            )
         except Exception as error:
             raise QualityOracleCacheViolation(f"artifact load failed: {error}") from error
         if (
