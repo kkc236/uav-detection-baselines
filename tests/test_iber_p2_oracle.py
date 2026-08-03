@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from src.iber_p2_oracle import (
     P2_TANGENT_FRACTIONS,
     correction_direction_targets,
     decide_p2_viability,
+    enable_p2_oracle_determinism,
     load_p2_oracle_cache,
     sample_p2_edge_profiles,
     train_p2_oracles,
@@ -203,6 +205,29 @@ def test_p2_oracle_training_is_deterministic_and_final_epoch_only() -> None:
         "small_direction_accuracy",
         "valid_edges",
     }
+
+
+def test_p2_oracle_enables_cuda_safe_determinism() -> None:
+    previous_algorithms = torch.are_deterministic_algorithms_enabled()
+    previous_benchmark = torch.backends.cudnn.benchmark
+    previous_cublas = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    try:
+        os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+        torch.use_deterministic_algorithms(False)
+        torch.backends.cudnn.benchmark = True
+
+        enable_p2_oracle_determinism()
+
+        assert torch.are_deterministic_algorithms_enabled()
+        assert torch.backends.cudnn.benchmark is False
+        assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+    finally:
+        torch.use_deterministic_algorithms(previous_algorithms)
+        torch.backends.cudnn.benchmark = previous_benchmark
+        if previous_cublas is None:
+            os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+        else:
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = previous_cublas
 
 
 def _load_cli_module():

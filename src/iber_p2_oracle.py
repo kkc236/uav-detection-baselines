@@ -47,6 +47,13 @@ class P2OracleCacheViolation(ValueError):
     """Raised when immutable P2 oracle evidence drifts or is corrupted."""
 
 
+def enable_p2_oracle_determinism() -> None:
+    """Lock deterministic CPU/CUDA kernels before oracle model construction."""
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+
+
 def _cxcywh_to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
     half_size = boxes[..., 2:].mul(0.5)
     return torch.cat((boxes[..., :2] - half_size, boxes[..., :2] + half_size), dim=-1)
@@ -463,6 +470,7 @@ def train_p2_oracles(
     device: torch.device,
 ) -> dict[str, Any]:
     """Train fixed P2-only and context oracles and evaluate final epoch only."""
+    enable_p2_oracle_determinism()
     if set(cache) != {"train", "val"}:
         raise ValueError("P2 oracle cache must contain exactly train and val")
     train = _flatten_records(cache["train"])
@@ -526,6 +534,7 @@ __all__ = [
     "P2_TINY_DIRECTION_THRESHOLD",
     "correction_direction_targets",
     "decide_p2_viability",
+    "enable_p2_oracle_determinism",
     "load_p2_oracle_cache",
     "sample_p2_edge_profiles",
     "train_p2_oracles",
