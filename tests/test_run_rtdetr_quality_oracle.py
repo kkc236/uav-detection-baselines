@@ -214,6 +214,33 @@ def test_existing_reports_are_accepted_only_when_canonical_and_identical(
         module._write_or_validate_canonical_json(path, {"z": 2, "a": [2]})
 
 
+def test_resume_keeps_original_authority_commit_only_for_verified_ancestor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_module()
+    report_root = tmp_path / "report"
+    report_root.mkdir()
+    original = "a" * 40
+    current = "b" * 40
+    module._write_canonical_json_create_only(
+        report_root / "alpha-selection-report.json",
+        {"format_version": 1, "authority": {"source_commit": original}},
+    )
+    monkeypatch.setattr(module, "_source_commit", lambda: current)
+    monkeypatch.setattr(
+        module,
+        "_git_is_ancestor",
+        lambda ancestor, descendant: (ancestor, descendant) == (original, current),
+        raising=False,
+    )
+
+    assert module._resolve_source_authority(report_root) == (original, current)
+
+    monkeypatch.setattr(module, "_git_is_ancestor", lambda *_args: False)
+    with pytest.raises(RuntimeError, match="not an ancestor"):
+        module._resolve_source_authority(report_root)
+
+
 def test_device_is_frozen_to_available_cuda_zero(monkeypatch) -> None:
     module = _load_module()
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
@@ -476,6 +503,7 @@ def test_resume_uses_external_cache_authority_and_skips_all_inference(
         for alpha in module.ALPHA_GRID
     }
 
+    monkeypatch.setattr(module, "_source_commit", lambda: "e" * 40)
     monkeypatch.setattr(module, "_build_pre_alpha_authority", lambda *_args, **_kwargs: authority, raising=False)
     monkeypatch.setattr(module, "_prepare_internal_dev", lambda *_args, **_kwargs: selected_paths)
     monkeypatch.setattr(module, "_expected_official_val_paths", lambda _root: val_paths, raising=False)

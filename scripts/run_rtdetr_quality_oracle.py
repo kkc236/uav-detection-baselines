@@ -194,6 +194,7 @@ def _build_pre_alpha_authority(
     baseline_checkpoint: Path,
     dataset_root: Path,
     dev_paths: Sequence[Path],
+    source_commit: str | None = None,
 ) -> dict[str, str]:
     baseline = Path(baseline_checkpoint).resolve()
     root = Path(dataset_root).resolve()
@@ -222,7 +223,7 @@ def _build_pre_alpha_authority(
         "dataset_sha256": EXPECTED_DATASET_SHA256,
         "subset_sha256": subset_sha,
         "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
-        "source_commit": _source_commit(),
+        "source_commit": source_commit or _source_commit(),
         "schema_sha256": _schema_sha256(),
         "dev_sha256": dev_sha,
     }
@@ -790,6 +791,40 @@ def _validate_completed_reports(
     return 0
 
 
+def _git_is_ancestor(ancestor: str, descendant: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            timeout=10,
+        ).returncode
+        == 0
+    )
+
+
+def _resolve_source_authority(report_root: Path) -> tuple[str, str]:
+    """Keep cached evidence bound to its source while recording the resume runner."""
+    current = _source_commit()
+    alpha_path = Path(report_root) / _ALPHA_REPORT
+    if not alpha_path.is_file():
+        return current, current
+    payload = _read_canonical_json(alpha_path)
+    authority = payload.get("authority")
+    original = authority.get("source_commit") if isinstance(authority, Mapping) else None
+    if (
+        not isinstance(original, str)
+        or len(original) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in original)
+    ):
+        raise RuntimeError("resume source authority is invalid")
+    original = original.lower()
+    current = current.lower()
+    if original != current and not _git_is_ancestor(original, current):
+        raise RuntimeError("resume authority source is not an ancestor of execution source")
+    return original, current
+
+
 def _run(args: argparse.Namespace) -> int:
     baseline = Path(args.baseline_checkpoint).resolve()
     dataset_root = Path(args.dataset_root).resolve()
@@ -797,7 +832,12 @@ def _run(args: argparse.Namespace) -> int:
     report_root = Path(args.report_root).resolve()
     _validate_report_stage(report_root, cache_root)
     dev_paths = _prepare_internal_dev(dataset_root, cache_root)
-    authority = _build_pre_alpha_authority(baseline, dataset_root, dev_paths)
+    authority_source_commit, execution_source_commit = _resolve_source_authority(
+        report_root
+    )
+    authority = _build_pre_alpha_authority(
+        baseline, dataset_root, dev_paths, authority_source_commit
+    )
     device = _device(args.device)
     alpha_report_path = report_root / _ALPHA_REPORT
     cache_authority_path = report_root / _CACHE_AUTHORITY_REPORT
@@ -969,6 +1009,7 @@ def _run(args: argparse.Namespace) -> int:
         {
             "format_version": 1,
             "authority": authority,
+            "execution_source_commit": execution_source_commit,
             "split": {"count": VAL_COUNT, "official_passes": 1},
             "selected_alpha": selected_alpha,
             "stock": official["stock"],
@@ -986,6 +1027,7 @@ def _run(args: argparse.Namespace) -> int:
         {
             "format_version": 1,
             "authority": authority,
+            "execution_source_commit": execution_source_commit,
             "selected_alpha": selected_alpha,
             **decision,
         },
@@ -996,6 +1038,7 @@ def _run(args: argparse.Namespace) -> int:
         {
             "format_version": 1,
             "authority": authority,
+            "execution_source_commit": execution_source_commit,
             "environment": _execution_environment(),
             "inputs": {
                 "baseline_checkpoint": {
