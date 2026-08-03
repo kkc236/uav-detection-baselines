@@ -121,6 +121,34 @@ def test_flattened_topk_is_byte_exact_with_ultralytics_8_4_90() -> None:
     _assert_byte_equal(actual, expected)
 
 
+def test_production_shapes_use_default_top_300_contract() -> None:
+    fake_head = SimpleNamespace(num_queries=300, nc=10)
+    boxes = torch.linspace(0.001, 0.999, 1 * 300 * 4).reshape(1, 300, 4)
+    logits = torch.linspace(-5.0, 5.0, 1 * 300 * 10).reshape(1, 300, 10)
+    scores = logits.sigmoid()
+    qualities = torch.linspace(0.1, 1.0, 1 * 300 * 10).reshape(1, 300, 10)
+
+    expected_stock = RTDETRDecoder.postprocess(fake_head, boxes, scores)
+    stock = flattened_topk(boxes, scores, num_classes=10)
+    oracle = oracle_topk(
+        boxes,
+        logits,
+        qualities,
+        alpha=0.5,
+        num_classes=10,
+    )
+    quality = same_class_iou_quality(
+        boxes[0],
+        boxes[0, :2],
+        torch.tensor([0, 9]),
+        num_classes=10,
+    )
+
+    _assert_byte_equal(stock, expected_stock)
+    assert stock.shape == oracle.shape == (1, 300, 6)
+    assert quality.shape == (300, 10)
+
+
 def test_flattened_topk_keeps_duplicate_queries_for_different_classes() -> None:
     boxes = torch.tensor(
         [[[0.10, 0.20, 0.30, 0.40], [0.50, 0.60, 0.70, 0.80]]]
