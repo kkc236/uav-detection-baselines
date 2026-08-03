@@ -58,7 +58,7 @@ BOUNDARY_LOSS_CONTRACT = _freeze(
         "direction_margin": 0.05,
         "edge_relative_margin": 0.10,
         "reference_floor_pixels": 1.0,
-        "direction_weight": 0.10,
+        "direction_weight": 1.0,
         "edge_margin_weight": 0.01,
         "bucket_balance": "fixed-cache-global-edge-counts",
         "edge_reference": "min(detached_stock,detached_boundary_off)",
