@@ -48,7 +48,9 @@ def test_probe_heads_have_production_shapes_and_do_not_mutate_inputs() -> None:
     features_before = features.clone()
     hidden_before = hidden.clone()
 
-    c1 = C1QualityProbe(feature_dim=features.shape[-1], width=16)
+    c1 = C1QualityProbe(
+        feature_dim=features.shape[-1], hidden_dim=hidden.shape[-1], width=16
+    )
     q = QQualityProbe(
         feature_dim=features.shape[-1], hidden_dim=hidden.shape[-1], width=16
     )
@@ -59,13 +61,18 @@ def test_probe_heads_have_production_shapes_and_do_not_mutate_inputs() -> None:
     assert torch.isfinite(c1_logits).all() and torch.isfinite(q_logits).all()
     assert torch.equal(features, features_before)
     assert torch.equal(hidden, hidden_before)
+    assert [parameter.shape for parameter in c1.parameters()] == [
+        parameter.shape for parameter in q.parameters()
+    ]
 
 
 def test_probe_heads_never_backpropagate_into_detector_evidence() -> None:
     boxes, logits, hidden = _sample()
     features = c1_features(boxes, logits, num_classes=3).requires_grad_(True)
     hidden = hidden.requires_grad_(True)
-    c1 = C1QualityProbe(feature_dim=features.shape[-1], width=16)
+    c1 = C1QualityProbe(
+        feature_dim=features.shape[-1], hidden_dim=hidden.shape[-1], width=16
+    )
     q = QQualityProbe(
         feature_dim=features.shape[-1], hidden_dim=hidden.shape[-1], width=16
     )

@@ -72,38 +72,42 @@ def c1_features(
 class C1QualityProbe(nn.Module):
     """Small geometry/probability control head."""
 
-    def __init__(self, *, feature_dim: int, width: int = 32) -> None:
-        super().__init__()
-        if feature_dim < 1 or width < 1:
-            raise ValueError("probe dimensions must be positive")
-        self.feature_dim = feature_dim
-        self.network = nn.Sequential(
-            nn.Linear(feature_dim, width), nn.SiLU(), nn.Linear(width, 1)
-        )
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        if features.ndim != 4 or features.shape[-1] != self.feature_dim:
-            raise ValueError("C1 features have invalid shape")
-        _finite(features, label="C1 features")
-        return self.network(features.detach()).squeeze(-1)
-
-
-class QQualityProbe(nn.Module):
-    """Decoder-hidden quality head evaluated against C0 and C1 controls."""
-
     def __init__(
-        self, *, feature_dim: int, hidden_dim: int, width: int = 32
+        self, *, feature_dim: int, hidden_dim: int = 256, width: int = 64
     ) -> None:
         super().__init__()
         if min(feature_dim, hidden_dim, width) < 1:
             raise ValueError("probe dimensions must be positive")
         self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
-        self.hidden_projection = nn.Sequential(
-            nn.Linear(hidden_dim, width), nn.SiLU()
-        )
         self.network = nn.Sequential(
-            nn.Linear(feature_dim + width, width),
+            nn.Linear(feature_dim + hidden_dim, width),
+            nn.SiLU(),
+            nn.Linear(width, 1),
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.ndim != 4 or features.shape[-1] != self.feature_dim:
+            raise ValueError("C1 features have invalid shape")
+        _finite(features, label="C1 features")
+        features = features.detach()
+        zeros = features.new_zeros((*features.shape[:3], self.hidden_dim))
+        return self.network(torch.cat((features, zeros), dim=-1)).squeeze(-1)
+
+
+class QQualityProbe(nn.Module):
+    """Decoder-hidden quality head evaluated against C0 and C1 controls."""
+
+    def __init__(
+        self, *, feature_dim: int, hidden_dim: int, width: int = 64
+    ) -> None:
+        super().__init__()
+        if min(feature_dim, hidden_dim, width) < 1:
+            raise ValueError("probe dimensions must be positive")
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.network = nn.Sequential(
+            nn.Linear(feature_dim + hidden_dim, width),
             nn.SiLU(),
             nn.Linear(width, 1),
         )
@@ -116,10 +120,10 @@ class QQualityProbe(nn.Module):
         _finite(features, label="Q features")
         _finite(hidden, label="decoder hidden")
         features = features.detach()
-        projected = self.hidden_projection(hidden.detach()).unsqueeze(2).expand(
+        expanded_hidden = hidden.detach().unsqueeze(2).expand(
             *features.shape[:3], -1
         )
-        return self.network(torch.cat((features, projected), dim=-1)).squeeze(-1)
+        return self.network(torch.cat((features, expanded_hidden), dim=-1)).squeeze(-1)
 
 
 def top_pair_mask(probabilities: torch.Tensor, *, topk: int = 600) -> torch.Tensor:

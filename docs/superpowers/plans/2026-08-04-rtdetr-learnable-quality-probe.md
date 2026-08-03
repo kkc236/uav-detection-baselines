@@ -95,8 +95,9 @@ git commit -m "experiment: lock quality probe features"
 
 - [ ] **Step 1: Write failing behavioral tests**
 
-Test identical C1/Q initial state bytes, architecture `276->64->1`, soft BCE over all
-query/class rows, exact C0 stock reconstruction, alpha 2.0 reranking, unchanged boxes,
+Test identical C1/Q initial state bytes, architecture `276->64->1`, exact stock
+Top-600 pair selection, the frozen weighted soft BCE, exact C0 stock reconstruction,
+alpha 2.0 reranking, unchanged boxes,
 flattened Top-300, lexicographic `(map, ap75, ap50, -epoch)` selection, and these Gate
 boundaries:
 
@@ -130,10 +131,12 @@ class QualityProbe(torch.nn.Module):
     def forward(self, features):
         return self.network(features).squeeze(-1)
 
-def quality_loss(prediction_logits, target_quality):
-    return torch.nn.functional.binary_cross_entropy_with_logits(
-        prediction_logits, target_quality.detach().float(), reduction="mean"
+def quality_loss(prediction_logits, target_quality, stock_probability):
+    weight = 0.05 + stock_probability.detach() + 4.0 * target_quality.detach()
+    element = torch.nn.functional.binary_cross_entropy_with_logits(
+        prediction_logits, target_quality.detach().float(), reduction="none"
     )
+    return (element * weight).sum() / weight.sum()
 ```
 
 Use `flattened_topk(boxes, logits.sigmoid())` for C0 and

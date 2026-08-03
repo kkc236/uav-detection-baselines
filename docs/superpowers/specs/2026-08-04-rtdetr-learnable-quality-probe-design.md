@@ -228,14 +228,17 @@ quality[q,c] = max IoU(boxes[q], target_boxes[i])
                over targets i with target_classes[i] == c
 ```
 
-and zero when class `c` is absent. There is no Hungarian matching, positive mining,
-negative subsampling, class weighting, focal term, auxiliary target, or detector loss.
+and zero when class `c` is absent. There is no Hungarian matching, focal term,
+auxiliary target, or detector loss. Training is restricted to the exact flattened
+stock-probability Top-600 query/class pairs per image so optimization focuses on pairs
+that can influence the inference Top-300.
 
-The single training loss for both C1 and Q is soft-target binary cross entropy over all
-`B*300*10` rows:
+The single training loss for both C1 and Q is weighted soft-target binary cross entropy
+over those frozen Top-600 rows. For stock probability `p` and target quality `q`:
 
 ```text
-binary_cross_entropy_with_logits(predicted_quality_logits, quality, reduction="mean")
+weight = 0.05 + p + 4*q
+loss = sum(weight * BCEWithLogits(predicted_quality_logits, q)) / sum(weight)
 ```
 
 Optimization is frozen as follows:
@@ -251,7 +254,7 @@ weight_decay: 0.0005 on 2-D Linear weights; 0 on biases
 nesterov: True
 Muon/SGD mixture: pinned Ultralytics defaults used by MuSGD construction,
                   muon=0.2, sgd=1.0
-training image batch: 8 (at most 24,000 query/class rows per step)
+training image batch: 8 (exactly 4,800 selected query/class rows per full step)
 cache shard: 32 images
 evaluation image chunk: 8
 training workers: 0
