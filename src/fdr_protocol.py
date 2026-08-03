@@ -176,13 +176,15 @@ def partition_state_dicts(
             actual = fdr_state[target_name]
             difference = "alias tensor differs"
             consumed_fdr_names.add(target_name)
+        elif any(name.startswith(prefix) for prefix in replaced_prefixes):
+            replaced_names.add(name)
+            continue
+        elif any(name.startswith(prefix) for prefix in private_prefixes):
+            raise ValueError(f"undeclared missing control replacement: {name}")
         elif name in fdr_state:
             actual = fdr_state[name]
             difference = "public tensor differs"
             consumed_fdr_names.add(name)
-        elif any(name.startswith(prefix) for prefix in replaced_prefixes):
-            replaced_names.add(name)
-            continue
         else:
             raise ValueError(f"undeclared missing control tensor: {name}")
         if expected.shape != actual.shape or expected.dtype != actual.dtype:

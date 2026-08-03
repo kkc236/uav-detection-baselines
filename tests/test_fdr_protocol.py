@@ -51,8 +51,8 @@ def _structural_migration_states() -> tuple[dict[str, torch.Tensor], dict[str, t
         ].clone(),
     }
     for layer in range(6):
-        method[f"model.28.decoder.distribution_finals.{layer}.weight"] = torch.zeros(132, 4)
-        method[f"model.28.decoder.distribution_finals.{layer}.bias"] = torch.zeros(132)
+        method[f"model.28.dec_bbox_head.{layer}.weight"] = torch.zeros(132, 4)
+        method[f"model.28.dec_bbox_head.{layer}.bias"] = torch.zeros(132)
     return control, method
 
 
@@ -238,7 +238,7 @@ def test_structural_migration_accepts_exact_aliases_and_declared_replacements() 
     public, private = partition_state_dicts(
         control,
         method,
-        private_prefixes=("model.28.decoder.distribution_finals.",),
+        private_prefixes=("model.28.dec_bbox_head.",),
         public_aliases=PUBLIC_ALIASES,
         replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
     )
@@ -248,10 +248,11 @@ def test_structural_migration_accepts_exact_aliases_and_declared_replacements() 
         *PUBLIC_ALIASES,
     }
     assert len(private) == 12
+    assert "model.28.dec_bbox_head.1.weight" in private
     artifact = build_fdr_initial_state(
         control,
         method,
-        private_prefixes=("model.28.decoder.distribution_finals.",),
+        private_prefixes=("model.28.dec_bbox_head.",),
         public_aliases=PUBLIC_ALIASES,
         replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
         metadata={"seed": 0},
@@ -259,7 +260,7 @@ def test_structural_migration_accepts_exact_aliases_and_declared_replacements() 
     assert artifact["migration"] == {
         "public_aliases": PUBLIC_ALIASES,
         "replaced_control_prefixes": list(REPLACED_CONTROL_PREFIXES),
-        "approved_private_prefixes": ["model.28.decoder.distribution_finals."],
+        "approved_private_prefixes": ["model.28.dec_bbox_head."],
     }
     assert set(artifact["replaced_control_state"]) == {
         name
@@ -292,7 +293,7 @@ def test_structural_migration_rejects_undeclared_control_missing() -> None:
         partition_state_dicts(
             control,
             method,
-            private_prefixes=("model.28.decoder.distribution_finals.",),
+            private_prefixes=("model.28.dec_bbox_head.",),
             public_aliases=PUBLIC_ALIASES,
             replaced_control_prefixes=REPLACED_CONTROL_PREFIXES[:-1],
         )
@@ -305,7 +306,7 @@ def test_structural_migration_rejects_alias_tensor_difference() -> None:
         partition_state_dicts(
             control,
             method,
-            private_prefixes=("model.28.decoder.distribution_finals.",),
+            private_prefixes=("model.28.dec_bbox_head.",),
             public_aliases=PUBLIC_ALIASES,
             replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
         )
@@ -318,7 +319,7 @@ def test_structural_migration_rejects_unapproved_extra_private() -> None:
         partition_state_dicts(
             control,
             method,
-            private_prefixes=("model.28.decoder.distribution_finals.",),
+            private_prefixes=("model.28.dec_bbox_head.",),
             public_aliases=PUBLIC_ALIASES,
             replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
         )
@@ -329,7 +330,7 @@ def test_prepare_manifest_binds_structural_migration(tmp_path: Path) -> None:
     artifact = build_fdr_initial_state(
         control,
         method,
-        private_prefixes=("model.28.decoder.distribution_finals.",),
+        private_prefixes=("model.28.dec_bbox_head.",),
         public_aliases=PUBLIC_ALIASES,
         replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
         metadata={"seed": 0},
