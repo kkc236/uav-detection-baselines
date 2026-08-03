@@ -1,0 +1,17 @@
+WARNING ⚠️ 'half' is deprecated and will be removed in the future. Use 'quantize' instead.
+[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 3690.5±723.4 MB/s, size: 320.1 KB)
+[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/train... 78 images, 0 backgrounds, 0 corrupt: 60% ━━━━━━━───── 78/129 228.9it/s 0.1s<0.2s[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/train... 129 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 129/129 849.9it/s 0.2s
+[34m[1mval: [0mNew cache created: /data/uav/datasets/VisDrone/labels/train.cache
+WARNING ⚠️ 'half' is deprecated and will be removed in the future. Use 'quantize' instead.
+[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 3419.7±518.8 MB/s, size: 179.0 KB)
+[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/val.cache... 548 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 548/548 85.1Mit/s 0.0s
+Traceback (most recent call last):
+  File "/data/uav/source/uav-detection-baselines-29d402a21beb/scripts/run_rtdetr_quality_oracle.py", line 1008, in <module>
+    raise SystemExit(main())
+  File "/data/uav/source/uav-detection-baselines-29d402a21beb/scripts/run_rtdetr_quality_oracle.py", line 1004, in main
+    return _run(_parse_args(argv))
+  File "/data/uav/source/uav-detection-baselines-29d402a21beb/scripts/run_rtdetr_quality_oracle.py", line 930, in _run
+    _assert_stock_authority(official["stock"])
+  File "/data/uav/source/uav-detection-baselines-29d402a21beb/scripts/run_rtdetr_quality_oracle.py", line 693, in _assert_stock_authority
+    raise RuntimeError(
+RuntimeError: official-validation stock authority mismatch: expected={'map': 0.24164844987309864, 'ap50': 0.4143946635382976, 'ap75': 0.23916375458831637, 'ap_tiny': 0.10314861659739166, 'ap_small': 0.24166148504350557, 'precision': 0.5119369275291381, 'recall': 0.43525461908044843}, actual={'map': 0.24164844987309864, 'ap50': 0.4143946635382976, 'ap75': 0.23916375458831637, 'ap_tiny': 0.10314861659739166, 'ap_small': 0.24166148504350557, 'precision': 0.5119369292841953, 'recall': 0.43525461908044843}
