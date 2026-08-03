@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 import torch
+from ultralytics.models.utils.loss import RTDETRDetectionLoss
 from ultralytics.nn.tasks import RTDETRDetectionModel
 
 from src.fdr_head import FDR_OUTPUT_DIM, FDRDeformableTransformerDecoder
+from src.fdr_loss import FDRDetectionLoss, stock_loss_subtotal
 from src.rtdetr_fdr import FDRRTDETRDetectionModel, split_fdr_evidence
 
 
@@ -193,6 +195,105 @@ def test_finite_backward_reaches_private_distribution_heads(
     final_layers = [head.layers[-1] for head in fdr_model.model[-1].dec_bbox_head]
     assert all(layer.weight.grad is not None for layer in final_layers)
     assert all(torch.isfinite(layer.weight.grad).all() for layer in final_layers)
+
+
+def test_real_batch_criterion_loss_and_backward_cover_fdr_and_pre_heads():
+    model = _fdr(private_seed=30_000)
+    model.train()
+    batch = {
+        "img": torch.zeros(2, 3, 128, 128),
+        "cls": torch.tensor([[1], [2]], dtype=torch.float32),
+        "bboxes": torch.tensor(
+            [[0.50, 0.50, 0.20, 0.20], [0.35, 0.40, 0.15, 0.10]],
+            dtype=torch.float32,
+        ),
+        "batch_idx": torch.tensor([0, 1], dtype=torch.float32),
+    }
+    assert isinstance(model.init_criterion(), FDRDetectionLoss)
+    total, displayed = model.loss(batch)
+    assert total.ndim == 0 and torch.isfinite(total)
+    assert displayed.shape == (3,) and torch.isfinite(displayed).all()
+    losses = model.last_fdr_losses
+    assert {
+        "loss_fgl",
+        "loss_fgl_aux",
+        "loss_fgl_dn",
+        "loss_fgl_aux_dn",
+        "loss_bbox_pre",
+        "loss_giou_pre",
+        "loss_bbox_pre_dn",
+        "loss_giou_pre_dn",
+    }.issubset(losses)
+    torch.testing.assert_close(
+        displayed,
+        torch.stack(
+            [losses[name].detach() for name in ("loss_giou", "loss_class", "loss_bbox")]
+        ),
+        rtol=0,
+        atol=0,
+    )
+    assert model.criterion.fgl_extra_match_calls == 0
+    assert model.criterion.stock_match_calls == 7
+
+    total.backward()
+    private_parameters = [
+        parameter
+        for head in model.model[-1].dec_bbox_head
+        for parameter in head.parameters()
+    ]
+    pre_parameters = list(model.model[-1].decoder.pre_bbox_head.parameters())
+    assert private_parameters and pre_parameters
+    assert all(parameter.grad is not None for parameter in private_parameters)
+    assert all(parameter.grad is not None for parameter in pre_parameters)
+    assert all(torch.isfinite(parameter.grad).all() for parameter in private_parameters)
+    assert all(torch.isfinite(parameter.grad).all() for parameter in pre_parameters)
+
+
+def test_real_batch_fgl_zero_preserves_exact_stock_subtotal_without_rematching():
+    model = _fdr(private_seed=31_000)
+    model.train()
+    targets = _targets(2)
+    predictions = model.predict(torch.zeros(2, 3, 128, 128), batch=targets)
+    dec_boxes, dec_scores, enc_boxes, enc_scores, dn_meta = predictions
+    evidence = model.last_fdr_evidence
+    assert evidence is not None and dn_meta is not None
+    dn_boxes, normal_boxes = torch.split(dec_boxes, dn_meta["dn_num_split"], dim=2)
+    dn_scores, normal_scores = torch.split(dec_scores, dn_meta["dn_num_split"], dim=2)
+    stock_predictions = (
+        torch.cat([enc_boxes.unsqueeze(0), normal_boxes]),
+        torch.cat([enc_scores.unsqueeze(0), normal_scores]),
+    )
+
+    stock = RTDETRDetectionLoss(nc=10, use_vfl=True)
+    expected = stock(
+        stock_predictions,
+        targets,
+        dn_bboxes=dn_boxes,
+        dn_scores=dn_scores,
+        dn_meta=dn_meta,
+    )
+    fdr = FDRDetectionLoss(
+        nc=10, use_vfl=True, fgl_weight=0.0, supervise_pre_boxes=False
+    )
+    actual = fdr(
+        stock_predictions,
+        targets,
+        dn_bboxes=dn_boxes,
+        dn_scores=dn_scores,
+        dn_meta=dn_meta,
+        corner_logits=evidence.corner_logits,
+        pre_boxes=evidence.pre_boxes,
+        dn_corner_logits=evidence.dn_corner_logits,
+        dn_pre_boxes=evidence.dn_pre_boxes,
+    )
+    for key in expected:
+        torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0)
+    torch.testing.assert_close(
+        stock_loss_subtotal(actual), stock_loss_subtotal(expected), rtol=0, atol=0
+    )
+    assert actual["loss_fgl"].item() == 0.0
+    assert actual["loss_fgl_dn"].item() == 0.0
+    assert fdr.fgl_extra_match_calls == 0
 
 
 def test_no_excluded_modules_and_installed_ultralytics_is_not_modified():

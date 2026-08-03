@@ -20,6 +20,7 @@ from src.fdr_head import (
     FDRDeformableTransformerDecoder,
     build_distribution_heads,
 )
+from src.fdr_loss import FDRDetectionLoss
 from src.fdr_math import REG_MAX, REG_SCALE
 
 
@@ -123,6 +124,7 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
         self.private_seed = int(private_seed)
         self.nc = int(self.yaml["nc"])
         self.last_fdr_evidence: FDRTrainingEvidence | None = None
+        self.last_fdr_losses: dict[str, Tensor] = {}
 
     @property
     def fdr(self) -> FDRDeformableTransformerDecoder:
@@ -151,6 +153,86 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
         )
         self.last_fdr_evidence = evidence
         return evidence
+
+    def init_criterion(self) -> FDRDetectionLoss:
+        """Build stock RT-DETR loss extended only by FGL and pre-box losses."""
+
+        return FDRDetectionLoss(
+            nc=self.nc,
+            use_vfl=True,
+            fgl_weight=0.15,
+            supervise_pre_boxes=True,
+        )
+
+    def loss(
+        self,
+        batch: dict[str, Tensor],
+        preds: tuple | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Compute seven-layer stock loss plus isolated decoder FDR losses."""
+
+        if not hasattr(self, "criterion"):
+            self.criterion = self.init_criterion()
+
+        image = batch["img"]
+        batch_size = int(image.shape[0])
+        batch_index = batch["batch_idx"]
+        targets: dict[str, Any] = {
+            "cls": batch["cls"].to(image.device, dtype=torch.long).view(-1),
+            "bboxes": batch["bboxes"].to(device=image.device),
+            "batch_idx": batch_index.to(image.device, dtype=torch.long).view(-1),
+            "gt_groups": [
+                int((batch_index == index).sum().item())
+                for index in range(batch_size)
+            ],
+        }
+
+        if preds is None:
+            preds = self.predict(image, batch=targets)
+        if not isinstance(preds, tuple) or len(preds) != 5:
+            raise RuntimeError("stock RT-DETR loss prediction contract changed")
+        dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = preds
+
+        evidence = self.last_fdr_evidence
+        if evidence is None:
+            # Supports callers that supplied predictions from this model directly.
+            evidence = self._capture_fdr_evidence(dn_meta)
+
+        if dn_meta is None:
+            dn_bboxes = None
+            dn_scores = None
+        else:
+            partition = _dn_partition(dn_meta)
+            if partition is None:
+                raise RuntimeError("denoising partition unexpectedly disappeared")
+            dn_bboxes, dec_bboxes = torch.split(dec_bboxes, partition, dim=2)
+            dn_scores, dec_scores = torch.split(dec_scores, partition, dim=2)
+
+        # Preserve the exact Ultralytics stock contract: encoder first, then
+        # all six decoder layers.  FDRDetectionLoss explicitly skips encoder
+        # when consuming the six-layer corner/pre evidence.
+        stock_bboxes = torch.cat([enc_bboxes.unsqueeze(0), dec_bboxes])
+        stock_scores = torch.cat([enc_scores.unsqueeze(0), dec_scores])
+        losses = self.criterion.stock_plus_fgl(
+            (stock_bboxes, stock_scores),
+            targets,
+            dn_bboxes=dn_bboxes,
+            dn_scores=dn_scores,
+            dn_meta=dn_meta,
+            corner_logits=evidence.corner_logits,
+            pre_boxes=evidence.pre_boxes,
+            dn_corner_logits=evidence.dn_corner_logits,
+            dn_pre_boxes=evidence.dn_pre_boxes,
+        )
+        self.last_fdr_losses = losses
+        total = sum(losses.values())
+        displayed = torch.stack(
+            [
+                losses[name].detach()
+                for name in ("loss_giou", "loss_class", "loss_bbox")
+            ]
+        ).to(image.device)
+        return total, displayed
 
     def predict(
         self,
