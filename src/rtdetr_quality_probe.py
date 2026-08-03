@@ -85,7 +85,7 @@ class C1QualityProbe(nn.Module):
         if features.ndim != 4 or features.shape[-1] != self.feature_dim:
             raise ValueError("C1 features have invalid shape")
         _finite(features, label="C1 features")
-        return self.network(features).squeeze(-1)
+        return self.network(features.detach()).squeeze(-1)
 
 
 class QQualityProbe(nn.Module):
@@ -115,7 +115,8 @@ class QQualityProbe(nn.Module):
             raise ValueError("decoder hidden has invalid shape")
         _finite(features, label="Q features")
         _finite(hidden, label="decoder hidden")
-        projected = self.hidden_projection(hidden).unsqueeze(2).expand(
+        features = features.detach()
+        projected = self.hidden_projection(hidden.detach()).unsqueeze(2).expand(
             *features.shape[:3], -1
         )
         return self.network(torch.cat((features, projected), dim=-1)).squeeze(-1)

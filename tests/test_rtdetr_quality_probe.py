@@ -61,6 +61,23 @@ def test_probe_heads_have_production_shapes_and_do_not_mutate_inputs() -> None:
     assert torch.equal(hidden, hidden_before)
 
 
+def test_probe_heads_never_backpropagate_into_detector_evidence() -> None:
+    boxes, logits, hidden = _sample()
+    features = c1_features(boxes, logits, num_classes=3).requires_grad_(True)
+    hidden = hidden.requires_grad_(True)
+    c1 = C1QualityProbe(feature_dim=features.shape[-1], width=16)
+    q = QQualityProbe(
+        feature_dim=features.shape[-1], hidden_dim=hidden.shape[-1], width=16
+    )
+
+    (c1(features).mean() + q(features, hidden).mean()).backward()
+
+    assert features.grad is None
+    assert hidden.grad is None
+    assert all(parameter.grad is not None for parameter in c1.parameters())
+    assert all(parameter.grad is not None for parameter in q.parameters())
+
+
 def test_top_pair_mask_uses_exact_flattened_stock_probability() -> None:
     _, logits, _ = _sample()
     mask = top_pair_mask(logits.sigmoid(), topk=3)
