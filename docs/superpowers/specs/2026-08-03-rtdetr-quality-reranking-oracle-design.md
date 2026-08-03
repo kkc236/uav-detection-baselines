@@ -74,6 +74,11 @@ and use zero when the image contains no target of class `c`. Quality is detached
 finite, bounded to `[0,1]`, and derived only from unchanged stock boxes and labels. It
 does not use Hungarian assignment or one-to-one suppression because the intended upper
 bound is the quality signal available to a learnable class-conditional IoU predictor.
+The class-conditional definition is deliberate: this experiment asks whether any ideal
+per-class quality signal can still repair final RT-DETR ranking after VFL. It is therefore
+an optimistic upper bound, not a deployable scalar localization-quality head. Failure
+also rules out the less-informed class-agnostic Query-quality variant under this scoring
+family; passing only authorizes controls that test whether the extra signal is learnable.
 
 For an exponent `alpha`, rerank with
 
@@ -130,6 +135,9 @@ implementation must not be changed after execution.
 - A report is valid only when it covers exactly 129 development images and 548 official
   validation images, all class indices are valid, detector hashes before and after are
   equal, and no detector parameter has a gradient.
+- The non-exported PyTorch model auxiliary tuple supplies final decoder boxes and logits.
+  Reconstructing stock Top-300 from those tensors must be exactly equal to the model's
+  own returned stock output for every batch or the run is an engineering failure.
 - Engineering failures may be corrected with tests and rerun under a new source commit
   and immutable run root. Scientific failure may not be relabeled or tuned away.
 

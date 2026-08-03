@@ -16,7 +16,8 @@
 - Create `tests/test_rtdetr_quality_oracle.py`: math, Top-300 equivalence, split, cache, decision, and CLI-contract tests.
 - Create `scripts/run_rtdetr_quality_oracle.py`: authority validation, frozen extraction, paired metrics, immutable reports, and execution metadata.
 - Reuse `src/iber_evaluation.py`: existing no-NMS AP metric implementation.
-- Reuse `src/rtdetr_iber.py`: frozen mature-baseline decoder evidence adapter.
+- Use the non-exported Ultralytics PyTorch model auxiliary tuple directly; do not patch
+  the decoder or route this diagnostic through the IBER adapter.
 
 ### Task 1: Lock quality and flattened Top-300 semantics
 
@@ -201,7 +202,8 @@ Import the CLI module without executing it and assert:
 - no argument can change alpha, alpha grid, split salt, threshold, confidence, class
   mapping, or official validation pass count;
 - detector hashes before and after extraction must match and all gradients remain `None`;
-- stock postprocess from cached tensors equals the Ultralytics head postprocess exactly;
+- stock postprocess reconstructed from auxiliary decoder tensors equals the stock output
+  returned by the same model call exactly;
 - report and decision files use create-only writes and bind all authority hashes.
 
 - [ ] **Step 2: Run CLI tests and verify RED**
@@ -210,16 +212,21 @@ Run: `python -m pytest tests/test_rtdetr_quality_oracle.py -q`
 
 Expected: CLI import or contract assertions fail because the file is absent.
 
-- [ ] **Step 3: Implement extraction using the existing frozen adapter**
+- [ ] **Step 3: Implement extraction using the unmodified PyTorch model**
 
 Build RT-DETR validation loaders from an immutable image-list file for internal dev and
-the unchanged official validation directory. For each preprocessed batch:
+the unchanged official validation directory. Keep `head.export=False`. For each
+preprocessed batch, use the standard model auxiliary return without hooks or monkeypatches:
 
 ```python
 with torch.inference_mode():
-    output = adapter.forward_evidence(batch["img"])
-    boxes = output.stock_boxes.detach().float()
-    logits = output.stock_scores.detach().float()
+    stock_output, auxiliary = detector.predict(batch["img"])
+    decoder_boxes, decoder_logits, _, _, _ = auxiliary
+    boxes = decoder_boxes[-1].detach().float()
+    logits = decoder_logits[-1].detach().float()
+    reconstructed = detector.model[-1].postprocess(boxes, logits.sigmoid())
+    if not torch.equal(reconstructed, stock_output):
+        raise RuntimeError("decoder reconstruction differs from stock RT-DETR output")
 ```
 
 Convert batched labels using `batch_idx`, cache one CPU record per image, and assert
