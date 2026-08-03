@@ -433,7 +433,7 @@ def test_disabled_modality_samplers_are_never_called(
     assert calls == {"f3": expected_f3_calls, "rgb": expected_rgb_calls}
 
 
-def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() -> None:
+def test_f3_gradient_waits_for_the_zero_initialized_increment_gate() -> None:
     model = _refiner("b3")
     with torch.no_grad():
         model.boundary_residual_head.weight.fill_(0.125)
@@ -445,19 +445,51 @@ def test_detector_inputs_are_detached_and_both_enabled_arms_receive_gradients() 
     loss.backward()
 
     assert all(value.grad is None for value in inputs)
-    parameter_groups = (
-        tuple(model.f3_projection.parameters()),
-        tuple(model.f3_encoder.parameters()),
+    f3_parameters = tuple(model.f3_projection.parameters()) + tuple(
+        model.f3_encoder.parameters()
+    )
+    f3_weight_parameters = tuple(
+        parameter
+        for name, parameter in model.named_parameters()
+        if name.startswith(("f3_projection.", "f3_encoder."))
+        and name.endswith("weight")
+    )
+    active_parameter_groups = (
         tuple(model.rgb_encoder.parameters()),
         tuple(model.area_calibration.parameters()),
         tuple(model.context_path.parameters()),
         tuple(model.direction_calibration.parameters()),
     )
-    for parameters in parameter_groups:
+    assert all(
+        parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
+        for parameter in f3_weight_parameters
+    )
+    assert max(
+        0.0
+        if parameter.grad is None
+        else float(parameter.grad.detach().abs().max())
+        for parameter in f3_parameters
+    ) <= 1e-6
+    assert model.f3_increment_gain.grad is not None
+    assert torch.isfinite(model.f3_increment_gain.grad)
+    assert float(model.f3_increment_gain.grad.abs()) > 0.0
+    for parameters in active_parameter_groups:
         gradients = [parameter.grad for parameter in parameters]
         assert all(gradient is not None for gradient in gradients)
         assert all(torch.isfinite(gradient).all() for gradient in gradients)
         assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
+
+    model.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        model.f3_increment_gain.fill_(0.03)
+    opened = model(*inputs)
+    (opened.refined_boxes - target).square().sum().backward()
+    f3_gradients = [parameter.grad for parameter in f3_parameters]
+    f3_weight_gradients = [parameter.grad for parameter in f3_weight_parameters]
+    assert all(gradient is not None for gradient in f3_gradients)
+    assert all(torch.isfinite(gradient).all() for gradient in f3_gradients)
+    assert sum(float(gradient.abs().sum()) for gradient in f3_gradients) > 0
+    assert sum(float(gradient.abs().sum()) for gradient in f3_weight_gradients) > 0
 
 
 def test_eval_reuses_boundary_raw_without_auxiliary_graph_or_extra_parameters() -> None:

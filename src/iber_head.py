@@ -481,13 +481,9 @@ class IBERRefiner(nn.Module):
             torch.cat((f3_signed_features, rgb_signed_features), dim=-1)
         )
         f3_reliability = torch.sigmoid(f3_reliability) * self.f3_increment_gain
-        if self.training and torch.is_grad_enabled():
-            gradient_bridge = joint_direction - joint_direction.detach()
-        else:
-            gradient_bridge = torch.zeros_like(joint_direction)
         b3_direction = rgb_direction + f3_reliability * (
             joint_direction - rgb_direction
-        ) + gradient_bridge
+        )
         centered_f3_direction = f3_direction - zero_direction
         centered_rgb_direction = rgb_direction - zero_direction
         centered_b3_direction = b3_direction - zero_direction

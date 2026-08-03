@@ -40,6 +40,7 @@ class _TinyAdapter(nn.Module):
         super().__init__()
         self.detector = _TinyFrozenDetector()
         self.refiner = _TinyRefiner()
+        self.training_calls = 0
 
     def forward_evidence(self, image: torch.Tensor):
         stock = torch.full((image.shape[0], 1, 4), 0.5)
@@ -47,6 +48,7 @@ class _TinyAdapter(nn.Module):
         return SimpleNamespace(stock_boxes=stock, refined_boxes=stock + delta)
 
     def training_step(self, batch: dict[str, torch.Tensor]):
+        self.training_calls += 1
         output = self.forward_evidence(batch["img"])
         target = torch.full_like(output.refined_boxes, 0.6)
         total = (output.refined_boxes - target).abs().mean()
@@ -107,6 +109,7 @@ def test_canary_proves_private_paths_checkpoint_and_detector_invariance() -> Non
     assert report["checks"]["detector_gradient_absent"] is True
     assert report["checks"]["checkpoint_roundtrip"] is True
     assert report["checks"]["checkpoint_mode_switching"] is True
+    assert adapter.training_calls == 3
 
 
 def test_real_canary_image_is_deterministic_nonflat_rgb_evidence() -> None:

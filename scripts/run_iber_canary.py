@@ -187,7 +187,24 @@ def run_private_step_canary(
     scaler.update()
 
     # Zero-initialized output heads block upstream evidence gradients on step 1.
-    # Step 2 proves that both enabled B3 evidence paths receive useful gradients.
+    # Step 2 opens the zero-initialized F3 increment gate without bypassing it.
+    optimizer.zero_grad(set_to_none=True)
+    with torch.autocast(
+        device_type="cuda", dtype=torch.float16, enabled=amp_enabled
+    ):
+        warmup_losses = adapter.training_step(batch)
+    scaler.scale(warmup_losses.total).backward()
+    scaler.unscale_(optimizer)
+    detector_gradient_absent &= all(
+        parameter.grad is None for parameter in adapter.detector.parameters()
+    )
+    torch.nn.utils.clip_grad_norm_(
+        private_parameters, max_norm=float(PRIVATE_OPTIMIZER["clip"])
+    )
+    scaler.step(optimizer)
+    scaler.update()
+
+    # Step 3 proves that both enabled B3 evidence paths now receive useful gradients.
     optimizer.zero_grad(set_to_none=True)
     with torch.autocast(
         device_type="cuda", dtype=torch.float16, enabled=amp_enabled
