@@ -59,6 +59,19 @@ def test_runner_exists_and_cli_is_frozen() -> None:
             module._parse_args([*argv, forbidden, "1"])
 
 
+def test_probe_is_bound_to_the_immutable_passed_oracle_decision() -> None:
+    module = _load_module()
+    authority = module._oracle_decision_authority()
+
+    assert authority == {
+        "sha256": "F2DBABDD4638896D3D9C727CCC659D86173DD639AF476709C8F415F0E2EEE199",
+        "status": "passed",
+        "selected_alpha": 2.0,
+        "map_delta": "0.15571345572052406",
+        "ap75_delta": "0.14920384179689443",
+    }
+
+
 def test_frozen_subset_is_split_into_disjoint_518_and_129() -> None:
     module = _load_module()
     root = Path("dataset").resolve()

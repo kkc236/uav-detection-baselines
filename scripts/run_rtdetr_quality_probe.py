@@ -95,6 +95,12 @@ SHARD_SIZE = 32
 EXPECTED_PROBE_TRAIN_SHA256 = (
     "1E46817FFFBDBCBA0BA1675CA6142ABABBD6147394AA1D0F10B57F0ECAF7236D"
 )
+ORACLE_DECISION_PATH = (
+    REPOSITORY_ROOT / "evidence" / "quality-oracle" / "quality-oracle-decision.json"
+)
+EXPECTED_ORACLE_DECISION_SHA256 = (
+    "F2DBABDD4638896D3D9C727CCC659D86173DD639AF476709C8F415F0E2EEE199"
+)
 
 _ordered_path_sha256 = ordered_path_sha256
 
@@ -104,6 +110,30 @@ class CapturedBatch(NamedTuple):
     boxes: torch.Tensor
     logits: torch.Tensor
     hidden: torch.Tensor
+
+
+def _oracle_decision_authority() -> dict[str, Any]:
+    path = ORACLE_DECISION_PATH.resolve()
+    digest = _file_sha256(path)
+    if digest != EXPECTED_ORACLE_DECISION_SHA256:
+        raise RuntimeError("quality oracle decision sha256 mismatch")
+    payload = _read_canonical_json(path)
+    if (
+        payload.get("format_version") != 1
+        or payload.get("status") != "passed"
+        or payload.get("finite") is not True
+        or payload.get("selected_alpha") != PROBE_ALPHA
+        or payload.get("deltas")
+        != {"map": "0.15571345572052406", "ap75": "0.14920384179689443"}
+    ):
+        raise RuntimeError("quality oracle decision did not pass the frozen Gate")
+    return {
+        "sha256": digest,
+        "status": payload["status"],
+        "selected_alpha": payload["selected_alpha"],
+        "map_delta": payload["deltas"]["map"],
+        "ap75_delta": payload["deltas"]["ap75"],
+    }
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -201,6 +231,7 @@ def _build_authority(
     train_paths: Sequence[Path],
     dev_paths: Sequence[Path],
 ) -> dict[str, str]:
+    oracle_authority = _oracle_decision_authority()
     baseline_sha = _file_sha256(Path(baseline).resolve())
     if baseline_sha != EXPECTED_BASELINE_SHA256:
         raise RuntimeError("baseline authority mismatch")
@@ -212,6 +243,7 @@ def _build_authority(
         "probe_train_sha256": ordered_path_sha256(train_paths, root=root),
         "dev_sha256": ordered_path_sha256(dev_paths, root=root),
         "schema_sha256": _schema_sha256(),
+        "oracle_decision_sha256": oracle_authority["sha256"],
         "source_commit": _source_commit(),
     }
     if authority["probe_train_sha256"] != EXPECTED_PROBE_TRAIN_SHA256:
