@@ -6,7 +6,11 @@ import pytest
 import torch
 from torch import nn
 
-from scripts.run_iber_canary import CanaryViolation, run_private_step_canary
+from scripts.run_iber_canary import (
+    CanaryViolation,
+    _canary_image,
+    run_private_step_canary,
+)
 
 
 class _TinyFrozenDetector(nn.Module):
@@ -103,6 +107,20 @@ def test_canary_proves_private_paths_checkpoint_and_detector_invariance() -> Non
     assert report["checks"]["detector_gradient_absent"] is True
     assert report["checks"]["checkpoint_roundtrip"] is True
     assert report["checks"]["checkpoint_mode_switching"] is True
+
+
+def test_real_canary_image_is_deterministic_nonflat_rgb_evidence() -> None:
+    first = _canary_image(torch.device("cpu"), size=32)
+    second = _canary_image(torch.device("cpu"), size=32)
+
+    assert first.shape == (1, 3, 32, 32)
+    assert first.dtype == torch.float32
+    assert torch.isfinite(first).all()
+    assert float(first.min()) >= 0.0
+    assert float(first.max()) <= 1.0
+    assert all(float(first[:, channel].std()) > 0.0 for channel in range(3))
+    assert not torch.equal(first[:, 0], first[:, 1])
+    torch.testing.assert_close(first, second, rtol=0, atol=0)
 
 
 def test_canary_compares_matcher_before_and_after_private_step_in_same_train_path() -> None:

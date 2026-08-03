@@ -80,6 +80,22 @@ def _finite_nonzero_gradient(parameters: Sequence[torch.nn.Parameter]) -> bool:
     ) and any(bool(value.abs().max() > 0) for value in gradients)
 
 
+def _canary_image(device: torch.device, *, size: int = 640) -> torch.Tensor:
+    """Return deterministic non-flat RGB evidence for both boundary samplers."""
+    if size < 2:
+        raise ValueError("canary image size must be at least two pixels")
+    x = torch.linspace(0.0, 1.0, size, device=device, dtype=torch.float32).view(
+        1, 1, 1, size
+    )
+    y = torch.linspace(0.0, 1.0, size, device=device, dtype=torch.float32).view(
+        1, 1, size, 1
+    )
+    horizontal = x.expand(1, 1, size, size)
+    vertical = y.expand(1, 1, size, size)
+    diagonal = 0.5 * (horizontal + vertical)
+    return torch.cat((horizontal, vertical, diagonal), dim=1).contiguous()
+
+
 def _clone_matches(
     matches: list[tuple[torch.Tensor, torch.Tensor]] | None,
 ) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
@@ -353,7 +369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         device = torch.device(f"cuda:{args.device}")
         detector = RTDETR(str(args.baseline_checkpoint)).model.to(device).eval()
         detector.requires_grad_(False)
-        image = torch.zeros(1, 3, 640, 640, device=device)
+        image = _canary_image(device)
         with torch.no_grad():
             stock_output = detector.predict(image)
         with FrozenIBERAdapter.from_detector(
