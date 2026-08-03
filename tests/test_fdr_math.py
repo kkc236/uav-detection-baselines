@@ -331,6 +331,9 @@ def test_float32_and_cpu_amp_paths_remain_finite_and_differentiable(fdr_math) ->
     assert torch.isfinite(logits.grad).all()
 
 
-def test_old_math_paths_are_removed_for_decoder_box_path() -> None:
-    assert not (REPOSITORY_ROOT / "src" / "fdr_head.py").exists()
-    assert not (REPOSITORY_ROOT / "tests" / "test_fdr_head.py").exists()
+def test_decoder_box_path_imports_math_without_duplicating_it() -> None:
+    head_source = (REPOSITORY_ROOT / "src" / "fdr_head.py").read_text("utf-8")
+    assert "from src.fdr_math import" in head_source
+    assert "def weighting_function(" not in head_source
+    assert "def bbox2distance(" not in head_source
+    assert "def fine_grained_localization_loss(" not in head_source
