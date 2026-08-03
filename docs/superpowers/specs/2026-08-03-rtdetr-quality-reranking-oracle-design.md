@@ -29,6 +29,11 @@ tuning on the official validation split.
 - Detector parameters are frozen and must have no gradients before or after extraction.
 - Stock boxes and stock class logits are taken from the final decoder layer without a
   second forward path or a modified matcher.
+- The official-validation stock control must exactly reproduce the existing same-server
+  authority metrics: mAP `0.24164844987309864`, AP50 `0.4143946635382976`, AP75
+  `0.23916375458831637`, AP-tiny `0.10314861659739166`, AP-small
+  `0.24166148504350557`, precision `0.5119369275291381`, and recall
+  `0.43525461908044843`. Any mismatch is an engineering failure, not a scientific result.
 
 ## Internal development split
 

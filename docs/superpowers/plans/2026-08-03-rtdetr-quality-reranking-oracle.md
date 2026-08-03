@@ -207,6 +207,11 @@ Import the CLI module without executing it and assert:
 - stock postprocess reconstructed from auxiliary decoder tensors equals the stock output
   returned by the same model call exactly;
 - report and decision files use create-only writes and bind all authority hashes.
+- official-validation stock metrics exactly equal the frozen same-server stock authority
+  (`map=0.24164844987309864`, `ap50=0.4143946635382976`,
+  `ap75=0.23916375458831637`, `ap_tiny=0.10314861659739166`,
+  `ap_small=0.24166148504350557`, `precision=0.5119369275291381`,
+  `recall=0.43525461908044843`).
 
 - [ ] **Step 2: Run CLI tests and verify RED**
 
