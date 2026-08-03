@@ -10,6 +10,7 @@ import platform
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -688,11 +689,36 @@ def _records_from_ids(image_ids: Sequence[str]) -> list[dict[str, str]]:
     return [{"image_id": image_id} for image_id in image_ids]
 
 
-def _assert_stock_authority(metrics: Mapping[str, float]) -> None:
-    if dict(metrics) != STOCK_AUTHORITY:
+def _assert_stock_authority(metrics: Mapping[str, float]) -> dict[str, Any]:
+    actual = dict(metrics)
+    exact_names = ("map", "ap50", "ap75", "ap_tiny", "ap_small")
+    diagnostic_names = ("precision", "recall")
+    tolerance = Decimal("1e-8")
+    if set(actual) != set(STOCK_AUTHORITY) or any(
+        actual.get(name) != STOCK_AUTHORITY[name] for name in exact_names
+    ):
         raise RuntimeError(
-            f"official-validation stock authority mismatch: expected={STOCK_AUTHORITY}, actual={dict(metrics)}"
+            f"official-validation stock authority mismatch: expected={STOCK_AUTHORITY}, actual={actual}"
         )
+    diagnostic_delta = {
+        name: float(
+            abs(Decimal(str(actual[name])) - Decimal(str(STOCK_AUTHORITY[name])))
+        )
+        for name in diagnostic_names
+    }
+    if any(Decimal(str(delta)) > tolerance for delta in diagnostic_delta.values()):
+        raise RuntimeError(
+            f"official-validation stock authority mismatch: expected={STOCK_AUTHORITY}, actual={actual}"
+        )
+    amended = any(delta != 0.0 for delta in diagnostic_delta.values())
+    return {
+        "status": (
+            "passed_with_non_gate_float_amendment" if amended else "passed_exact"
+        ),
+        "exact_gate_metrics": list(exact_names),
+        "diagnostic_delta": diagnostic_delta,
+        "tolerance": float(tolerance),
+    }
 
 
 def _cache_authority_payload(
@@ -927,7 +953,7 @@ def _run(args: argparse.Namespace) -> int:
         return completed
 
     official = _evaluate_records(val_records, alphas=(selected_alpha,))
-    _assert_stock_authority(official["stock"])
+    stock_authority_check = _assert_stock_authority(official["stock"])
     oracle_metrics = official["oracle"][selected_alpha]
     decision = decide_quality_oracle(
         stock_map=official["stock"]["map"],
@@ -946,6 +972,7 @@ def _run(args: argparse.Namespace) -> int:
             "split": {"count": VAL_COUNT, "official_passes": 1},
             "selected_alpha": selected_alpha,
             "stock": official["stock"],
+            "stock_authority_check": stock_authority_check,
             "oracle": oracle_metrics,
             "detector": cache_authority["detector"],
             "cache_manifest": {

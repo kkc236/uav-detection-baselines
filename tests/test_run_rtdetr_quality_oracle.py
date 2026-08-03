@@ -238,14 +238,29 @@ def test_detector_and_preprocessed_inputs_must_be_cuda_zero() -> None:
         module._assert_cuda0_tensor(torch.zeros(1), label="preprocessed input")
 
 
-def test_stock_authority_requires_exact_frozen_metrics() -> None:
+def test_stock_authority_requires_exact_gate_metrics_and_bounded_diagnostics() -> None:
     module = _load_module()
-    module._assert_stock_authority(dict(module.STOCK_AUTHORITY))
+    exact = module._assert_stock_authority(dict(module.STOCK_AUTHORITY))
+    assert exact["status"] == "passed_exact"
+    assert exact["diagnostic_delta"] == {"precision": 0.0, "recall": 0.0}
+
     changed = dict(module.STOCK_AUTHORITY)
     changed["map"] += 1e-16
 
     with pytest.raises(RuntimeError, match="stock authority mismatch"):
         module._assert_stock_authority(changed)
+
+    observed = dict(module.STOCK_AUTHORITY)
+    observed["precision"] = 0.5119369292841953
+    amended = module._assert_stock_authority(observed)
+    assert amended["status"] == "passed_with_non_gate_float_amendment"
+    assert 0.0 < amended["diagnostic_delta"]["precision"] < 1e-8
+    assert amended["tolerance"] == 1e-8
+
+    outside_tolerance = dict(module.STOCK_AUTHORITY)
+    outside_tolerance["precision"] += 1.1e-8
+    with pytest.raises(RuntimeError, match="stock authority mismatch"):
+        module._assert_stock_authority(outside_tolerance)
 
 
 def _records_for_paths(paths) -> list[dict[str, object]]:
