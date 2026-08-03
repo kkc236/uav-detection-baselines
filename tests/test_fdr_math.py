@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import subprocess
 import sys
 import types
@@ -13,7 +14,12 @@ import torch.nn.functional as F
 
 
 PINNED_COMMIT = "7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6"
-OFFICIAL_CLONE = Path(r"C:\Users\16946\AppData\Local\Temp\D-FINE-7fe2f888")
+OFFICIAL_CLONE = Path(
+    os.environ.get(
+        "DFINE_OFFICIAL_CLONE",
+        str(Path(os.environ.get("TEMP", "/tmp")) / "D-FINE-7fe2f888"),
+    )
+)
 OFFICIAL_DFINE_DIR = OFFICIAL_CLONE / "src" / "zoo" / "dfine"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
