@@ -10,6 +10,7 @@ from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
 from ultralytics.utils import RANK
 
+from src.iber_formal_protocol import load_formal_initial_state
 from src.iber_head import IBEROutput, IBERRefiner
 from src.itber_geometry import cxcywh_to_xyxy
 from src.itber_loss import ITBERLosses, itber_private_loss
@@ -205,10 +206,19 @@ class IBERFullRTDETRDetectionModel(RTDETRDetectionModel):
 class IBERFullTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
     """Full RT-DETR-L trainer with one MuSGD optimizer and isolated clipping."""
 
-    def __init__(self, *args, experiment_seed: int = 0, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        experiment_seed: int = 0,
+        initial_state_path: str | Path | None = None,
+        **kwargs,
+    ) -> None:
         if int(experiment_seed) != 0:
             raise ValueError("formal IBER-BE training is frozen to seed0")
         self.experiment_seed = 0
+        self.initial_state_path = (
+            Path(initial_state_path) if initial_state_path is not None else None
+        )
         super().__init__(*args, **kwargs)
 
     def check_resume(self, overrides):
@@ -245,6 +255,13 @@ class IBERFullTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
         )
         if weights:
             model.load(weights)
+        elif self.initial_state_path is not None:
+            artifact = torch.load(
+                self.initial_state_path,
+                map_location="cpu",
+                weights_only=False,
+            )
+            load_formal_initial_state(model, artifact)
         return model
 
 

@@ -7,6 +7,7 @@ from typing import Iterator
 import torch
 from ultralytics.nn.tasks import RTDETRDetectionModel
 
+import src.rtdetr_iber_formal as formal
 from src.rtdetr_iber import IBERRecordingDecoder
 from src.rtdetr_iber_formal import IBERFullRTDETRDetectionModel, IBERFullTrainer
 
@@ -143,3 +144,34 @@ def test_trainer_partitions_one_musgd_optimizer_into_public_and_private_groups()
     assert {id(parameter) for parameter in groups["iber_gradient_norm"]} == private_ids
     assert not ({id(parameter) for parameter in groups["gradient_norm"]} & private_ids)
 
+
+def test_trainer_loads_the_frozen_initial_state_only_for_a_fresh_run(
+    monkeypatch, tmp_path
+) -> None:
+    artifact = {"immutable": True}
+    initial_state = tmp_path / "initial.pt"
+    torch.save(artifact, initial_state)
+    events: list[object] = []
+
+    class FakeModel:
+        def __init__(self, *args, **kwargs):
+            events.append((args, kwargs))
+
+        def load(self, weights):
+            events.append(("weights", weights))
+
+    monkeypatch.setattr(formal, "IBERFullRTDETRDetectionModel", FakeModel)
+    monkeypatch.setattr(
+        formal,
+        "load_formal_initial_state",
+        lambda model, state: events.append(("initial", model, state)),
+    )
+    trainer = SimpleNamespace(
+        data={"nc": 10, "channels": 3},
+        initial_state_path=initial_state,
+    )
+
+    model = IBERFullTrainer.get_model(trainer, verbose=False)
+
+    assert isinstance(model, FakeModel)
+    assert events[-1] == ("initial", model, artifact)
