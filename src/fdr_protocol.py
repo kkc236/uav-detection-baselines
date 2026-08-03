@@ -46,8 +46,9 @@ FDR_PROTOCOL: dict[str, Any] = {
     },
     "training": {
         "pretrained": False,
-        "screen_epochs": 30,
-        "formal_epochs": 100,
+        "screen_schedule_epochs": 50,
+        "screen_cutoff_epoch": 30,
+        "formal_schedule_epochs": 100,
         "imgsz": 640,
         "batch": 8,
         "workers": 8,
@@ -143,24 +144,64 @@ def partition_state_dicts(
     fdr_state: Mapping[str, torch.Tensor],
     *,
     private_prefixes: Sequence[str],
+    public_aliases: Mapping[str, str] | None = None,
+    replaced_control_prefixes: Sequence[str] = (),
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    """Validate and split one FDR state into exact public and approved private tensors."""
+    """Validate exact shared tensors across a declared structural migration."""
     if not private_prefixes or any(not prefix for prefix in private_prefixes):
         raise ValueError("at least one non-empty private prefix is required")
-    missing = sorted(set(control_state) - set(fdr_state))
-    if missing:
-        raise ValueError(f"FDR state is missing public tensors: {missing[:5]}")
+    aliases = dict(public_aliases or {})
+    replaced_prefixes = tuple(replaced_control_prefixes)
+    if any(not prefix for prefix in replaced_prefixes):
+        raise ValueError("replaced control prefixes must be non-empty")
+    if len(set(aliases.values())) != len(aliases):
+        raise ValueError("public alias targets must be one-to-one")
+    if any(source == target for source, target in aliases.items()):
+        raise ValueError("public aliases must describe renamed tensors")
+
+    missing_alias_sources = sorted(set(aliases) - set(control_state))
+    missing_alias_targets = sorted(set(aliases.values()) - set(fdr_state))
+    if missing_alias_sources or missing_alias_targets:
+        raise ValueError(
+            "public alias endpoint is missing: "
+            f"control={missing_alias_sources[:5]}, fdr={missing_alias_targets[:5]}"
+        )
 
     public: dict[str, torch.Tensor] = {}
+    consumed_fdr_names: set[str] = set()
+    replaced_names: set[str] = set()
     for name, expected in control_state.items():
-        actual = fdr_state[name]
+        if name in aliases:
+            target_name = aliases[name]
+            actual = fdr_state[target_name]
+            difference = "alias tensor differs"
+            consumed_fdr_names.add(target_name)
+        elif name in fdr_state:
+            actual = fdr_state[name]
+            difference = "public tensor differs"
+            consumed_fdr_names.add(name)
+        elif any(name.startswith(prefix) for prefix in replaced_prefixes):
+            replaced_names.add(name)
+            continue
+        else:
+            raise ValueError(f"undeclared missing control tensor: {name}")
         if expected.shape != actual.shape or expected.dtype != actual.dtype:
-            raise ValueError(f"public tensor shape or dtype differs: {name}")
+            raise ValueError(f"{difference} in shape or dtype: {name}")
         if not torch.equal(expected.detach().cpu(), actual.detach().cpu()):
-            raise ValueError(f"public tensor differs: {name}")
+            raise ValueError(f"{difference}: {name}")
         public[name] = expected.detach().cpu().clone()
 
-    private_names = sorted(set(fdr_state) - set(control_state))
+    unused_replaced_prefixes = [
+        prefix
+        for prefix in replaced_prefixes
+        if not any(name.startswith(prefix) for name in replaced_names)
+    ]
+    if unused_replaced_prefixes:
+        raise ValueError(
+            f"replaced control prefix matched no missing tensor: {unused_replaced_prefixes[:5]}"
+        )
+
+    private_names = sorted(set(fdr_state) - consumed_fdr_names)
     unapproved = [
         name for name in private_names if not any(name.startswith(prefix) for prefix in private_prefixes)
     ]
@@ -232,46 +273,132 @@ def build_fdr_initial_state(
     fdr_state: Mapping[str, torch.Tensor],
     *,
     private_prefixes: Sequence[str],
+    public_aliases: Mapping[str, str] | None = None,
+    replaced_control_prefixes: Sequence[str] = (),
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Build the paired public/private initialization artifact."""
+    aliases = dict(public_aliases or {})
+    replaced_prefixes = tuple(replaced_control_prefixes)
     public, private = partition_state_dicts(
-        control_state, fdr_state, private_prefixes=private_prefixes
+        control_state,
+        fdr_state,
+        private_prefixes=private_prefixes,
+        public_aliases=aliases,
+        replaced_control_prefixes=replaced_prefixes,
     )
+    replaced_control = {
+        name: value.detach().cpu().clone()
+        for name, value in control_state.items()
+        if name not in public
+    }
+    fdr_public = {
+        aliases.get(name, name): fdr_state[aliases.get(name, name)].detach().cpu().clone()
+        for name in public
+    }
+    control = {name: value.detach().cpu().clone() for name, value in control_state.items()}
+    fdr = {name: value.detach().cpu().clone() for name, value in fdr_state.items()}
     return {
         "format_version": FORMAT_VERSION,
         "public_state": public,
+        "fdr_public_state": fdr_public,
+        "replaced_control_state": replaced_control,
         "private_state": private,
+        "migration": {
+            "public_aliases": aliases,
+            "replaced_control_prefixes": list(replaced_prefixes),
+            "approved_private_prefixes": list(private_prefixes),
+        },
         "metadata": dict(metadata),
         "fingerprints": {
             "public": public_state_sha256(public),
+            "fdr_public": public_state_sha256(fdr_public),
+            "replaced_control": public_state_sha256(replaced_control),
             "private": public_state_sha256(private),
+            "control": public_state_sha256(control),
+            "fdr": public_state_sha256(fdr),
         },
     }
 
 
-def _validate_initial_state(artifact: Mapping[str, Any]) -> None:
+def validate_fdr_initial_state(artifact: Mapping[str, Any]) -> None:
+    """Validate all public/private/migration partitions and their fingerprints."""
     if artifact.get("format_version") != FORMAT_VERSION:
         raise ValueError("FDR initial-state format mismatch")
     public = artifact.get("public_state")
+    fdr_public = artifact.get("fdr_public_state")
+    replaced = artifact.get("replaced_control_state")
     private = artifact.get("private_state")
+    migration = artifact.get("migration")
     fingerprints = artifact.get("fingerprints", {})
-    if not isinstance(public, Mapping) or not isinstance(private, Mapping) or not private:
+    if (
+        not isinstance(public, Mapping)
+        or not isinstance(fdr_public, Mapping)
+        or not isinstance(replaced, Mapping)
+        or not isinstance(private, Mapping)
+        or not private
+        or not isinstance(migration, Mapping)
+    ):
         raise ValueError("FDR initial-state partition is invalid")
     if public_state_sha256(public) != fingerprints.get("public"):
         raise ValueError("FDR public fingerprint mismatch")
+    if public_state_sha256(fdr_public) != fingerprints.get("fdr_public"):
+        raise ValueError("FDR aliased public fingerprint mismatch")
+    if public_state_sha256(replaced) != fingerprints.get("replaced_control"):
+        raise ValueError("FDR replaced-control fingerprint mismatch")
     if public_state_sha256(private) != fingerprints.get("private"):
         raise ValueError("FDR private fingerprint mismatch")
+
+    aliases = migration.get("public_aliases")
+    replaced_prefixes = migration.get("replaced_control_prefixes")
+    private_prefixes = migration.get("approved_private_prefixes")
+    if (
+        not isinstance(aliases, Mapping)
+        or not isinstance(replaced_prefixes, list)
+        or not isinstance(private_prefixes, list)
+    ):
+        raise ValueError("FDR structural migration manifest is invalid")
+    expected_fdr_public = {aliases.get(name, name): value for name, value in public.items()}
+    if set(expected_fdr_public) != set(fdr_public):
+        raise ValueError("FDR aliased public keys mismatch")
+    for name, expected in expected_fdr_public.items():
+        actual = fdr_public[name]
+        if expected.shape != actual.shape or expected.dtype != actual.dtype or not torch.equal(expected, actual):
+            raise ValueError(f"FDR aliased public tensor mismatch: {name}")
+    if any(
+        not any(name.startswith(prefix) for prefix in replaced_prefixes)
+        for name in replaced
+    ):
+        raise ValueError("FDR replaced-control state is not declared")
+    if any(
+        not any(name.startswith(prefix) for prefix in private_prefixes)
+        for name in private
+    ):
+        raise ValueError("FDR private state is not approved")
+
+    control = {**public, **replaced}
+    fdr = {**fdr_public, **private}
+    if public_state_sha256(control) != fingerprints.get("control"):
+        raise ValueError("FDR full control fingerprint mismatch")
+    if public_state_sha256(fdr) != fingerprints.get("fdr"):
+        raise ValueError("FDR full method fingerprint mismatch")
 
 
 def load_fdr_initial_state(model: nn.Module, artifact: Mapping[str, Any], *, variant: str) -> None:
     """Strictly load the shared control state or shared-plus-private FDR state."""
     if variant not in {"control", "fdr"}:
         raise ValueError(f"unknown FDR paired variant: {variant}")
-    _validate_initial_state(artifact)
-    expected = dict(artifact["public_state"])
-    if variant == "fdr":
-        expected.update(artifact["private_state"])
+    validate_fdr_initial_state(artifact)
+    if variant == "control":
+        expected = {
+            **artifact["public_state"],
+            **artifact["replaced_control_state"],
+        }
+    else:
+        expected = {
+            **artifact["fdr_public_state"],
+            **artifact["private_state"],
+        }
     if set(model.state_dict()) != set(expected):
         raise ValueError("FDR initial-state keys do not match target model")
     model.load_state_dict(expected, strict=True)
@@ -395,6 +522,7 @@ __all__ = [
     "partition_state_dicts",
     "public_state_sha256",
     "validate_optimizer_coverage",
+    "validate_fdr_initial_state",
     "validate_resume_authority",
     "write_create_only_manifest",
 ]

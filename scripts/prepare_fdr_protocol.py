@@ -20,6 +20,7 @@ from src.fdr_protocol import (  # noqa: E402
     build_run_identity,
     canonical_json_bytes,
     public_state_sha256,
+    validate_fdr_initial_state,
     write_create_only_manifest,
 )
 
@@ -55,15 +56,8 @@ def prepare_manifest(
     if state_path.is_symlink() or not state_path.is_file():
         raise ValueError("initial_state must be a regular existing file")
     artifact = torch.load(state_path, map_location="cpu", weights_only=False)
-    if artifact.get("format_version") != 1:
-        raise ValueError("initial_state has an unsupported format")
-    public = artifact.get("public_state", {})
-    private = artifact.get("private_state", {})
+    validate_fdr_initial_state(artifact)
     fingerprints = artifact.get("fingerprints", {})
-    if public_state_sha256(public) != fingerprints.get("public"):
-        raise ValueError("initial_state public fingerprint mismatch")
-    if public_state_sha256(private) != fingerprints.get("private"):
-        raise ValueError("initial_state private fingerprint mismatch")
 
     run_identities = {
         f"{variant}_{stage}": build_run_identity(source, stage=stage, variant=variant, seed=0)
@@ -76,6 +70,7 @@ def prepare_manifest(
         "source_sha256": public_state_sha256(source),
         "protocol": FDR_PROTOCOL,
         "protocol_sha256": FDR_PROTOCOL_SHA256,
+        "migration": artifact["migration"],
         "initial_state": {
             "path": str(state_path),
             "sha256": _file_sha256(state_path),

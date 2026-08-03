@@ -10,6 +10,7 @@ import pytest
 import torch
 from torch import nn
 
+from scripts.prepare_fdr_protocol import prepare_manifest
 from src.fdr_protocol import (
     FDR_PROTOCOL,
     FDR_PROTOCOL_SHA256,
@@ -29,6 +30,39 @@ from src.fdr_protocol import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _structural_migration_states() -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    control = {
+        "model.28.backbone.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        "model.28.dec_bbox_head.0.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+        "model.28.dec_bbox_head.0.bias": torch.tensor([0.25, -0.25]),
+    }
+    for layer in range(1, 6):
+        control[f"model.28.dec_bbox_head.{layer}.weight"] = torch.full((2, 4), float(layer))
+        control[f"model.28.dec_bbox_head.{layer}.bias"] = torch.full((2,), float(layer))
+    method = {
+        "model.28.backbone.weight": control["model.28.backbone.weight"].clone(),
+        "model.28.decoder.pre_bbox_head.weight": control[
+            "model.28.dec_bbox_head.0.weight"
+        ].clone(),
+        "model.28.decoder.pre_bbox_head.bias": control[
+            "model.28.dec_bbox_head.0.bias"
+        ].clone(),
+    }
+    for layer in range(6):
+        method[f"model.28.decoder.distribution_finals.{layer}.weight"] = torch.zeros(132, 4)
+        method[f"model.28.decoder.distribution_finals.{layer}.bias"] = torch.zeros(132)
+    return control, method
+
+
+PUBLIC_ALIASES = {
+    "model.28.dec_bbox_head.0.weight": "model.28.decoder.pre_bbox_head.weight",
+    "model.28.dec_bbox_head.0.bias": "model.28.decoder.pre_bbox_head.bias",
+}
+REPLACED_CONTROL_PREFIXES = tuple(
+    f"model.28.dec_bbox_head.{layer}." for layer in range(1, 6)
+)
 
 
 class _Control(nn.Module):
@@ -100,8 +134,9 @@ def test_frozen_protocol_contains_complete_baseline_and_fdr_contract() -> None:
     }
     assert FDR_PROTOCOL["training"] == {
         "pretrained": False,
-        "screen_epochs": 30,
-        "formal_epochs": 100,
+        "screen_schedule_epochs": 50,
+        "screen_cutoff_epoch": 30,
+        "formal_schedule_epochs": 100,
         "imgsz": 640,
         "batch": 8,
         "workers": 8,
@@ -125,6 +160,12 @@ def test_frozen_protocol_contains_complete_baseline_and_fdr_contract() -> None:
         "max_det": 300,
         "nms": False,
     }
+    assert "screen_epochs" not in FDR_PROTOCOL["training"]
+    assert (
+        FDR_PROTOCOL["training"]["screen_cutoff_epoch"]
+        <= FDR_PROTOCOL["training"]["screen_schedule_epochs"]
+        - FDR_PROTOCOL["augmentation"]["close_mosaic"]
+    )
     assert FDR_PROTOCOL["augmentation"] == {
         "mosaic": 1.0,
         "close_mosaic": 10,
@@ -190,6 +231,122 @@ def test_partition_rejects_public_value_or_private_name_drift() -> None:
         partition_state_dicts(
             control.state_dict(), bad, private_prefixes=("distribution_finals.",)
         )
+
+
+def test_structural_migration_accepts_exact_aliases_and_declared_replacements() -> None:
+    control, method = _structural_migration_states()
+    public, private = partition_state_dicts(
+        control,
+        method,
+        private_prefixes=("model.28.decoder.distribution_finals.",),
+        public_aliases=PUBLIC_ALIASES,
+        replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
+    )
+
+    assert set(public) == {
+        "model.28.backbone.weight",
+        *PUBLIC_ALIASES,
+    }
+    assert len(private) == 12
+    artifact = build_fdr_initial_state(
+        control,
+        method,
+        private_prefixes=("model.28.decoder.distribution_finals.",),
+        public_aliases=PUBLIC_ALIASES,
+        replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
+        metadata={"seed": 0},
+    )
+    assert artifact["migration"] == {
+        "public_aliases": PUBLIC_ALIASES,
+        "replaced_control_prefixes": list(REPLACED_CONTROL_PREFIXES),
+        "approved_private_prefixes": ["model.28.decoder.distribution_finals."],
+    }
+    assert set(artifact["replaced_control_state"]) == {
+        name
+        for name in control
+        if name.startswith(REPLACED_CONTROL_PREFIXES)
+    }
+
+    class _StateTarget:
+        def __init__(self, state: dict[str, torch.Tensor]) -> None:
+            self.state = {name: value.clone() for name, value in state.items()}
+
+        def state_dict(self) -> dict[str, torch.Tensor]:
+            return self.state
+
+        def load_state_dict(self, state: dict[str, torch.Tensor], strict: bool = True) -> None:
+            assert strict
+            self.state = {name: value.clone() for name, value in state.items()}
+
+    control_target = _StateTarget(control)
+    method_target = _StateTarget(method)
+    load_fdr_initial_state(control_target, artifact, variant="control")
+    load_fdr_initial_state(method_target, artifact, variant="fdr")
+    assert public_state_sha256(control_target.state_dict()) == public_state_sha256(control)
+    assert public_state_sha256(method_target.state_dict()) == public_state_sha256(method)
+
+
+def test_structural_migration_rejects_undeclared_control_missing() -> None:
+    control, method = _structural_migration_states()
+    with pytest.raises(ValueError, match="undeclared missing control"):
+        partition_state_dicts(
+            control,
+            method,
+            private_prefixes=("model.28.decoder.distribution_finals.",),
+            public_aliases=PUBLIC_ALIASES,
+            replaced_control_prefixes=REPLACED_CONTROL_PREFIXES[:-1],
+        )
+
+
+def test_structural_migration_rejects_alias_tensor_difference() -> None:
+    control, method = _structural_migration_states()
+    method[PUBLIC_ALIASES["model.28.dec_bbox_head.0.weight"]][0, 0] += 1
+    with pytest.raises(ValueError, match="alias tensor differs"):
+        partition_state_dicts(
+            control,
+            method,
+            private_prefixes=("model.28.decoder.distribution_finals.",),
+            public_aliases=PUBLIC_ALIASES,
+            replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
+        )
+
+
+def test_structural_migration_rejects_unapproved_extra_private() -> None:
+    control, method = _structural_migration_states()
+    method["model.28.decoder.quality_gate.weight"] = torch.ones(1)
+    with pytest.raises(ValueError, match="unapproved private"):
+        partition_state_dicts(
+            control,
+            method,
+            private_prefixes=("model.28.decoder.distribution_finals.",),
+            public_aliases=PUBLIC_ALIASES,
+            replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
+        )
+
+
+def test_prepare_manifest_binds_structural_migration(tmp_path: Path) -> None:
+    control, method = _structural_migration_states()
+    artifact = build_fdr_initial_state(
+        control,
+        method,
+        private_prefixes=("model.28.decoder.distribution_finals.",),
+        public_aliases=PUBLIC_ALIASES,
+        replaced_control_prefixes=REPLACED_CONTROL_PREFIXES,
+        metadata={"seed": 0},
+    )
+    state_path = tmp_path / "initial-state.pt"
+    torch.save(artifact, state_path)
+    output = tmp_path / "protocol.json"
+
+    manifest = prepare_manifest(
+        source_commit="a" * 40,
+        source_tree_sha256="b" * 64,
+        initial_state=state_path,
+        output=output,
+    )
+
+    assert manifest["migration"] == artifact["migration"]
+    assert json.loads(output.read_text("utf-8"))["migration"] == artifact["migration"]
 
 
 def test_private_rng_fork_preserves_public_rng_and_zeros_six_finals() -> None:
