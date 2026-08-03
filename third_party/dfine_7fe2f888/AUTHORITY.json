@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/Peterande/D-FINE",
+  "commit": "7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6",
+  "local_clone_used_for_vendoring": "C:/Users/16946/AppData/Local/Temp/D-FINE-7fe2f888",
+  "usage": "test-only golden reference",
+  "sha256_encoding": "lowercase hexadecimal over exact file bytes",
+  "license": {
+    "spdx": "Apache-2.0",
+    "repository_path": "LICENSE",
+    "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6",
+    "source_url": "https://github.com/Peterande/D-FINE/blob/7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6/LICENSE",
+    "copyright": [
+      "Copyright (c) 2024 The D-FINE Authors. All Rights Reserved.",
+      "Modified from RT-DETR (https://github.com/lyuwenyu/RT-DETR); Copyright (c) 2023 lyuwenyu. All Rights Reserved."
+    ]
+  },
+  "sources": {
+    "dfine_decoder.py": {
+      "repository_path": "src/zoo/dfine/dfine_decoder.py",
+      "source_url": "https://github.com/Peterande/D-FINE/blob/7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6/src/zoo/dfine/dfine_decoder.py",
+      "sha256": "7fe0e798493d18ea71a3c337f3116a48a0fd28b20b3dbba5d27e75d8bc6bac14",
+      "vendored_symbols": [
+        "Integral"
+      ]
+    },
+    "dfine_utils.py": {
+      "repository_path": "src/zoo/dfine/dfine_utils.py",
+      "source_url": "https://github.com/Peterande/D-FINE/blob/7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6/src/zoo/dfine/dfine_utils.py",
+      "sha256": "d05209405e6c680620fcd847fa62c37a445b1a5838a55ba6c8b6f738aee576d8",
+      "vendored_symbols": [
+        "weighting_function",
+        "translate_gt",
+        "distance2bbox",
+        "bbox2distance"
+      ]
+    },
+    "dfine_criterion.py": {
+      "repository_path": "src/zoo/dfine/dfine_criterion.py",
+      "source_url": "https://github.com/Peterande/D-FINE/blob/7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6/src/zoo/dfine/dfine_criterion.py",
+      "sha256": "ca9938808c8ba59fa2e7aeb3754ddbc415efd51127f7ffdd83e0f68be3423908",
+      "vendored_symbols": [
+        "unimodal_distribution_focal_loss"
+      ]
+    },
+    "dfine_hgnetv2.yml": {
+      "repository_path": "configs/dfine/include/dfine_hgnetv2.yml",
+      "source_url": "https://github.com/Peterande/D-FINE/blob/7fe2f8889f0b7b817f20c315b40fc15a4fb64ae6/configs/dfine/include/dfine_hgnetv2.yml",
+      "sha256": "29630acb451a8d34b0a5a04501c7619e226a8b5ca4b10cfd82c5ff11b7d996ce",
+      "bound_constants": {
+        "reg_max": 32,
+        "reg_scale": 4,
+        "loss_fgl": 0.15
+      }
+    }
+  },
+  "vendored_reference_path": "third_party/dfine_7fe2f888/reference_fdr.py",
+  "vendored_reference_sha256": "ce45276c2e8b80a84fc948fd496bedde234e210b0bfb99d9a2f7692eee10ef2d",
+  "vendored_reference_exports": [
+    "Integral",
+    "weighting_function",
+    "translate_gt",
+    "distance2bbox",
+    "bbox2distance",
+    "unimodal_distribution_focal_loss"
+  ]
+}
