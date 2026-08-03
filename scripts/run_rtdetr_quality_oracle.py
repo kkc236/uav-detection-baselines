@@ -189,7 +189,7 @@ def _prepare_internal_dev(dataset_root: Path, cache_root: Path) -> tuple[Path, .
     return selected
 
 
-def _build_authority(
+def _build_pre_alpha_authority(
     baseline_checkpoint: Path,
     dataset_root: Path,
     dev_paths: Sequence[Path],
@@ -197,7 +197,6 @@ def _build_authority(
     baseline = Path(baseline_checkpoint).resolve()
     root = Path(dataset_root).resolve()
     baseline_sha = _file_sha256(baseline)
-    dataset_sha = str(dataset_signature(root)["sha256"])
     subset_paths = select_hashed_subset(
         sorted((root / "images" / "train").glob("*.jpg")),
         root=root,
@@ -207,8 +206,6 @@ def _build_authority(
     dev_sha = ordered_path_sha256(dev_paths, root=root)
     if baseline_sha != EXPECTED_BASELINE_SHA256:
         raise RuntimeError(f"baseline authority mismatch: {baseline_sha}")
-    if dataset_sha != EXPECTED_DATASET_SHA256:
-        raise RuntimeError(f"dataset authority mismatch: {dataset_sha}")
     if subset_sha != EXPECTED_SUBSET_SHA256:
         raise RuntimeError(f"subset authority mismatch: {subset_sha}")
     if dev_sha != EXPECTED_DEV_SHA256:
@@ -221,7 +218,7 @@ def _build_authority(
         )
     return {
         "baseline_sha256": baseline_sha,
-        "dataset_sha256": dataset_sha,
+        "dataset_sha256": EXPECTED_DATASET_SHA256,
         "subset_sha256": subset_sha,
         "runtime_amendment_sha256": RUNTIME_AMENDMENT_SHA256,
         "source_commit": _source_commit(),
@@ -230,14 +227,30 @@ def _build_authority(
     }
 
 
+def _assert_full_dataset_authority(dataset_root: Path) -> str:
+    dataset_sha = str(dataset_signature(Path(dataset_root).resolve())["sha256"])
+    if dataset_sha != EXPECTED_DATASET_SHA256:
+        raise RuntimeError(f"dataset authority mismatch: {dataset_sha}")
+    return dataset_sha
+
+
 def _device(value: str) -> torch.device:
-    if value == "cpu":
-        return torch.device("cpu")
-    if value != "0":
+    if not isinstance(value, str) or value != "0":
         raise ValueError("the frozen quality oracle permits only device 0")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA device 0 is unavailable")
     return torch.device("cuda:0")
+
+
+def _assert_cuda0_detector(detector: torch.nn.Module) -> None:
+    parameters = tuple(detector.parameters())
+    if not parameters or any(parameter.device != torch.device("cuda:0") for parameter in parameters):
+        raise RuntimeError("quality oracle detector parameters must be on cuda:0")
+
+
+def _assert_cuda0_tensor(tensor: torch.Tensor, *, label: str) -> None:
+    if not isinstance(tensor, torch.Tensor) or tensor.device != torch.device("cuda:0"):
+        raise RuntimeError(f"{label} must be on cuda:0")
 
 
 def _load_detector(checkpoint: Path, device: torch.device):
@@ -246,6 +259,7 @@ def _load_detector(checkpoint: Path, device: torch.device):
     detector = RTDETR(str(Path(checkpoint).resolve())).model.to(device).eval()
     detector.requires_grad_(False)
     detector.model[-1].export = False
+    _assert_cuda0_detector(detector)
     return detector
 
 
@@ -361,12 +375,16 @@ def _extract_records(
     expected_count: int,
     run_cuda_smoke: bool,
 ) -> list[dict[str, Any]]:
+    if device != torch.device("cuda:0"):
+        raise RuntimeError("quality evidence extraction requires cuda:0")
+    _assert_cuda0_detector(detector)
     _assert_detector_isolated(detector)
     state_before = _state_sha256(detector)
     records: list[dict[str, Any]] = []
     for batch_index, raw_batch in enumerate(loader):
         batch = validator.preprocess(raw_batch)
-        images = batch["img"].to(device, non_blocking=True)
+        images = batch["img"]
+        _assert_cuda0_tensor(images, label="preprocessed input")
         _, boxes, logits = _extract_decoder_batch(
             detector,
             images,
@@ -473,15 +491,201 @@ def _persist_cache(
     return write_quality_oracle_cache(root, dev=dev, val=val, authority=authority)
 
 
-def _write_canonical_json_create_only(path: Path, payload: Mapping[str, Any]) -> None:
-    raw = (
+def _load_cache(
+    root: Path, *, authority: Mapping[str, str], manifest_sha256: str
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Keep the verified Task 2 cache loader behind one integration seam."""
+    from src.rtdetr_quality_oracle import load_quality_oracle_cache
+
+    return load_quality_oracle_cache(
+        root, authority=authority, manifest_sha256=manifest_sha256
+    )
+
+
+def _canonical_json_bytes(payload: Mapping[str, Any]) -> bytes:
+    return (
         json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         + "\n"
     ).encode("utf-8")
+
+
+def _write_canonical_json_create_only(path: Path, payload: Mapping[str, Any]) -> None:
+    raw = _canonical_json_bytes(payload)
     with Path(path).open("xb") as stream:
         stream.write(raw)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _read_canonical_json(path: Path) -> dict[str, Any]:
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"immutable report is missing or unsafe: {path}")
+    raw = path.read_bytes()
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"immutable report is invalid: {path}") from error
+    if not isinstance(payload, dict) or raw != _canonical_json_bytes(payload):
+        raise RuntimeError(f"immutable report is not canonical: {path}")
+    return payload
+
+
+def _write_or_validate_canonical_json(
+    path: Path, payload: Mapping[str, Any]
+) -> None:
+    path = Path(path)
+    raw = _canonical_json_bytes(payload)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != raw:
+            raise RuntimeError(f"immutable report differs: {path}")
+        return
+    _write_canonical_json_create_only(path, payload)
+
+
+_ALPHA_REPORT = "alpha-selection-report.json"
+_CACHE_AUTHORITY_REPORT = "cache-manifest-authority.json"
+_FINAL_REPORTS = {
+    "quality-oracle-report.json",
+    "quality-oracle-decision.json",
+    "environment-hash-inventory.json",
+}
+
+
+def _validate_report_stage(report_root: Path, cache_root: Path) -> set[str]:
+    report_root = Path(report_root)
+    cache_root = Path(cache_root)
+    if report_root.is_symlink():
+        raise RuntimeError("report root must not be a symlink")
+    if not report_root.exists():
+        report_root.mkdir(parents=True, exist_ok=False)
+    if not report_root.is_dir():
+        raise RuntimeError("report root must be a directory")
+    entries = {path.name for path in report_root.iterdir()}
+    allowed = {_ALPHA_REPORT, _CACHE_AUTHORITY_REPORT, *_FINAL_REPORTS}
+    if not entries <= allowed:
+        raise RuntimeError(f"report stage contains unexpected entries: {sorted(entries - allowed)}")
+    if _CACHE_AUTHORITY_REPORT in entries and _ALPHA_REPORT not in entries:
+        raise RuntimeError("cache external authority exists without alpha selection")
+    if entries & _FINAL_REPORTS and _CACHE_AUTHORITY_REPORT not in entries:
+        raise RuntimeError("final reports exist without cache external authority")
+    if cache_root.exists() and _CACHE_AUTHORITY_REPORT not in entries:
+        raise RuntimeError("cache exists without external authority")
+    if _CACHE_AUTHORITY_REPORT in entries and not cache_root.exists():
+        raise RuntimeError("cache external authority exists without cache")
+    return entries
+
+
+def _relative_paths(paths: Sequence[Path], *, root: Path) -> list[str]:
+    resolved_root = Path(root).resolve()
+    return [Path(path).resolve().relative_to(resolved_root).as_posix() for path in paths]
+
+
+def _bind_record_identities(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    expected_paths: Sequence[Path],
+    dataset_root: Path,
+    split_name: str,
+) -> dict[str, Any]:
+    root = Path(dataset_root).resolve()
+    actual_paths: list[Path] = []
+    for record in records:
+        image_id = record.get("image_id")
+        if not isinstance(image_id, str):
+            raise RuntimeError(f"{split_name} record image identity is invalid")
+        path = Path(image_id)
+        actual_paths.append(path if path.is_absolute() else root / path)
+    expected = _relative_paths(tuple(expected_paths), root=root)
+    actual = _relative_paths(tuple(actual_paths), root=root)
+    if len(actual) != len(expected) or len(set(actual)) != len(actual) or set(actual) != set(expected):
+        raise RuntimeError(f"{split_name} identity set mismatch")
+    return {
+        "count": len(actual),
+        "actual_loader_order_sha256": ordered_path_sha256(tuple(actual_paths), root=root),
+        "actual_loader_image_paths": actual,
+    }
+
+
+def _expected_official_val_paths(dataset_root: Path) -> tuple[Path, ...]:
+    paths = tuple(sorted((Path(dataset_root).resolve() / "images" / "val").glob("*.jpg")))
+    if len(paths) != VAL_COUNT:
+        raise RuntimeError(
+            f"official-val image count mismatch: expected={VAL_COUNT}, actual={len(paths)}"
+        )
+    return paths
+
+
+def _alpha_report_payload(
+    *,
+    authority: Mapping[str, str],
+    dataset_root: Path,
+    selected_paths: Sequence[Path],
+    dev_binding: Mapping[str, Any],
+    dev_evaluation: Mapping[str, Any],
+    selected_alpha: float,
+) -> dict[str, Any]:
+    return {
+        "format_version": 1,
+        "authority": dict(authority),
+        "split": {
+            "count": DEV_COUNT,
+            "selection_order_sha256": EXPECTED_DEV_SHA256,
+            "selection_order_image_paths": _relative_paths(selected_paths, root=dataset_root),
+            "actual_loader_order_sha256": dev_binding["actual_loader_order_sha256"],
+            "actual_loader_image_paths": dev_binding["actual_loader_image_paths"],
+        },
+        "stock": dev_evaluation["stock"],
+        "candidates": {
+            format(alpha, "g"): dev_evaluation["oracle"][alpha] for alpha in ALPHA_GRID
+        },
+        "selected_alpha": selected_alpha,
+    }
+
+
+def _validate_alpha_report(
+    path: Path,
+    *,
+    authority: Mapping[str, str],
+    dataset_root: Path,
+    selected_paths: Sequence[Path],
+) -> tuple[float, dict[str, Any]]:
+    payload = _read_canonical_json(path)
+    if payload.get("format_version") != 1 or payload.get("authority") != dict(authority):
+        raise RuntimeError("alpha-selection report authority mismatch")
+    split = payload.get("split")
+    if not isinstance(split, Mapping):
+        raise RuntimeError("alpha-selection split is invalid")
+    expected_selection = _relative_paths(selected_paths, root=dataset_root)
+    if (
+        split.get("count") != DEV_COUNT
+        or split.get("selection_order_sha256") != EXPECTED_DEV_SHA256
+        or split.get("selection_order_image_paths") != expected_selection
+    ):
+        raise RuntimeError("alpha-selection split authority mismatch")
+    actual_relative = split.get("actual_loader_image_paths")
+    if not isinstance(actual_relative, list) or any(not isinstance(item, str) for item in actual_relative):
+        raise RuntimeError("alpha-selection actual loader order is invalid")
+    binding = _bind_record_identities(
+        _records_from_ids(actual_relative),
+        expected_paths=selected_paths,
+        dataset_root=dataset_root,
+        split_name="internal-dev",
+    )
+    if binding["actual_loader_order_sha256"] != split.get("actual_loader_order_sha256"):
+        raise RuntimeError("alpha-selection actual loader order hash mismatch")
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, Mapping) or set(candidates) != {format(alpha, "g") for alpha in ALPHA_GRID}:
+        raise RuntimeError("alpha-selection candidate grid mismatch")
+    metrics = {alpha: candidates[format(alpha, "g")] for alpha in ALPHA_GRID}
+    selected_alpha = payload.get("selected_alpha")
+    if selected_alpha not in ALPHA_GRID or _select_alpha(metrics) != selected_alpha:
+        raise RuntimeError("alpha-selection selected alpha mismatch")
+    return float(selected_alpha), payload
+
+
+def _records_from_ids(image_ids: Sequence[str]) -> list[dict[str, str]]:
+    return [{"image_id": image_id} for image_id in image_ids]
 
 
 def _assert_stock_authority(metrics: Mapping[str, float]) -> None:
@@ -491,88 +695,237 @@ def _assert_stock_authority(metrics: Mapping[str, float]) -> None:
         )
 
 
+def _cache_authority_payload(
+    *,
+    authority: Mapping[str, str],
+    manifest_sha256: str,
+    dev_binding: Mapping[str, Any],
+    val_binding: Mapping[str, Any],
+    detector: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "format_version": 1,
+        "authority": dict(authority),
+        "manifest_sha256": manifest_sha256,
+        "splits": {"dev": dict(dev_binding), "val": dict(val_binding)},
+        "detector": dict(detector),
+    }
+
+
+def _validate_cache_authority(
+    path: Path, *, authority: Mapping[str, str]
+) -> dict[str, Any]:
+    payload = _read_canonical_json(path)
+    if set(payload) != {
+        "format_version",
+        "authority",
+        "manifest_sha256",
+        "splits",
+        "detector",
+    }:
+        raise RuntimeError("cache external authority schema mismatch")
+    if payload["format_version"] != 1 or payload["authority"] != dict(authority):
+        raise RuntimeError("cache external authority mismatch")
+    manifest_sha = payload["manifest_sha256"]
+    if (
+        not isinstance(manifest_sha, str)
+        or len(manifest_sha) != 64
+        or manifest_sha != manifest_sha.upper()
+        or any(character not in "0123456789ABCDEF" for character in manifest_sha)
+    ):
+        raise RuntimeError("cache external manifest sha256 is invalid")
+    if not isinstance(payload["splits"], Mapping) or set(payload["splits"]) != {"dev", "val"}:
+        raise RuntimeError("cache external split authority mismatch")
+    if not isinstance(payload["detector"], Mapping):
+        raise RuntimeError("cache external detector authority mismatch")
+    return payload
+
+
+def _validate_completed_reports(
+    report_root: Path,
+    *,
+    authority: Mapping[str, str],
+    selected_alpha: float,
+) -> int | None:
+    present = {name for name in _FINAL_REPORTS if (Path(report_root) / name).is_file()}
+    if present != _FINAL_REPORTS:
+        return None
+    official = _read_canonical_json(Path(report_root) / "quality-oracle-report.json")
+    decision = _read_canonical_json(Path(report_root) / "quality-oracle-decision.json")
+    inventory = _read_canonical_json(Path(report_root) / "environment-hash-inventory.json")
+    for payload in (official, decision, inventory):
+        if payload.get("format_version") != 1 or payload.get("authority") != dict(authority):
+            raise RuntimeError("completed report authority mismatch")
+    if official.get("selected_alpha") != selected_alpha or decision.get("selected_alpha") != selected_alpha:
+        raise RuntimeError("completed report selected alpha mismatch")
+    status = decision.get("status")
+    if status not in {"passed", "scientific_failed"}:
+        raise RuntimeError("completed decision status is invalid")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     baseline = Path(args.baseline_checkpoint).resolve()
     dataset_root = Path(args.dataset_root).resolve()
     cache_root = Path(args.cache_root).resolve()
     report_root = Path(args.report_root).resolve()
-    if report_root.exists():
-        raise FileExistsError(f"refusing to overwrite report root: {report_root}")
-
+    _validate_report_stage(report_root, cache_root)
     dev_paths = _prepare_internal_dev(dataset_root, cache_root)
-    authority = _build_authority(baseline, dataset_root, dev_paths)
+    authority = _build_pre_alpha_authority(baseline, dataset_root, dev_paths)
     device = _device(args.device)
-    detector = _load_detector(baseline, device)
-    _assert_detector_isolated(detector)
-    state_before = _state_sha256(detector)
+    alpha_report_path = report_root / _ALPHA_REPORT
+    cache_authority_path = report_root / _CACHE_AUTHORITY_REPORT
+    selected_alpha: float | None = None
+    alpha_report: dict[str, Any] | None = None
+    if alpha_report_path.exists():
+        selected_alpha, alpha_report = _validate_alpha_report(
+            alpha_report_path,
+            authority=authority,
+            dataset_root=dataset_root,
+            selected_paths=dev_paths,
+        )
 
-    dev_loader, dev_validator = _build_validation_loader(
-        dataset_root,
-        baseline,
-        device,
-        image_source=_dev_list_path(cache_root),
-        split_name="internal-dev",
-        save_dir=cache_root.parent / f".{cache_root.name}-validator-dev",
-        expected_count=DEV_COUNT,
-    )
-    dev_records = _extract_records(
-        detector,
-        dev_loader,
-        dev_validator,
-        device=device,
-        expected_count=DEV_COUNT,
-        run_cuda_smoke=device.type == "cuda",
-    )
-    dev_evaluation = _evaluate_records(dev_records, alphas=ALPHA_GRID)
-    selected_alpha = _select_alpha(dev_evaluation["oracle"])
+    dev_records: list[dict[str, Any]]
+    val_records: list[dict[str, Any]]
+    cache_authority: dict[str, Any]
+    if cache_root.exists():
+        if alpha_report is None or not cache_authority_path.is_file():
+            raise RuntimeError("cache resume requires alpha and external authority")
+        _assert_full_dataset_authority(dataset_root)
+        val_paths = _expected_official_val_paths(dataset_root)
+        cache_authority = _validate_cache_authority(
+            cache_authority_path, authority=authority
+        )
+        loaded = _load_cache(
+            cache_root,
+            authority=authority,
+            manifest_sha256=cache_authority["manifest_sha256"],
+        )
+        dev_records = list(loaded["dev"])
+        val_records = list(loaded["val"])
+        dev_binding = _bind_record_identities(
+            dev_records,
+            expected_paths=dev_paths,
+            dataset_root=dataset_root,
+            split_name="internal-dev",
+        )
+        val_binding = _bind_record_identities(
+            val_records,
+            expected_paths=val_paths,
+            dataset_root=dataset_root,
+            split_name="official-val",
+        )
+        if cache_authority["splits"] != {"dev": dev_binding, "val": val_binding}:
+            raise RuntimeError("cache external split authority mismatch")
+        if alpha_report["split"]["actual_loader_order_sha256"] != dev_binding[
+            "actual_loader_order_sha256"
+        ]:
+            raise RuntimeError("cache dev order differs from alpha-selection report")
+    else:
+        if cache_authority_path.exists():
+            raise RuntimeError("cache external authority exists without cache")
+        detector = _load_detector(baseline, device)
+        _assert_cuda0_detector(detector)
+        _assert_detector_isolated(detector)
+        state_before = _state_sha256(detector)
+        dev_loader, dev_validator = _build_validation_loader(
+            dataset_root,
+            baseline,
+            device,
+            image_source=_dev_list_path(cache_root),
+            split_name="internal-dev",
+            save_dir=cache_root.parent / f".{cache_root.name}-validator-dev",
+            expected_count=DEV_COUNT,
+        )
+        dev_records = _extract_records(
+            detector,
+            dev_loader,
+            dev_validator,
+            device=device,
+            expected_count=DEV_COUNT,
+            run_cuda_smoke=True,
+        )
+        dev_binding = _bind_record_identities(
+            dev_records,
+            expected_paths=dev_paths,
+            dataset_root=dataset_root,
+            split_name="internal-dev",
+        )
+        dev_evaluation = _evaluate_records(dev_records, alphas=ALPHA_GRID)
+        computed_alpha = _select_alpha(dev_evaluation["oracle"])
+        computed_alpha_report = _alpha_report_payload(
+            authority=authority,
+            dataset_root=dataset_root,
+            selected_paths=dev_paths,
+            dev_binding=dev_binding,
+            dev_evaluation=dev_evaluation,
+            selected_alpha=computed_alpha,
+        )
+        _write_or_validate_canonical_json(alpha_report_path, computed_alpha_report)
+        selected_alpha, alpha_report = _validate_alpha_report(
+            alpha_report_path,
+            authority=authority,
+            dataset_root=dataset_root,
+            selected_paths=dev_paths,
+        )
 
-    report_root.mkdir(parents=True, exist_ok=False)
-    alpha_report_path = report_root / "alpha-selection-report.json"
-    _write_canonical_json_create_only(
-        alpha_report_path,
-        {
-            "format_version": 1,
-            "authority": authority,
-            "split": {
-                "count": DEV_COUNT,
-                "ordered_path_sha256": EXPECTED_DEV_SHA256,
-                "ordered_image_paths": [
-                    Path(path).resolve().relative_to(dataset_root).as_posix()
-                    for path in dev_paths
-                ],
-            },
-            "stock": dev_evaluation["stock"],
-            "candidates": {
-                format(alpha, "g"): dev_evaluation["oracle"][alpha]
-                for alpha in ALPHA_GRID
-            },
-            "selected_alpha": selected_alpha,
-        },
-    )
+        _assert_full_dataset_authority(dataset_root)
+        val_paths = _expected_official_val_paths(dataset_root)
+        val_loader, val_validator = _build_validation_loader(
+            dataset_root,
+            baseline,
+            device,
+            image_source=dataset_root / "images" / "val",
+            split_name="official-val",
+            save_dir=cache_root.parent / f".{cache_root.name}-validator-val",
+            expected_count=VAL_COUNT,
+        )
+        val_records = _extract_records(
+            detector,
+            val_loader,
+            val_validator,
+            device=device,
+            expected_count=VAL_COUNT,
+            run_cuda_smoke=False,
+        )
+        val_binding = _bind_record_identities(
+            val_records,
+            expected_paths=val_paths,
+            dataset_root=dataset_root,
+            split_name="official-val",
+        )
+        _assert_detector_isolated(detector)
+        state_after = _state_sha256(detector)
+        if state_after != state_before:
+            raise RuntimeError("detector state changed across the quality oracle")
+        _persist_cache(
+            cache_root,
+            dev=dev_records,
+            val=val_records,
+            authority=authority,
+        )
+        detector_authority = {
+            "state_sha256_before": state_before,
+            "state_sha256_after": state_after,
+            "gradients": False,
+        }
+        cache_authority = _cache_authority_payload(
+            authority=authority,
+            manifest_sha256=_file_sha256(cache_root / "manifest.json"),
+            dev_binding=dev_binding,
+            val_binding=val_binding,
+            detector=detector_authority,
+        )
+        _write_canonical_json_create_only(cache_authority_path, cache_authority)
 
-    val_loader, val_validator = _build_validation_loader(
-        dataset_root,
-        baseline,
-        device,
-        image_source=dataset_root / "images" / "val",
-        split_name="official-val",
-        save_dir=cache_root.parent / f".{cache_root.name}-validator-val",
-        expected_count=VAL_COUNT,
+    if selected_alpha is None:
+        raise RuntimeError("alpha selection was not frozen")
+    completed = _validate_completed_reports(
+        report_root, authority=authority, selected_alpha=selected_alpha
     )
-    val_records = _extract_records(
-        detector,
-        val_loader,
-        val_validator,
-        device=device,
-        expected_count=VAL_COUNT,
-        run_cuda_smoke=False,
-    )
-    cache_manifest = _persist_cache(
-        cache_root,
-        dev=dev_records,
-        val=val_records,
-        authority=authority,
-    )
+    if completed is not None:
+        return completed
+
     official = _evaluate_records(val_records, alphas=(selected_alpha,))
     _assert_stock_authority(official["stock"])
     oracle_metrics = official["oracle"][selected_alpha]
@@ -582,14 +935,10 @@ def _run(args: argparse.Namespace) -> int:
         oracle_map=oracle_metrics["map"],
         oracle_ap75=oracle_metrics["ap75"],
     )
-    _assert_detector_isolated(detector)
-    state_after = _state_sha256(detector)
-    if state_after != state_before:
-        raise RuntimeError("detector state changed across the quality oracle")
 
     official_report_path = report_root / "quality-oracle-report.json"
     decision_path = report_root / "quality-oracle-decision.json"
-    _write_canonical_json_create_only(
+    _write_or_validate_canonical_json(
         official_report_path,
         {
             "format_version": 1,
@@ -598,15 +947,14 @@ def _run(args: argparse.Namespace) -> int:
             "selected_alpha": selected_alpha,
             "stock": official["stock"],
             "oracle": oracle_metrics,
-            "detector": {
-                "state_sha256_before": state_before,
-                "state_sha256_after": state_after,
-                "gradients": False,
+            "detector": cache_authority["detector"],
+            "cache_manifest": {
+                "path": str(cache_root / "manifest.json"),
+                "sha256": cache_authority["manifest_sha256"],
             },
-            "cache_manifest": cache_manifest,
         },
     )
-    _write_canonical_json_create_only(
+    _write_or_validate_canonical_json(
         decision_path,
         {
             "format_version": 1,
@@ -616,7 +964,7 @@ def _run(args: argparse.Namespace) -> int:
         },
     )
     inventory_path = report_root / "environment-hash-inventory.json"
-    _write_canonical_json_create_only(
+    _write_or_validate_canonical_json(
         inventory_path,
         {
             "format_version": 1,
@@ -635,7 +983,11 @@ def _run(args: argparse.Namespace) -> int:
                 },
                 "cache_manifest": {
                     "path": str(cache_root / "manifest.json"),
-                    "sha256": _file_sha256(cache_root / "manifest.json"),
+                    "sha256": cache_authority["manifest_sha256"],
+                },
+                "cache_manifest_authority": {
+                    "path": str(cache_authority_path),
+                    "sha256": _file_sha256(cache_authority_path),
                 },
             },
             "reports": {
