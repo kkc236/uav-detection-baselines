@@ -126,7 +126,9 @@ git commit -m "experiment: lock RT-DETR quality reranking math"
 
 Assert that the split selects exactly 129 paths from the already-authorized 647 paths,
 is independent of input ordering, changes if any path changes, and has a canonical
-uppercase SHA-256. Assert create-only cache behavior, artifact SHA verification,
+uppercase SHA-256 equal to
+`FCF8749BAADBA8BDDF5870F472BDE1E937156AFBCEEFDA9F96FED21FA6BB0514` when paths are
+UTF-8 LF-delimited with one trailing LF. Assert create-only cache behavior, artifact SHA verification,
 train/official-val disjointness, safe `weights_only=True` loading, exact authority
 matching, alpha tie-breaking by `(map, ap75, ap50, -alpha)`, and these decision cases:
 

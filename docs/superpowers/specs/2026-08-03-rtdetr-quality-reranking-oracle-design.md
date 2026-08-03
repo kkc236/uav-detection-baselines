@@ -42,7 +42,9 @@ SHA256("rtdetr-quality-oracle-dev-v1\0" + relative_image_path)
 
 and assigning the first 129 images to the internal development split. The remaining
 518 images are not needed by this diagnostic. The exact ordered development image list,
-its canonical SHA-256, and the public subset authority are written to the report.
+its canonical SHA-256, and the public subset authority are written to the report. The
+ordered path list is UTF-8, LF-delimited, and has one trailing LF. Its pre-metric frozen
+SHA-256 is `FCF8749BAADBA8BDDF5870F472BDE1E937156AFBCEEFDA9F96FED21FA6BB0514`.
 
 ## Stock inference semantics
 
