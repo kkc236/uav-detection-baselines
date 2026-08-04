@@ -216,6 +216,20 @@ def test_bbox2distance_is_float32_exact_to_official(fdr_math, official_dfine) ->
         assert not actual_tensor.requires_grad
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA runtime")
+def test_bbox2distance_default_scalars_follow_cuda_targets(fdr_math) -> None:
+    points = torch.tensor(
+        [[0.50, 0.50, 0.20, 0.40]], device="cuda", dtype=torch.float32
+    )
+    target = torch.tensor(
+        [[0.35, 0.25, 0.65, 0.75]], device="cuda", dtype=torch.float32
+    )
+
+    actual = fdr_math.bbox2distance(points, target)
+
+    assert all(value.device.type == "cuda" for value in actual)
+
+
 def test_normalized_box_conversions_are_exact_to_official_box_ops(
     fdr_math, official_dfine
 ) -> None:

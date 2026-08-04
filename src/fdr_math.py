@@ -129,6 +129,8 @@ def translate_gt(
     """Translate continuous distances into adjacent-bin indices and weights."""
 
     gt = gt.reshape(-1)
+    up = torch.as_tensor(up, dtype=gt.dtype, device=gt.device)
+    reg_scale = torch.as_tensor(reg_scale, dtype=gt.dtype, device=gt.device)
     function_values = weighting_function(reg_max, up, reg_scale)
     diffs = function_values.unsqueeze(0) - gt.unsqueeze(1)
     mask = diffs <= 0
@@ -203,6 +205,10 @@ def bbox2distance(
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Encode normalized XYXY targets as official D-FINE FGL targets."""
 
+    reg_scale = torch.as_tensor(
+        reg_scale, dtype=points.dtype, device=points.device
+    )
+    up = torch.as_tensor(up, dtype=points.dtype, device=points.device)
     reg_scale = abs(reg_scale)
     left = (points[:, 0] - bbox[:, 0]) / (points[..., 2] / reg_scale + 1e-16) - 0.5 * reg_scale
     top = (points[:, 1] - bbox[:, 1]) / (points[..., 3] / reg_scale + 1e-16) - 0.5 * reg_scale
