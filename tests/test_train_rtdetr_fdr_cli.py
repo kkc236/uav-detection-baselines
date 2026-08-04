@@ -105,6 +105,18 @@ def test_cli_exposes_only_arm_stage_paths_resume_queue_and_dry_run() -> None:
         assert forbidden not in result.stdout
 
 
+def test_generic_checkpoint_sync_publishes_fdr_epoch_evidence() -> None:
+    from scripts.sync_experiment_checkpoint import LIGHTWEIGHT_ARTIFACTS
+
+    assert {
+        "fdr-epochs.jsonl",
+        "fdr-epochs.csv",
+        "fdr-run.json",
+        "optimizer-evidence.jsonl",
+        "publication-queue.jsonl",
+    }.issubset(LIGHTWEIGHT_ARTIFACTS)
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_epochs"), (("screen", 50), ("formal", 100))
 )
