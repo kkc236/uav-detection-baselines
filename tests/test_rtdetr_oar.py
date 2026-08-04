@@ -4,6 +4,8 @@ import pytest
 import torch
 
 from src.rtdetr_oar import (
+    OARRanker,
+    apply_oar_r2,
     oracle_score_families,
     restrict_oracle,
     select_candidate_k,
@@ -352,3 +354,54 @@ def test_select_candidate_k_validates_metrics_and_exact_k_grid() -> None:
         invalid = dict(valid)
         invalid[60] = float("inf")
         select_candidate_k(stock_map=0.2, full_map=0.3, restricted_map=invalid)
+
+
+def test_oar_r2_adjusts_all_pairs_and_starts_as_exact_stock() -> None:
+    model = OARRanker()
+    features = torch.randn(2, 300, 10, 276)
+    logits = torch.randn(2, 300, 10)
+
+    adjusted, residual = apply_oar_r2(model, features, logits)
+
+    assert adjusted.shape == residual.shape == (2, 300, 10)
+    assert residual[0].numel() == 3000
+    assert residual[1].numel() == 3000
+    assert torch.equal(adjusted, logits.sigmoid())
+    assert torch.count_nonzero(residual) == 0
+
+
+def test_oar_r2_has_exact_frozen_architecture_parameter_count() -> None:
+    model = OARRanker()
+
+    assert sum(parameter.numel() for parameter in model.parameters()) == 17_793
+    assert model.network[0].in_features == 276
+    assert model.network[0].out_features == 64
+    assert isinstance(model.network[1], torch.nn.SiLU)
+    assert model.network[2].in_features == 64
+    assert model.network[2].out_features == 1
+
+
+@pytest.mark.parametrize("final_bias", [-1_000.0, 1_000.0])
+def test_oar_r2_residual_is_bounded(final_bias: float) -> None:
+    model = OARRanker()
+    with torch.no_grad():
+        model.network[-1].bias.fill_(final_bias)
+
+    residual = model(torch.randn(1, 300, 10, 276))
+
+    assert residual.shape == (1, 300, 10)
+    assert bool((residual >= -2.0).all())
+    assert bool((residual <= 2.0).all())
+
+
+def test_oar_r2_detaches_every_evidence_input_and_trains_model() -> None:
+    features = torch.randn(1, 300, 10, 276, requires_grad=True)
+    logits = torch.randn(1, 300, 10, requires_grad=True)
+    model = OARRanker()
+
+    adjusted, residual = apply_oar_r2(model, features, logits)
+    (adjusted.sum() + residual.sum()).backward()
+
+    assert features.grad is None
+    assert logits.grad is None
+    assert all(parameter.grad is not None for parameter in model.parameters())

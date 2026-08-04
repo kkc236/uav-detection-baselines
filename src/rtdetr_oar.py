@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import torch
+from torch import nn
 
 from src.oar_protocol import OAR_GAIN_RECOVERY, OAR_K_GRID
 from src.rtdetr_quality_oracle import same_class_iou_quality
@@ -19,6 +20,35 @@ _INTEGER_DTYPES = {
     torch.int32,
     torch.int64,
 }
+
+
+class OARRanker(nn.Module):
+    """Zero-initialized all-pair objective-aligned residual ranker."""
+
+    def __init__(self, feature_dim: int = 276, width: int = 64) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(feature_dim, width),
+            nn.SiLU(),
+            nn.Linear(width, 1),
+        )
+        nn.init.zeros_(self.network[-1].weight)
+        nn.init.zeros_(self.network[-1].bias)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        raw = self.network(features.detach()).squeeze(-1)
+        return 2.0 * torch.tanh(raw / 2.0)
+
+
+def apply_oar_r2(
+    model: OARRanker,
+    features: torch.Tensor,
+    stock_logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Adjust every detached stock Query-by-class logit with an OAR residual."""
+    residual = model(features)
+    adjusted_logits = stock_logits.detach() + residual
+    return adjusted_logits.sigmoid(), residual
 
 
 def _require_tensor(value: Any, name: str) -> torch.Tensor:
