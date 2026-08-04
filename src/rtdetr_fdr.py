@@ -386,10 +386,42 @@ class FDRControlTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
         return model
 
 
+def run_f1_preflight(context: Any) -> dict[str, Any]:
+    """Run the real CPU equivalence gate through the stable loader API."""
+    from src.fdr_runtime_preflight import run_f1
+
+    return run_f1(context)
+
+
+def run_f2_preflight(context: Any) -> dict[str, Any]:
+    """Run the real FDR tensor and edge-case gate through the stable loader API."""
+    from src.fdr_runtime_preflight import run_f2
+
+    return run_f2(context)
+
+
+def run_f3_preflight(context: Any) -> dict[str, Any]:
+    """Run the real RTX 4090 single-step integration gate."""
+    from src.fdr_runtime_preflight import run_f3
+
+    return run_f3(context)
+
+
+def run_f4_representation_preflight(context: Any) -> dict[str, Any]:
+    """Run the mature-baseline FDR representation audit."""
+    from src.fdr_runtime_preflight import run_f4
+
+    return run_f4(context)
+
+
 __all__ = [
     "FDRControlTrainer",
     "FDRRTDETRDetectionModel",
     "FDRTrainer",
     "FDRTrainingEvidence",
+    "run_f1_preflight",
+    "run_f2_preflight",
+    "run_f3_preflight",
+    "run_f4_representation_preflight",
     "split_fdr_evidence",
 ]
