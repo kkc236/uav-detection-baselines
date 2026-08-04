@@ -47,6 +47,8 @@ def apply_oar_r2(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Adjust every detached stock Query-by-class logit with an OAR residual."""
     residual = model(features)
+    if residual.shape != stock_logits.shape:
+        raise ValueError("residual and stock_logits must have the same shape")
     adjusted_logits = stock_logits.detach() + residual
     return adjusted_logits.sigmoid(), residual
 

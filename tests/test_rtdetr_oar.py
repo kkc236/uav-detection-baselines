@@ -405,3 +405,12 @@ def test_oar_r2_detaches_every_evidence_input_and_trains_model() -> None:
     assert features.grad is None
     assert logits.grad is None
     assert all(parameter.grad is not None for parameter in model.parameters())
+
+
+def test_oar_r2_rejects_broadcast_compatible_residual_shape() -> None:
+    model = OARRanker()
+    features = torch.randn(2, 300, 1, 276)
+    logits = torch.randn(2, 300, 10)
+
+    with pytest.raises(ValueError, match="same shape"):
+        apply_oar_r2(model, features, logits)
