@@ -320,6 +320,25 @@ def test_fdr_trainers_inherit_fixed_paired_musgd_amp_contract():
     assert FDRControlTrainer.controlled_amp_scale == 128.0
 
 
+def test_fdr_setup_skips_only_the_network_dependent_generic_amp_probe(monkeypatch):
+    import ultralytics.engine.trainer as engine_trainer
+
+    original = lambda _model: False
+    observed: list[bool] = []
+    monkeypatch.setattr(engine_trainer, "check_amp", original)
+    monkeypatch.setattr(
+        FixedPairedProtocolMixin,
+        "_setup_train",
+        lambda _self: observed.append(engine_trainer.check_amp(object())),
+    )
+
+    trainer = object.__new__(FDRTrainer)
+    trainer._setup_train()
+
+    assert observed == [True]
+    assert engine_trainer.check_amp is original
+
+
 def test_fdr_gradient_groups_partition_common_and_all_private_parameters():
     model = _fdr(private_seed=40_000)
     trainer = object.__new__(FDRTrainer)

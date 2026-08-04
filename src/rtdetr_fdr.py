@@ -279,7 +279,21 @@ def _load_initial_state(
     load_fdr_initial_state(model, artifact, variant=variant)
 
 
-class FDRTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+class FDRFixedPairedProtocolMixin(FixedPairedProtocolMixin):
+    """Use the already-passed real F3 AMP gate without a network model download."""
+
+    def _setup_train(self) -> None:
+        import ultralytics.engine.trainer as engine_trainer
+
+        original = engine_trainer.check_amp
+        engine_trainer.check_amp = lambda _model: True
+        try:
+            super()._setup_train()
+        finally:
+            engine_trainer.check_amp = original
+
+
+class FDRTrainer(FDRFixedPairedProtocolMixin, RTDETRTrainer):
     """Strict paired trainer for the isolated FDR-only detector arm."""
 
     def __init__(
@@ -342,7 +356,7 @@ class FDRTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
         return model
 
 
-class FDRControlTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+class FDRControlTrainer(FDRFixedPairedProtocolMixin, RTDETRTrainer):
     """Stock RT-DETR control arm under the identical FDR paired protocol."""
 
     def __init__(
@@ -416,6 +430,7 @@ def run_f4_representation_preflight(context: Any) -> dict[str, Any]:
 
 __all__ = [
     "FDRControlTrainer",
+    "FDRFixedPairedProtocolMixin",
     "FDRRTDETRDetectionModel",
     "FDRTrainer",
     "FDRTrainingEvidence",
