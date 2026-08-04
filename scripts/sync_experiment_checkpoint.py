@@ -46,6 +46,8 @@ LIGHTWEIGHT_ARTIFACTS = (
     "args.yaml",
 )
 
+GIT_NETWORK_TIMEOUT_SECONDS = 120
+
 
 def write_json_atomic(path: str | Path, payload: dict[str, Any]) -> None:
     destination = Path(path)
@@ -93,6 +95,7 @@ def _run(
     cwd: Path,
     env: dict[str, str] | None = None,
     check: bool = True,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -102,6 +105,7 @@ def _run(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
 
 
@@ -127,6 +131,22 @@ def _git_environment(results_repo: Path, token_file: Path) -> dict[str, str]:
     return environment
 
 
+def _remote_branch_oid(output: str, branch: str) -> str | None:
+    expected_ref = f"refs/heads/{branch}"
+    matches: list[str] = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or fields[1] != expected_ref:
+            continue
+        oid = fields[0].lower()
+        if len(oid) not in {40, 64} or any(character not in "0123456789abcdef" for character in oid):
+            raise ValueError(f"invalid remote OID for {expected_ref}: {fields[0]!r}")
+        matches.append(oid)
+    if len(matches) > 1:
+        raise ValueError(f"multiple remote OIDs returned for {expected_ref}")
+    return matches[0] if matches else None
+
+
 def ensure_results_checkout(
     results_repo: Path,
     *,
@@ -136,21 +156,44 @@ def ensure_results_checkout(
 ) -> dict[str, str]:
     if not (results_repo / ".git").is_dir():
         results_repo.parent.mkdir(parents=True, exist_ok=True)
-        _run(["git", "clone", repo_url, str(results_repo)], cwd=results_repo.parent)
+        _run(
+            ["git", "clone", repo_url, str(results_repo)],
+            cwd=results_repo.parent,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
     environment = _git_environment(results_repo, token_file)
     _run(["git", "config", "user.name", "uav-training-bot"], cwd=results_repo)
     _run(["git", "config", "user.email", "uav-training-bot@users.noreply.github.com"], cwd=results_repo)
 
     local_branch = _run(["git", "branch", "--list", branch], cwd=results_repo).stdout.strip()
-    remote = _run(["git", "ls-remote", "--heads", "origin", branch], cwd=results_repo, env=environment).stdout
+    remote = _run(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=results_repo,
+        env=environment,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    ).stdout
+    remote_oid = _remote_branch_oid(remote, branch)
     if local_branch:
         _run(["git", "switch", branch], cwd=results_repo)
-        if remote.strip():
-            _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+        if remote_oid is not None:
+            local_oid = _run(["git", "rev-parse", "HEAD"], cwd=results_repo).stdout.strip().lower()
+            if local_oid == remote_oid:
+                return environment
+            _run(
+                ["git", "fetch", "origin", branch],
+                cwd=results_repo,
+                env=environment,
+                timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+            )
             _run(["git", "rebase", "FETCH_HEAD"], cwd=results_repo)
         return environment
-    if remote.strip():
-        _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+    if remote_oid is not None:
+        _run(
+            ["git", "fetch", "origin", branch],
+            cwd=results_repo,
+            env=environment,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
         _run(["git", "switch", "-c", branch, "FETCH_HEAD"], cwd=results_repo)
     else:
         _run(["git", "switch", "-c", branch], cwd=results_repo)
@@ -176,6 +219,7 @@ def commit_and_push_results(
             cwd=results_repo,
             env=environment,
             check=False,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )
         if pushed.returncode == 0:
             return
@@ -184,9 +228,19 @@ def commit_and_push_results(
             for marker in ("non-fast-forward", "fetch first", "[rejected]")
         ):
             pushed.check_returncode()
-        _run(["git", "fetch", "origin", branch], cwd=results_repo, env=environment)
+        _run(
+            ["git", "fetch", "origin", branch],
+            cwd=results_repo,
+            env=environment,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
         _run(["git", "rebase", "FETCH_HEAD"], cwd=results_repo)
-    _run(["git", "push", "origin", f"HEAD:{branch}"], cwd=results_repo, env=environment)
+    _run(
+        ["git", "push", "origin", f"HEAD:{branch}"],
+        cwd=results_repo,
+        env=environment,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    )
 
 
 def checkpoint_tree_fingerprint(run_dir: Path) -> tuple[tuple[str, int, int], ...]:

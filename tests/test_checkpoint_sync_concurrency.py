@@ -12,6 +12,158 @@ def git(*arguments: str, cwd: Path) -> str:
     return subprocess.check_output(["git", *arguments], cwd=cwd, text=True).strip()
 
 
+def _create_results_origin(tmp_path: Path) -> tuple[Path, Path]:
+    seed = tmp_path / "seed"
+    origin = tmp_path / "origin.git"
+    seed.mkdir()
+    git("init", "-b", "main", cwd=seed)
+    git("config", "user.name", "test", cwd=seed)
+    git("config", "user.email", "test@example.com", cwd=seed)
+    (seed / "README.md").write_text("seed", encoding="utf-8")
+    git("add", "README.md", cwd=seed)
+    git("commit", "-m", "seed", cwd=seed)
+    git("branch", "training-results", cwd=seed)
+    git("clone", "--bare", str(seed), str(origin), cwd=tmp_path)
+    return seed, origin
+
+
+def test_equal_remote_oid_skips_fetch_and_rebase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = importlib.import_module("scripts.sync_experiment_checkpoint")
+    _, origin = _create_results_origin(tmp_path)
+    checkout = tmp_path / "checkout"
+    token_file = tmp_path / "github_token"
+    token_file.write_text("test-token", encoding="utf-8")
+    sync.ensure_results_checkout(
+        checkout,
+        repo_url=str(origin),
+        branch="training-results",
+        token_file=token_file,
+    )
+    original_run = sync._run
+    calls: list[list[str]] = []
+
+    def tracked(command, **kwargs):
+        calls.append(list(command))
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(sync, "_run", tracked)
+    sync.ensure_results_checkout(
+        checkout,
+        repo_url=str(origin),
+        branch="training-results",
+        token_file=token_file,
+    )
+
+    assert any(command[1] == "ls-remote" for command in calls)
+    assert any(command[1:3] == ["rev-parse", "HEAD"] for command in calls)
+    assert not any(command[1] == "fetch" for command in calls)
+    assert not any(command[1] == "rebase" for command in calls)
+
+
+def test_different_remote_oid_fetches_and_rebases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = importlib.import_module("scripts.sync_experiment_checkpoint")
+    _, origin = _create_results_origin(tmp_path)
+    checkout = tmp_path / "checkout"
+    writer = tmp_path / "writer"
+    token_file = tmp_path / "github_token"
+    token_file.write_text("test-token", encoding="utf-8")
+    sync.ensure_results_checkout(
+        checkout,
+        repo_url=str(origin),
+        branch="training-results",
+        token_file=token_file,
+    )
+    git("clone", str(origin), str(writer), cwd=tmp_path)
+    git("switch", "training-results", cwd=writer)
+    git("config", "user.name", "test", cwd=writer)
+    git("config", "user.email", "test@example.com", cwd=writer)
+    (writer / "remote.txt").write_text("new remote commit", encoding="utf-8")
+    git("add", "remote.txt", cwd=writer)
+    git("commit", "-m", "advance remote", cwd=writer)
+    git("push", "origin", "training-results", cwd=writer)
+    original_run = sync._run
+    calls: list[list[str]] = []
+
+    def tracked(command, **kwargs):
+        calls.append(list(command))
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(sync, "_run", tracked)
+    sync.ensure_results_checkout(
+        checkout,
+        repo_url=str(origin),
+        branch="training-results",
+        token_file=token_file,
+    )
+
+    assert any(command[1] == "fetch" for command in calls)
+    assert any(command[1] == "rebase" for command in calls)
+    assert git("rev-parse", "HEAD", cwd=checkout) == git(
+        f"--git-dir={origin}", "rev-parse", "training-results", cwd=tmp_path
+    )
+
+
+def test_git_network_calls_use_one_finite_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = importlib.import_module("scripts.sync_experiment_checkpoint")
+    results_repo = tmp_path / "results"
+    (results_repo / ".git").mkdir(parents=True)
+    token_file = tmp_path / "github_token"
+    token_file.write_text("test-token", encoding="utf-8")
+    calls: list[tuple[list[str], object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append((list(command), kwargs.get("timeout")))
+        if command[1:3] == ["branch", "--list"]:
+            stdout = "training-results\n"
+        elif command[1] == "ls-remote":
+            stdout = f"{'a' * 40}\trefs/heads/training-results\n"
+        elif command[1:3] == ["rev-parse", "HEAD"]:
+            stdout = f"{'b' * 40}\n"
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(sync, "_run", fake_run)
+    monkeypatch.setattr(sync, "_git_environment", lambda *_args: {})
+    sync.ensure_results_checkout(
+        results_repo,
+        repo_url="https://example.invalid/results.git",
+        branch="training-results",
+        token_file=token_file,
+    )
+    result_directory = results_repo / "results" / "run"
+    result_directory.mkdir(parents=True)
+    sync.commit_and_push_results(
+        results_repo,
+        result_directory=result_directory,
+        completed_epoch=1,
+        branch="training-results",
+        environment={},
+    )
+
+    network_calls = [
+        (command, timeout)
+        for command, timeout in calls
+        if command[1] in {"ls-remote", "fetch", "push"}
+    ]
+    assert {command[1] for command, _ in network_calls} == {
+        "ls-remote",
+        "fetch",
+        "push",
+    }
+    assert network_calls
+    assert all(
+        isinstance(timeout, (int, float)) and 0 < timeout <= 300
+        for _, timeout in network_calls
+    )
+
+
 @pytest.mark.parametrize(
     "module_name",
     ("scripts.sync_btdse_checkpoint", "scripts.sync_experiment_checkpoint"),
