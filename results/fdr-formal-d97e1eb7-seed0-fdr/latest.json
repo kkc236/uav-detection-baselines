@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 501575069,
-    "asset_name": "fdr-formal-seed0-fdr-d97e1eb7-epoch-0057.pt",
-    "bytes": 200017561,
-    "sha256": "944139a0471408fbaf5a3c8035d5a083c41084a0f317b56986e2221748b86d6c"
+    "asset_id": 501859302,
+    "asset_name": "fdr-formal-seed0-fdr-d97e1eb7-epoch-0100.pt",
+    "bytes": 200024985,
+    "sha256": "c2f638744508adfe7b6c4a1ef3e08c503273f628062e4650ad59ffff4c6588c2"
   },
-  "completed_epoch": 57,
-  "published_at": "2026-08-04T16:42:03.699099+00:00",
+  "completed_epoch": 100,
+  "published_at": "2026-08-04T21:53:59.765119+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live",
   "run_name": "fdr-formal-d97e1eb7-seed0-fdr"
 }
