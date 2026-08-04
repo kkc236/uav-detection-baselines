@@ -114,6 +114,24 @@ def test_topk_per_class_mask_selects_exactly_k_queries_per_class() -> None:
     assert not bool(mask[:-20].any())
 
 
+def test_topk_per_class_mask_breaks_boundary_ties_by_lower_query_index() -> None:
+    probabilities = torch.zeros(300, 2)
+    for class_index in range(2):
+        higher = torch.arange(class_index, class_index + 38, 2)
+        tied = torch.arange(class_index + 38, class_index + 68, 4)
+        probabilities[higher, class_index] = 2
+        probabilities[tied, class_index] = 1
+
+    mask = topk_per_class_mask(probabilities, 20)
+
+    for class_index in range(2):
+        higher = torch.arange(class_index, class_index + 38, 2)
+        tied = torch.arange(class_index + 38, class_index + 68, 4)
+        assert bool(mask[higher, class_index].all())
+        assert bool(mask[tied[0], class_index])
+        assert not bool(mask[tied[1:], class_index].any())
+
+
 @pytest.mark.parametrize("k", [20, 40, 60, 100])
 def test_topk_per_class_mask_accepts_every_frozen_k(k: int) -> None:
     probabilities = torch.rand(300, 3)

@@ -50,7 +50,9 @@ def topk_per_class_mask(probabilities: torch.Tensor, k: int) -> torch.Tensor:
         raise ValueError("probabilities must contain at least k queries")
     _require_finite(probabilities, "probabilities")
 
-    indices = probabilities.topk(k, dim=0).indices
+    indices = torch.argsort(
+        probabilities, dim=0, descending=True, stable=True
+    )[:k]
     mask = torch.zeros_like(probabilities, dtype=torch.bool)
     mask.scatter_(0, indices, True)
     return mask
