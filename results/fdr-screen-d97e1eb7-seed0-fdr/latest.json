@@ -1,0 +1,12 @@
+{
+  "checkpoint": {
+    "asset_id": 501135287,
+    "asset_name": "fdr-screen-seed0-fdr-d97e1eb7-epoch-0030.pt",
+    "bytes": 200012889,
+    "sha256": "4e3e7a7c2d942a59d276cc0630a64a62690d4be4ab471e9521fec13c2c8b410e"
+  },
+  "completed_epoch": 30,
+  "published_at": "2026-08-04T09:16:34.041231+00:00",
+  "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-screen-d97e1eb7-live",
+  "run_name": "fdr-screen-d97e1eb7-seed0-fdr"
+}
