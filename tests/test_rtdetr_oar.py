@@ -5,10 +5,14 @@ import torch
 
 from src.rtdetr_oar import (
     OARRanker,
+    RankPairs,
     apply_oar_r2,
+    boundary_rank_loss,
+    build_boundary_pairs,
     oracle_score_families,
     restrict_oracle,
     select_candidate_k,
+    teacher_utility,
     topk_per_class_mask,
 )
 
@@ -414,3 +418,127 @@ def test_oar_r2_rejects_broadcast_compatible_residual_shape() -> None:
 
     with pytest.raises(ValueError, match="same shape"):
         apply_oar_r2(model, features, logits)
+
+
+def test_teacher_utility_matches_detached_probability_times_squared_quality() -> None:
+    stock_logits = torch.tensor(
+        [[-1.0, 0.0], [1.0, 2.0]], dtype=torch.float64, requires_grad=True
+    )
+    quality = torch.tensor(
+        [[0.25, 0.5], [0.75, 1.0]], dtype=torch.float64, requires_grad=True
+    )
+
+    utility = teacher_utility(stock_logits, quality)
+
+    expected = stock_logits.detach().sigmoid() * quality.detach().square()
+    torch.testing.assert_close(utility, expected, rtol=0, atol=0)
+    assert not utility.requires_grad
+
+
+def test_teacher_utility_rejects_broadcast_compatible_shapes() -> None:
+    with pytest.raises(ValueError, match="same shape"):
+        teacher_utility(torch.zeros(300, 10), torch.ones(300, 1))
+
+
+def test_boundary_pairs_are_byte_deterministic_unique_oriented_and_exactly_capped() -> None:
+    teacher = torch.linspace(1.0, 0.0, 3000)
+    stock = teacher.roll(600)
+
+    first = build_boundary_pairs(teacher, stock)
+    second = build_boundary_pairs(teacher, stock)
+
+    assert first.preferred.numpy().tobytes() == second.preferred.numpy().tobytes()
+    assert first.other.numpy().tobytes() == second.other.numpy().tobytes()
+    assert first.weight.numpy().tobytes() == second.weight.numpy().tobytes()
+    assert first.preferred.numel() == 2048 + 299 + 300
+    oriented = list(zip(first.preferred.tolist(), first.other.tolist()))
+    assert len(set(oriented)) == len(oriented)
+    assert torch.all(teacher[first.preferred] > teacher[first.other])
+    assert torch.equal(
+        first.preferred[:2048],
+        torch.arange(300).repeat_interleave(300)[:2048],
+    )
+    assert torch.equal(
+        first.other[:2048],
+        torch.arange(600, 900).repeat(300)[:2048],
+    )
+    assert torch.equal(first.preferred[2048:2347], torch.arange(299))
+    assert torch.equal(first.other[2048:2347], torch.arange(1, 300))
+    assert torch.equal(first.preferred[2347:], torch.arange(300))
+    assert torch.equal(first.other[2347:], torch.arange(300, 600))
+    torch.testing.assert_close(
+        first.weight,
+        teacher[first.preferred] - teacher[first.other],
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_boundary_pairs_include_candidates_outside_old_top100_per_class_pool() -> None:
+    teacher = torch.linspace(1.0, 0.0, 3000)
+    stock = teacher.roll(600)
+    old_pool = topk_per_class_mask(stock.reshape(300, 10), 100).flatten()
+
+    pairs = build_boundary_pairs(teacher, stock)
+
+    assert bool((~old_pool[pairs.preferred]).any())
+    assert bool((~old_pool[pairs.other]).any())
+
+
+def test_boundary_pairs_use_lower_flat_index_rank_ties_and_exclude_teacher_ties() -> None:
+    teacher = torch.linspace(1.0, 0.0, 3000)
+    teacher[0] = teacher[1] = 2.0
+    stock = teacher.clone()
+
+    pairs = build_boundary_pairs(teacher, stock)
+    oriented = set(zip(pairs.preferred.tolist(), pairs.other.tolist()))
+
+    assert (0, 1) not in oriented
+    assert (1, 0) not in oriented
+    assert (1, 2) in oriented
+    assert torch.all(teacher[pairs.preferred] > teacher[pairs.other])
+
+
+def test_boundary_pairs_drop_all_exact_teacher_ties() -> None:
+    teacher = torch.ones(3000)
+    stock = torch.arange(3000, dtype=torch.float32)
+
+    pairs = build_boundary_pairs(teacher, stock)
+
+    assert pairs.preferred.numel() == 0
+    assert pairs.other.numel() == 0
+    assert pairs.weight.numel() == 0
+
+
+def test_boundary_rank_loss_prefers_teacher_order_and_backpropagates_only_logits() -> None:
+    pairs = RankPairs(
+        preferred=torch.tensor([0, 2]),
+        other=torch.tensor([1, 3]),
+        weight=torch.tensor([1.0, 0.5]),
+    )
+    aligned_logits = torch.tensor([2.0, -2.0, 1.0, 0.0], requires_grad=True)
+    reversed_logits = torch.tensor([-2.0, 2.0, 0.0, 1.0])
+
+    aligned = boundary_rank_loss(aligned_logits, pairs)
+    reversed_loss = boundary_rank_loss(reversed_logits, pairs)
+    aligned.backward()
+
+    assert aligned < reversed_loss
+    assert aligned_logits.grad is not None
+    assert torch.isfinite(aligned_logits.grad).all()
+    assert pairs.weight.grad is None
+
+
+def test_boundary_rank_loss_flattens_all_pairs_and_handles_empty_pairs() -> None:
+    logits = torch.zeros(300, 10, requires_grad=True)
+    pairs = RankPairs(
+        preferred=torch.empty(0, dtype=torch.long),
+        other=torch.empty(0, dtype=torch.long),
+        weight=torch.empty(0),
+    )
+
+    loss = boundary_rank_loss(logits, pairs)
+    loss.backward()
+
+    assert loss.item() == 0.0
+    assert torch.equal(logits.grad, torch.zeros_like(logits))

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from src.oar_protocol import OAR_GAIN_RECOVERY, OAR_K_GRID
+from src.oar_protocol import (
+    OAR_GAIN_RECOVERY,
+    OAR_K_GRID,
+    OAR_NUM_CLASSES,
+    OAR_NUM_QUERIES,
+    OAR_PAIR_CAP,
+)
 from src.rtdetr_quality_oracle import same_class_iou_quality
 
 
@@ -53,6 +61,15 @@ def apply_oar_r2(
     return adjusted_logits.sigmoid(), residual
 
 
+@dataclass(frozen=True)
+class RankPairs:
+    """Immutable teacher-oriented pair indices and detached utility-gap weights."""
+
+    preferred: torch.Tensor
+    other: torch.Tensor
+    weight: torch.Tensor
+
+
 def _require_tensor(value: Any, name: str) -> torch.Tensor:
     if not isinstance(value, torch.Tensor):
         raise TypeError(f"{name} must be a tensor")
@@ -69,6 +86,170 @@ def _require_floating_tensor(value: Any, name: str) -> torch.Tensor:
 def _require_finite(value: torch.Tensor, name: str) -> None:
     if not bool(torch.isfinite(value).all()):
         raise ValueError(f"{name} must contain only finite values")
+
+
+def teacher_utility(
+    stock_logits: torch.Tensor,
+    quality: torch.Tensor,
+) -> torch.Tensor:
+    """Return the detached objective-aligned teacher utility for every pair."""
+    stock_logits = _require_floating_tensor(stock_logits, "stock_logits")
+    quality = _require_floating_tensor(quality, "quality")
+    if stock_logits.shape != quality.shape:
+        raise ValueError("stock_logits and quality must have the same shape")
+    if stock_logits.device != quality.device:
+        raise ValueError("stock_logits and quality must share a device")
+    _require_finite(stock_logits, "stock_logits")
+    _require_finite(quality, "quality")
+    return stock_logits.detach().sigmoid() * quality.detach().square()
+
+
+def _oriented_non_tied_pairs(
+    teacher: torch.Tensor,
+    first: torch.Tensor,
+    second: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Orient candidate pairs by teacher utility and remove exact ties."""
+    first_utility = teacher[first]
+    second_utility = teacher[second]
+    non_tied = first_utility != second_utility
+    first = first[non_tied]
+    second = second[non_tied]
+    first_preferred = first_utility[non_tied] > second_utility[non_tied]
+    preferred = torch.where(first_preferred, first, second)
+    other = torch.where(first_preferred, second, first)
+    return preferred, other
+
+
+def build_boundary_pairs(
+    teacher: torch.Tensor,
+    stock: torch.Tensor,
+) -> RankPairs:
+    """Build the frozen all-3,000-pair Top-300 boundary supervision."""
+    teacher = _require_floating_tensor(teacher, "teacher")
+    stock = _require_floating_tensor(stock, "stock")
+    expected_pairs = OAR_NUM_QUERIES * OAR_NUM_CLASSES
+    if teacher.ndim != 1 or teacher.numel() != expected_pairs:
+        raise ValueError(f"teacher must have shape [{expected_pairs}]")
+    if stock.shape != teacher.shape:
+        raise ValueError("stock and teacher must have the same shape")
+    if stock.device != teacher.device:
+        raise ValueError("stock and teacher must share a device")
+    _require_finite(teacher, "teacher")
+    _require_finite(stock, "stock")
+
+    teacher = teacher.detach()
+    stock = stock.detach()
+    teacher_order = torch.argsort(teacher, descending=True, stable=True)
+    stock_order = torch.argsort(stock, descending=True, stable=True)
+    teacher_top = teacher_order[:OAR_NUM_QUERIES]
+    stock_top = stock_order[:OAR_NUM_QUERIES]
+
+    teacher_top_mask = torch.zeros(expected_pairs, dtype=torch.bool, device=teacher.device)
+    stock_top_mask = torch.zeros_like(teacher_top_mask)
+    teacher_top_mask[teacher_top] = True
+    stock_top_mask[stock_top] = True
+    teacher_only = teacher_top[~stock_top_mask[teacher_top]]
+    stock_only = stock_top[~teacher_top_mask[stock_top]]
+
+    pair_groups: list[tuple[torch.Tensor, torch.Tensor]] = []
+    if teacher_only.numel() and stock_only.numel():
+        first = teacher_only.repeat_interleave(stock_only.numel())
+        second = stock_only.repeat(teacher_only.numel())
+        preferred, other = _oriented_non_tied_pairs(teacher, first, second)
+        pair_groups.append((preferred[:2048], other[:2048]))
+
+    adjacent_preferred, adjacent_other = _oriented_non_tied_pairs(
+        teacher,
+        teacher_order[: OAR_NUM_QUERIES - 1],
+        teacher_order[1:OAR_NUM_QUERIES],
+    )
+    pair_groups.append((adjacent_preferred, adjacent_other))
+
+    offset_preferred, offset_other = _oriented_non_tied_pairs(
+        teacher,
+        teacher_order[:OAR_NUM_QUERIES],
+        teacher_order[OAR_NUM_QUERIES : 2 * OAR_NUM_QUERIES],
+    )
+    pair_groups.append((offset_preferred, offset_other))
+
+    seen: set[tuple[int, int]] = set()
+    unique_pairs: list[tuple[int, int]] = []
+    for preferred_group, other_group in pair_groups:
+        for preferred_index, other_index in zip(
+            preferred_group.tolist(), other_group.tolist()
+        ):
+            pair = (preferred_index, other_index)
+            if pair not in seen:
+                seen.add(pair)
+                unique_pairs.append(pair)
+
+    if len(unique_pairs) > OAR_PAIR_CAP:
+        raise RuntimeError("boundary pair construction exceeded the frozen cap")
+    if unique_pairs:
+        pair_tensor = torch.tensor(
+            unique_pairs,
+            dtype=torch.long,
+            device=teacher.device,
+        )
+        preferred = pair_tensor[:, 0]
+        other = pair_tensor[:, 1]
+        weight = (teacher[preferred] - teacher[other]).detach()
+    else:
+        preferred = torch.empty(0, dtype=torch.long, device=teacher.device)
+        other = torch.empty(0, dtype=torch.long, device=teacher.device)
+        weight = teacher.new_empty(0)
+
+    if weight.numel() and (
+        not bool(torch.isfinite(weight).all()) or not bool((weight > 0).all())
+    ):
+        raise RuntimeError("boundary pair weights must be finite and positive")
+    return RankPairs(preferred=preferred, other=other, weight=weight)
+
+
+def boundary_rank_loss(
+    adjusted_logits: torch.Tensor,
+    pairs: RankPairs,
+) -> torch.Tensor:
+    """Compute teacher-gap-weighted RankNet loss over flattened adjusted logits."""
+    adjusted_logits = _require_floating_tensor(adjusted_logits, "adjusted_logits")
+    if not isinstance(pairs, RankPairs):
+        raise TypeError("pairs must be RankPairs")
+    _require_finite(adjusted_logits, "adjusted_logits")
+    if pairs.preferred.dtype != torch.long or pairs.other.dtype != torch.long:
+        raise TypeError("pair indices must have dtype torch.long")
+    if not torch.is_floating_point(pairs.weight):
+        raise TypeError("pair weights must be floating-point")
+    if (
+        pairs.preferred.ndim != 1
+        or pairs.other.shape != pairs.preferred.shape
+        or pairs.weight.shape != pairs.preferred.shape
+    ):
+        raise ValueError("pair tensors must be one-dimensional and have the same shape")
+    if any(
+        value.device != adjusted_logits.device
+        for value in (pairs.preferred, pairs.other, pairs.weight)
+    ):
+        raise ValueError("adjusted_logits and pair tensors must share a device")
+    if pairs.weight.numel() and (
+        not bool(torch.isfinite(pairs.weight).all())
+        or not bool((pairs.weight > 0).all())
+    ):
+        raise ValueError("pair weights must be finite and positive")
+
+    flat = adjusted_logits.flatten()
+    if pairs.preferred.numel() and (
+        int(pairs.preferred.min()) < 0
+        or int(pairs.other.min()) < 0
+        or int(pairs.preferred.max()) >= flat.numel()
+        or int(pairs.other.max()) >= flat.numel()
+    ):
+        raise IndexError("pair index is outside adjusted_logits")
+    difference = flat[pairs.preferred] - flat[pairs.other]
+    weight = pairs.weight.detach()
+    element = F.softplus(-difference) * weight
+    denominator = weight.sum().clamp_min(torch.finfo(element.dtype).eps)
+    return element.sum() / denominator
 
 
 def topk_per_class_mask(probabilities: torch.Tensor, k: int) -> torch.Tensor:
