@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -11,7 +12,13 @@ from ultralytics.nn.tasks import RTDETRDetectionModel
 
 from src.fdr_head import FDR_OUTPUT_DIM, FDRDeformableTransformerDecoder
 from src.fdr_loss import FDRDetectionLoss, stock_loss_subtotal
-from src.rtdetr_fdr import FDRRTDETRDetectionModel, split_fdr_evidence
+from src.rtdetr_fdr import (
+    FDRControlTrainer,
+    FDRRTDETRDetectionModel,
+    FDRTrainer,
+    split_fdr_evidence,
+)
+from src.rtdetr_lpr import FixedPairedProtocolMixin
 
 
 EXCLUDED = ("ddf", "teacher", "lqe", "go_lsd", "target_gate")
@@ -304,3 +311,95 @@ def test_no_excluded_modules_and_installed_ultralytics_is_not_modified():
     assert not any(token in name for token in EXCLUDED for name in module_names)
     after = hashlib.sha256(source.read_bytes()).hexdigest()
     assert after == before
+
+
+def test_fdr_trainers_inherit_fixed_paired_musgd_amp_contract():
+    assert issubclass(FDRTrainer, FixedPairedProtocolMixin)
+    assert issubclass(FDRControlTrainer, FixedPairedProtocolMixin)
+    assert FDRTrainer.controlled_amp_scale == 128.0
+    assert FDRControlTrainer.controlled_amp_scale == 128.0
+
+
+def test_fdr_gradient_groups_partition_common_and_all_private_parameters():
+    model = _fdr(private_seed=40_000)
+    trainer = object.__new__(FDRTrainer)
+    trainer.model = model
+    groups = trainer.gradient_parameter_groups()
+    assert set(groups) == {"gradient_norm", "fdr_gradient_norm"}
+    common = {id(parameter) for parameter in groups["gradient_norm"]}
+    private = {id(parameter) for parameter in groups["fdr_gradient_norm"]}
+    expected = {id(parameter) for parameter in model.parameters() if parameter.requires_grad}
+    assert common and private
+    assert common.isdisjoint(private)
+    assert common | private == expected
+
+    named = dict(model.named_parameters())
+    expected_private = {
+        id(parameter)
+        for name, parameter in named.items()
+        if ".dec_bbox_head." in name or ".decoder.pre_bbox_head." in name
+    }
+    assert private == expected_private
+
+
+def test_fdr_and_control_get_model_build_matched_variants():
+    method_trainer = object.__new__(FDRTrainer)
+    method_trainer.data = {"nc": 10, "channels": 3}
+    method_trainer.experiment_seed = 0
+    method_trainer.initial_state_path = None
+    method = method_trainer.get_model(verbose=False)
+    assert isinstance(method, FDRRTDETRDetectionModel)
+    assert method.private_seed == 10_000
+
+    control_trainer = object.__new__(FDRControlTrainer)
+    control_trainer.data = {"nc": 10, "channels": 3}
+    control_trainer.initial_state_path = None
+    control = control_trainer.get_model(verbose=False)
+    assert type(control) is RTDETRDetectionModel
+
+
+def test_trainers_load_protocol_initial_state_with_exact_variant(monkeypatch, tmp_path):
+    artifact = {"authority": "sentinel"}
+    state_path = tmp_path / "initial-state.pt"
+    state_path.write_bytes(b"sentinel")
+    monkeypatch.setattr("src.rtdetr_fdr.torch.load", lambda *args, **kwargs: artifact)
+    calls: list[tuple[object, object, str]] = []
+
+    def fake_load(model, loaded, *, variant):
+        calls.append((model, loaded, variant))
+
+    monkeypatch.setattr("src.rtdetr_fdr.load_fdr_initial_state", fake_load)
+
+    method_trainer = object.__new__(FDRTrainer)
+    method_trainer.data = {"nc": 10, "channels": 3}
+    method_trainer.experiment_seed = 0
+    method_trainer.initial_state_path = state_path
+    method = method_trainer.get_model(verbose=False)
+
+    control_trainer = object.__new__(FDRControlTrainer)
+    control_trainer.data = {"nc": 10, "channels": 3}
+    control_trainer.initial_state_path = state_path
+    control = control_trainer.get_model(verbose=False)
+    assert calls == [(method, artifact, "fdr"), (control, artifact, "control")]
+
+
+def test_fdr_resume_applies_only_runtime_overrides(monkeypatch):
+    trainer = object.__new__(FDRTrainer)
+    trainer.args = SimpleNamespace(epochs=50, workers=8)
+
+    def fake_parent(self, overrides):
+        del overrides
+        self.resume = True
+
+    monkeypatch.setattr(
+        "src.rtdetr_fdr.RTDETRTrainer.check_resume", fake_parent
+    )
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "src.rtdetr_fdr.apply_resume_runtime_overrides",
+        lambda args, overrides: recorded.append(dict(overrides)),
+    )
+    overrides = {"epochs": 100, "workers": 8}
+    trainer.check_resume(overrides)
+    assert recorded == [overrides]
+    assert trainer.args.epochs == 100

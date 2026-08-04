@@ -13,7 +13,9 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from ultralytics.models.rtdetr.train import RTDETRTrainer
 from ultralytics.nn.tasks import RTDETRDetectionModel
+from ultralytics.utils import RANK
 
 from src.fdr_head import (
     FDR_OUTPUT_DIM,
@@ -22,6 +24,9 @@ from src.fdr_head import (
 )
 from src.fdr_loss import FDRDetectionLoss
 from src.fdr_math import REG_MAX, REG_SCALE
+from src.fdr_protocol import load_fdr_initial_state
+from src.rtdetr_lpr import FixedPairedProtocolMixin
+from src.rtdetr_vsf_rmr import apply_resume_runtime_overrides
 
 
 @dataclass(frozen=True)
@@ -262,8 +267,129 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
         return output
 
 
+def _load_initial_state(
+    model: RTDETRDetectionModel,
+    path: str | Path | None,
+    *,
+    variant: str,
+) -> None:
+    if path is None:
+        return
+    artifact = torch.load(Path(path), map_location="cpu", weights_only=False)
+    load_fdr_initial_state(model, artifact, variant=variant)
+
+
+class FDRTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+    """Strict paired trainer for the isolated FDR-only detector arm."""
+
+    def __init__(
+        self,
+        *args: Any,
+        experiment_seed: int = 0,
+        initial_state_path: str | Path | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.experiment_seed = int(experiment_seed)
+        self.initial_state_path = (
+            Path(initial_state_path) if initial_state_path is not None else None
+        )
+        super().__init__(*args, **kwargs)
+
+    def check_resume(self, overrides: dict[str, Any]) -> None:
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)
+            if "epochs" in overrides:
+                self.args.epochs = int(overrides["epochs"])
+
+    def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        common: list[torch.nn.Parameter] = []
+        private: list[torch.nn.Parameter] = []
+        for name, parameter in self.model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            destination = (
+                private
+                if ".dec_bbox_head." in name or ".decoder.pre_bbox_head." in name
+                else common
+            )
+            destination.append(parameter)
+        if not common or not private:
+            raise RuntimeError("FDR stock/private parameter partition is incomplete")
+        return {"gradient_norm": common, "fdr_gradient_norm": private}
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> FDRRTDETRDetectionModel:
+        model = FDRRTDETRDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            private_seed=10_000 + self.experiment_seed,
+        )
+        if weights:
+            model.load(weights)
+        else:
+            _load_initial_state(
+                model,
+                getattr(self, "initial_state_path", None),
+                variant="fdr",
+            )
+        return model
+
+
+class FDRControlTrainer(FixedPairedProtocolMixin, RTDETRTrainer):
+    """Stock RT-DETR control arm under the identical FDR paired protocol."""
+
+    def __init__(
+        self,
+        *args: Any,
+        initial_state_path: str | Path | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.initial_state_path = (
+            Path(initial_state_path) if initial_state_path is not None else None
+        )
+        super().__init__(*args, **kwargs)
+
+    def check_resume(self, overrides: dict[str, Any]) -> None:
+        super().check_resume(overrides)
+        if self.resume:
+            apply_resume_runtime_overrides(self.args, overrides)
+            if "epochs" in overrides:
+                self.args.epochs = int(overrides["epochs"])
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> RTDETRDetectionModel:
+        model = RTDETRDetectionModel(
+            cfg or "rtdetr-l.yaml",
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if weights:
+            model.load(weights)
+        else:
+            _load_initial_state(
+                model,
+                getattr(self, "initial_state_path", None),
+                variant="control",
+            )
+        return model
+
+
 __all__ = [
+    "FDRControlTrainer",
     "FDRRTDETRDetectionModel",
+    "FDRTrainer",
     "FDRTrainingEvidence",
     "split_fdr_evidence",
 ]
