@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 import src.rtdetr_fdr as integration
+import src.fdr_runtime_preflight as runtime
 
 
 def test_default_preflight_gate_symbols_are_callable() -> None:
@@ -51,3 +52,29 @@ def test_adjacent_target_interpolation_rejects_invalid_shapes_and_indices() -> N
                 pass
             else:
                 raise AssertionError("invalid FDR target interpolation was accepted")
+
+
+def test_f1_uses_stock_assignments_for_the_zero_fgl_equivalence(monkeypatch) -> None:
+    class _Head:
+        @staticmethod
+        def postprocess(boxes, scores):
+            return torch.cat((boxes, scores), dim=-1)
+
+    class _Model:
+        model = [_Head()]
+
+    classification = {"model.28.dec_score_head.probe": torch.ones(1)}
+    artifact = {
+        "public_state": classification,
+        "fdr_public_state": classification,
+        "migration": {"public_aliases": {}},
+    }
+    monkeypatch.setattr(
+        runtime,
+        "_models",
+        lambda _context, _device: (_Model(), _Model(), artifact),
+    )
+
+    evidence = runtime.run_f1(object())
+
+    assert evidence["checks"]["fgl_zero_stock_exact"] is True

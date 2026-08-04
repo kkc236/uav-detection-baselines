@@ -168,9 +168,7 @@ def run_f1(context: Any) -> dict[str, Any]:
         nc=3, use_vfl=True, fgl_weight=0.0, supervise_pre_boxes=False
     )
     stock_losses = stock((boxes, scores), batch)
-    extended_losses = extended(
-        (boxes, scores), batch, normal_match_indices=[matches] * 3
-    )
+    extended_losses = extended((boxes, scores), batch)
     stock_exact = set(stock_losses).issubset(extended_losses) and all(
         torch.equal(value, extended_losses[name])
         for name, value in stock_losses.items()
