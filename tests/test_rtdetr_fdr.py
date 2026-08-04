@@ -303,6 +303,20 @@ def test_real_batch_fgl_zero_preserves_exact_stock_subtotal_without_rematching()
     assert fdr.fgl_extra_match_calls == 0
 
 
+def test_validation_loss_accepts_stock_eval_prediction_wrapper():
+    model = _fdr(private_seed=31_001)
+    model.eval()
+    image = torch.zeros(2, 3, 128, 128)
+    targets = {**_targets(2), "img": image}
+    with torch.inference_mode():
+        predictions = model.predict(image)
+        total, displayed = model.loss(targets, predictions)
+
+    assert torch.isfinite(total)
+    assert displayed.shape == (3,)
+    assert torch.isfinite(displayed).all()
+
+
 def test_no_excluded_modules_and_installed_ultralytics_is_not_modified():
     source = Path(inspect.getsourcefile(RTDETRDetectionModel) or "")
     before = hashlib.sha256(source.read_bytes()).hexdigest()

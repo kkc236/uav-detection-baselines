@@ -194,6 +194,10 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
 
         if preds is None:
             preds = self.predict(image, batch=targets)
+        if not self.training and isinstance(preds, tuple) and len(preds) == 2:
+            # Ultralytics validation wraps the five training tensors as
+            # ``(postprocessed, auxiliary)`` before asking the model for loss.
+            preds = preds[1]
         if not isinstance(preds, tuple) or len(preds) != 5:
             raise RuntimeError("stock RT-DETR loss prediction contract changed")
         dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = preds
