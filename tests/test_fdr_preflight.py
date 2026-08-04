@@ -165,7 +165,7 @@ def _f4() -> dict:
     return {
         "status": "passed",
         "official_reference_match": True,
-        "reconstruction_tolerance": 0.02,
+        "unsaturated_reconstruction_tolerance": 0.02,
         "representation": _representation(),
     }
 
@@ -384,6 +384,11 @@ def test_representation_statistics_cover_edges_sizes_and_errors() -> None:
     assert report["count"] == 3
     assert report["reconstruction"]["l1"] == pytest.approx(0.01 / 12.0)
     assert report["reconstruction"]["max"] == pytest.approx(0.01)
+    assert report["unsaturated_reconstruction"] == {
+        "count": 1,
+        "l1": pytest.approx(0.01 / 4.0),
+        "max": pytest.approx(0.01),
+    }
     assert report["saturation"]["per_edge"] == {
         "left": {"count": 2, "rate": pytest.approx(2 / 3)},
         "top": {"count": 1, "rate": pytest.approx(1 / 3)},
@@ -419,7 +424,7 @@ def test_representation_nonfinite_and_invalid_are_counted_and_fail_f4() -> None:
     evidence = {
         "status": "passed",
         "official_reference_match": True,
-        "reconstruction_tolerance": 1.0,
+        "unsaturated_reconstruction_tolerance": 1.0,
         "representation": report,
     }
     with pytest.raises(ValueError, match="non-finite"):
@@ -439,7 +444,7 @@ def test_failed_f4_report_preserves_representation_diagnostics(tmp_path: Path) -
     runners["F4"] = lambda _: {
         "status": "passed",
         "official_reference_match": True,
-        "reconstruction_tolerance": 1.0,
+        "unsaturated_reconstruction_tolerance": 1.0,
         "representation": representation,
     }
 
@@ -450,6 +455,29 @@ def test_failed_f4_report_preserves_representation_diagnostics(tmp_path: Path) -
     assert record["payload"]["representation"]["nonfinite_rows"] == 1
     assert record["payload"]["representation"]["nonfinite_values"] == 2
     assert record["payload"]["representation"]["saturation"]["total"]["count"] == 2
+
+
+def test_f4_tolerance_applies_only_to_representable_unsaturated_rows() -> None:
+    representation = summarize_representation(
+        reference_boxes=[[0.5, 0.5, 0.2, 0.2], [0.4, 0.4, 0.1, 0.1]],
+        reconstructed_boxes=[[0.9, 0.9, 0.8, 0.8], [0.4, 0.4, 0.1, 0.1]],
+        target_indices=[[0, 31, 1, 1], [1, 2, 3, 4]],
+        object_widths=[10.0, 20.0],
+        object_heights=[10.0, 20.0],
+    )
+    evidence = {
+        "status": "passed",
+        "official_reference_match": True,
+        "unsaturated_reconstruction_tolerance": 1e-5,
+        "representation": representation,
+    }
+
+    assert representation["reconstruction"]["max"] > 0.5
+    assert validate_f4_evidence(evidence)["status"] == "passed"
+
+    representation["unsaturated_reconstruction"]["max"] = 2e-5
+    with pytest.raises(ValueError, match="unsaturated reconstruction"):
+        validate_f4_evidence(evidence)
 
 
 def test_cli_exposes_only_authority_paths_and_freezes_runtime() -> None:

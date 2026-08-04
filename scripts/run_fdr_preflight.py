@@ -559,6 +559,17 @@ def summarize_representation(
         for expected, actual in zip(expected_row, actual_row)
         if math.isfinite(expected) and math.isfinite(actual)
     ]
+    unsaturated_indices = [
+        index
+        for index, row in enumerate(targets)
+        if all(math.isfinite(value) and 0 < value < 31 for value in row)
+    ]
+    unsaturated_differences = [
+        abs(actual - expected)
+        for index in unsaturated_indices
+        for expected, actual in zip(reference[index], reconstructed[index])
+        if math.isfinite(expected) and math.isfinite(actual)
+    ]
     per_edge: dict[str, dict[str, Any]] = {}
     total_saturated = 0
     for edge_index, edge in enumerate(EDGE_NAMES):
@@ -602,6 +613,15 @@ def summarize_representation(
             ),
             "max": max(finite_differences, default=0.0),
         },
+        "unsaturated_reconstruction": {
+            "count": len(unsaturated_indices),
+            "l1": (
+                sum(unsaturated_differences) / len(unsaturated_differences)
+                if unsaturated_differences
+                else 0.0
+            ),
+            "max": max(unsaturated_differences, default=0.0),
+        },
         "saturation": {
             "per_edge": per_edge,
             "total": {
@@ -630,9 +650,9 @@ def validate_f4_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
     _require_passed(evidence, "F4")
     if evidence.get("official_reference_match") is not True:
         raise ValueError("F4 does not match the pinned official reference")
-    tolerance = evidence.get("reconstruction_tolerance")
+    tolerance = evidence.get("unsaturated_reconstruction_tolerance")
     if not isinstance(tolerance, (int, float)) or not math.isfinite(tolerance) or tolerance < 0:
-        raise ValueError("F4 reconstruction tolerance is invalid")
+        raise ValueError("F4 unsaturated reconstruction tolerance is invalid")
     representation = _require_mapping(
         evidence.get("representation"), "F4 representation"
     )
@@ -643,8 +663,20 @@ def validate_f4_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
         value = reconstruction.get(field)
         if not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f"F4 reconstruction {field} is non-finite")
-    if reconstruction["max"] > tolerance:
-        raise ValueError("F4 reconstruction error exceeds its frozen tolerance")
+    unsaturated = _require_mapping(
+        representation.get("unsaturated_reconstruction"),
+        "F4 unsaturated reconstruction",
+    )
+    if not isinstance(unsaturated.get("count"), int) or unsaturated["count"] < 1:
+        raise ValueError("F4 has no unsaturated targets for representation parity")
+    for field in ("l1", "max"):
+        value = unsaturated.get(field)
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"F4 unsaturated reconstruction {field} is non-finite")
+    if unsaturated["max"] > tolerance:
+        raise ValueError(
+            "F4 unsaturated reconstruction error exceeds its frozen tolerance"
+        )
     if representation.get("nonfinite_rows") != 0 or representation.get(
         "nonfinite_values"
     ) != 0:

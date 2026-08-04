@@ -675,7 +675,7 @@ def run_f4(context: Any) -> dict[str, Any]:
     return {
         "status": "passed",
         "official_reference_match": official_match,
-        "reconstruction_tolerance": 1e-5,
+        "unsaturated_reconstruction_tolerance": 1e-5,
         "representation": representation,
     }
 
