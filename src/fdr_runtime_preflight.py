@@ -334,7 +334,7 @@ def _fixed_subset(context: Any) -> tuple[Path, tuple[Path, ...], str]:
 def _build_loader(context: Any, *, augment: bool) -> tuple[Any, str]:
     from ultralytics.cfg import get_cfg
     from ultralytics.data.build import build_dataloader
-    from ultralytics.data.dataset import RTDETRDataset
+    from ultralytics.models.rtdetr.train import RTDETRDataset
 
     image_source, _selected, signature = _fixed_subset(context)
     overrides = {

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import inspect
+
 import torch
 
 import src.rtdetr_fdr as integration
 import src.fdr_runtime_preflight as runtime
+
+
+def test_real_loader_uses_ultralytics_840_rtdetr_dataset_location() -> None:
+    source = inspect.getsource(runtime._build_loader)
+    assert "from ultralytics.models.rtdetr.train import RTDETRDataset" in source
 
 
 def test_default_preflight_gate_symbols_are_callable() -> None:
