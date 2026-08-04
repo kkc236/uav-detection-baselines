@@ -1,0 +1,335 @@
+{
+  "engineering": {
+    "arm_checks": {
+      "control": {
+        "finite_metrics": true,
+        "jsonl_30_continuous": true,
+        "jsonl_results_consistent": true,
+        "manifest_valid": true,
+        "results_30_continuous": true,
+        "row_authority": true
+      },
+      "fdr": {
+        "finite_metrics": true,
+        "jsonl_30_continuous": true,
+        "jsonl_results_consistent": true,
+        "manifest_valid": true,
+        "results_30_continuous": true,
+        "row_authority": true
+      }
+    },
+    "checks": {
+      "continuous_30_epochs": true,
+      "control_complete": true,
+      "fdr_complete": true,
+      "finite_metrics": true,
+      "jsonl_results_consistent": true,
+      "paired_authority": true,
+      "same_stage_seed0": true
+    },
+    "complete": true,
+    "errors": []
+  },
+  "formal_eligible": true,
+  "format_version": 1,
+  "frozen_protocol": {
+    "epochs": 30,
+    "scientific_thresholds": {
+      "final_ap75_delta": ">0",
+      "final_map_delta": ">0",
+      "tail3_mean_map_delta": ">0"
+    },
+    "seed": 0,
+    "stage": "screen"
+  },
+  "gate": {
+    "checks": {
+      "final_ap75_strictly_positive": true,
+      "final_map_strictly_positive": true,
+      "tail3_mean_map_strictly_positive": true
+    },
+    "passed": true
+  },
+  "gate_name": "FDR-Gate2-paired-screen-seed0",
+  "loss_trends": {
+    "control": {
+      "loss_bbox": {
+        "direction": "decreasing",
+        "final": 0.5461471676826477,
+        "first3_mean": 0.9879823724428812,
+        "linear_slope": -0.018710134451063107,
+        "minimum": 0.5461471676826477,
+        "tail3_mean": 0.5851847728093466,
+        "tail3_minus_first3": -0.4027975996335347
+      },
+      "loss_class": {
+        "direction": "decreasing",
+        "final": 0.16893617808818817,
+        "first3_mean": 0.5850485414266586,
+        "linear_slope": -0.006245576545546399,
+        "minimum": 0.06168510392308235,
+        "tail3_mean": 0.16818624238173166,
+        "tail3_minus_first3": -0.416862299044927
+      },
+      "loss_giou": {
+        "direction": "decreasing",
+        "final": 2.0993258953094482,
+        "first3_mean": 2.3620924949645996,
+        "linear_slope": -0.014322045700701246,
+        "minimum": 2.0837182998657227,
+        "tail3_mean": 2.089928070704142,
+        "tail3_minus_first3": -0.2721644242604575
+      },
+      "train/cls_loss": {
+        "direction": "decreasing",
+        "final": 0.16894,
+        "first3_mean": 0.5850466666666666,
+        "linear_slope": -0.006245528364849833,
+        "minimum": 0.06169,
+        "tail3_mean": 0.16818666666666668,
+        "tail3_minus_first3": -0.4168599999999999
+      },
+      "train/giou_loss": {
+        "direction": "decreasing",
+        "final": 2.09933,
+        "first3_mean": 2.36209,
+        "linear_slope": -0.014321953281423803,
+        "minimum": 2.08372,
+        "tail3_mean": 2.0899300000000003,
+        "tail3_minus_first3": -0.2721599999999995
+      },
+      "train/l1_loss": {
+        "direction": "decreasing",
+        "final": 0.54615,
+        "first3_mean": 0.9879833333333333,
+        "linear_slope": -0.01871009566184649,
+        "minimum": 0.54615,
+        "tail3_mean": 0.5851866666666666,
+        "tail3_minus_first3": -0.4027966666666667
+      },
+      "val/cls_loss": {
+        "direction": "decreasing",
+        "final": 0.16898,
+        "first3_mean": 0.5943266666666667,
+        "linear_slope": -0.005572941045606232,
+        "minimum": 0.07294,
+        "tail3_mean": 0.21855333333333335,
+        "tail3_minus_first3": -0.3757733333333333
+      },
+      "val/giou_loss": {
+        "direction": "decreasing",
+        "final": 2.01173,
+        "first3_mean": 2.2107300000000003,
+        "linear_slope": -0.014048451612903226,
+        "minimum": 1.78458,
+        "tail3_mean": 1.8968,
+        "tail3_minus_first3": -0.31393000000000026
+      },
+      "val/l1_loss": {
+        "direction": "decreasing",
+        "final": 0.45151,
+        "first3_mean": 1.5074533333333333,
+        "linear_slope": -0.02862766852057843,
+        "minimum": 0.42482,
+        "tail3_mean": 0.4493766666666667,
+        "tail3_minus_first3": -1.0580766666666666
+      }
+    },
+    "fdr": {
+      "loss_bbox": {
+        "direction": "decreasing",
+        "final": 0.3810395896434784,
+        "first3_mean": 1.0221867958704631,
+        "linear_slope": -0.02165340093669955,
+        "minimum": 0.3810395896434784,
+        "tail3_mean": 0.3938164512316386,
+        "tail3_minus_first3": -0.6283703446388245
+      },
+      "loss_bbox_pre": {
+        "direction": "decreasing",
+        "final": 0.4599897265434265,
+        "first3_mean": 1.2732817729314168,
+        "linear_slope": -0.020644657961916477,
+        "minimum": 0.3634059727191925,
+        "tail3_mean": 0.4699077109495799,
+        "tail3_minus_first3": -0.8033740619818368
+      },
+      "loss_class": {
+        "direction": "decreasing",
+        "final": 0.365948349237442,
+        "first3_mean": 0.5650991822282473,
+        "linear_slope": 0.0024844832726659983,
+        "minimum": 0.06831232458353043,
+        "tail3_mean": 0.3601236641407013,
+        "tail3_minus_first3": -0.204975518087546
+      },
+      "loss_fgl": {
+        "direction": "increasing",
+        "final": 0.5784977078437805,
+        "first3_mean": 0.12480069696903229,
+        "linear_slope": 0.01729778146518351,
+        "minimum": 0.08722945302724838,
+        "tail3_mean": 0.5391063292821249,
+        "tail3_minus_first3": 0.4143056323130926
+      },
+      "loss_fgl_aux": {
+        "direction": "increasing",
+        "final": 2.8109350204467773,
+        "first3_mean": 0.622970292965571,
+        "linear_slope": 0.08204061678042002,
+        "minimum": 0.44026538729667664,
+        "tail3_mean": 2.6043612957000732,
+        "tail3_minus_first3": 1.9813910027345023
+      },
+      "loss_giou": {
+        "direction": "decreasing",
+        "final": 1.7391198873519897,
+        "first3_mean": 2.4043918450673423,
+        "linear_slope": -0.02634450378884728,
+        "minimum": 1.7391198873519897,
+        "tail3_mean": 1.7729195356369019,
+        "tail3_minus_first3": -0.6314723094304404
+      },
+      "loss_giou_pre": {
+        "direction": "decreasing",
+        "final": 1.8996756076812744,
+        "first3_mean": 2.591397682825724,
+        "linear_slope": -0.019977994808498295,
+        "minimum": 1.6961960792541504,
+        "tail3_mean": 1.9765645265579224,
+        "tail3_minus_first3": -0.6148331562678018
+      },
+      "train/cls_loss": {
+        "direction": "decreasing",
+        "final": 0.36595,
+        "first3_mean": 0.5651033333333333,
+        "linear_slope": 0.0024843470522803116,
+        "minimum": 0.06831,
+        "tail3_mean": 0.36012333333333335,
+        "tail3_minus_first3": -0.20497999999999994
+      },
+      "train/giou_loss": {
+        "direction": "decreasing",
+        "final": 1.73912,
+        "first3_mean": 2.404393333333333,
+        "linear_slope": -0.02634449833147942,
+        "minimum": 1.73912,
+        "tail3_mean": 1.77292,
+        "tail3_minus_first3": -0.6314733333333331
+      },
+      "train/l1_loss": {
+        "direction": "decreasing",
+        "final": 0.38104,
+        "first3_mean": 1.0221866666666666,
+        "linear_slope": -0.02165338598442714,
+        "minimum": 0.38104,
+        "tail3_mean": 0.39381666666666665,
+        "tail3_minus_first3": -0.6283699999999999
+      },
+      "val/cls_loss": {
+        "direction": "decreasing",
+        "final": 0.45835,
+        "first3_mean": 0.58709,
+        "linear_slope": 0.005941043381535038,
+        "minimum": 0.07871,
+        "tail3_mean": 0.4426566666666667,
+        "tail3_minus_first3": -0.1444333333333333
+      },
+      "val/giou_loss": {
+        "direction": "decreasing",
+        "final": 1.43034,
+        "first3_mean": 2.1621333333333332,
+        "linear_slope": -0.036434627363737496,
+        "minimum": 1.43034,
+        "tail3_mean": 1.4808533333333334,
+        "tail3_minus_first3": -0.6812799999999999
+      },
+      "val/l1_loss": {
+        "direction": "decreasing",
+        "final": 0.26204,
+        "first3_mean": 1.4662,
+        "linear_slope": -0.0369403959955506,
+        "minimum": 0.26204,
+        "tail3_mean": 0.28308333333333335,
+        "tail3_minus_first3": -1.1831166666666666
+      }
+    }
+  },
+  "metrics": {
+    "best": {
+      "control": {
+        "epoch": 29,
+        "map": 0.00143,
+        "map75": 0.0002722273377625888,
+        "precision": 0.12314,
+        "recall": 0.05124
+      },
+      "delta": {
+        "map": 0.01684,
+        "map75": 0.01518604215689413,
+        "precision": -0.050850000000000006,
+        "recall": 0.08592999999999998
+      },
+      "fdr": {
+        "epoch": 30,
+        "map": 0.01827,
+        "map75": 0.015458269494656719,
+        "precision": 0.07229,
+        "recall": 0.13717
+      },
+      "selection": "independent_highest_map_epoch"
+    },
+    "final": {
+      "control": {
+        "map": 0.00026,
+        "map75": 3.0409036836607935e-05,
+        "precision": 0.00662,
+        "recall": 0.02501
+      },
+      "delta": {
+        "map": 0.01801,
+        "map75": 0.01542786045782011,
+        "precision": 0.06566999999999999,
+        "recall": 0.11215999999999998
+      },
+      "epochs": [
+        30
+      ],
+      "fdr": {
+        "map": 0.01827,
+        "map75": 0.015458269494656719,
+        "precision": 0.07229,
+        "recall": 0.13717
+      }
+    },
+    "tail3": {
+      "control": {
+        "map": 0.0009033333333333334,
+        "map75": 0.0002738164323181466,
+        "precision": 0.15172666666666665,
+        "recall": 0.03355333333333333
+      },
+      "delta": {
+        "map": 0.015636666666666667,
+        "map75": 0.013958331800667374,
+        "precision": -0.08141666666666665,
+        "recall": 0.08955333333333332
+      },
+      "epochs": [
+        28,
+        29,
+        30
+      ],
+      "fdr": {
+        "map": 0.01654,
+        "map75": 0.01423214823298552,
+        "precision": 0.07031,
+        "recall": 0.12310666666666666
+      }
+    }
+  },
+  "runs": {
+    "control": "/data/uav/runs/fdr-screen-d97e1eb7/screen-seed0-control-fdr-v1",
+    "fdr": "/data/uav/runs/fdr-screen-d97e1eb7/screen-seed0-fdr-fdr-v1"
+  }
+}
