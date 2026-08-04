@@ -6,7 +6,7 @@
     "sha256": "9330b1848aeaa06b39597d8b83a13ca29e46fcd5bb66ca7bb8f995156764b177"
   },
   "completed_epoch": 7,
-  "published_at": "2026-08-04T10:35:33.481781+00:00",
+  "published_at": "2026-08-04T10:40:45.195779+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live",
   "run_name": "fdr-formal-d97e1eb7-seed0-fdr"
 }
