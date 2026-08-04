@@ -1,0 +1,1 @@
+{"kind":"F1","payload":{"checks":{"classification_stock_exact":true,"cumulative_residual":true,"fgl_zero_stock_exact":true,"matcher_stock_exact":true,"neutral_encode_decode":true,"nms_stock_exact":true,"top300_stock_exact":true},"device":"cpu","status":"passed"},"payload_sha256":"8658CF19C35A9039C683A5A7E6B5143A4E19D4CBB3088772DAE4DC000B2D1972","schema_version":1}

@@ -1,0 +1,23 @@
+{
+  "data": "/data/uav/runs/fdr-formal-d97e1eb7/_fdr-authority/formal-data.yaml",
+  "format_version": 1,
+  "initial_state": {
+    "path": "/data/uav/protocols/fdr-d97e1eb7/initial-state.pt",
+    "sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D"
+  },
+  "protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+  "publication_queue": "/data/uav/publication/fdr-formal-d97e1eb7/queue.jsonl",
+  "run_identity": {
+    "protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "run_id": "fdr-formal-seed0-b54fbb2dfe73-2545f6830263",
+    "seed": 0,
+    "source_sha256": "B54FBB2DFE73DAFBAD140B010BCB697F4FDFB7E75587286036781906B10407B4",
+    "stage": "formal",
+    "variant": "fdr"
+  },
+  "screen_cutoff_epoch": null,
+  "source": {
+    "git_commit": "d97e1eb7f98414752a1c1f38287697db3f2a0679",
+    "tree_sha256": "63C17786E875EB8C7B5BC8027781BEFA0A6C02FA09CF03E3715BB9E023C32B85"
+  }
+}
