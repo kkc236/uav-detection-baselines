@@ -8,7 +8,7 @@
 >
 > 正式模型/训练 authority：`d97e1eb7f98414752a1c1f38287697db3f2a0679`
 >
-> 证据边界：30-epoch 配对筛选结果已冻结；epoch-100 checkpoint 的 YAML 权重严格加载已验证。本文不把权重兼容等同于最终精度结论或完整 trainer-state resume 兼容。
+> 证据边界：30-epoch 配对筛选结果已冻结；epoch-100 checkpoint 已对完整配置和四个消融 YAML 完成严格加载与有限推理；旧格式内嵌 YAML 的 resume 重建及 optimizer/scaler/EMA 元数据保留已经验证。本文不把工程兼容等同于最终精度结论。
 
 ## 摘要
 
@@ -16,7 +16,7 @@
 
 为使结构可见、可复现且便于消融，当前实现将完整定位功能单元声明为 YAML 最后一层 `FDRRTDETRDecoder`，不再依赖“先构建 stock 模型、再在模型外部替换回归头”的隐式入口。完整配置和四份单变量消融配置均保留同一 RT-DETR-L 图结构、同一参数命名合同和同一训练协议。
 
-固定 10% VisDrone 子集、seed0、30 epoch 的配对 Gate2 已通过：最终 mAP、尾三轮平均 mAP、最终 AP75 相对 control 分别为 `+0.01801`、`+0.0156366667` 和 `+0.0154278605`。此外，正式 epoch-100 EMA checkpoint 已由完整 YAML 模型严格加载，950 个状态张量实现 0 missing / 0 unexpected，并完成有限输出推理。该证据证明新 YAML 入口可承接既有正式权重，但不单独证明全数据最终精度提升、所有消融均有效或旧格式 checkpoint 可无损恢复完整 Trainer 状态。
+固定 10% VisDrone 子集、seed0、30 epoch 的配对 Gate2 已通过：最终 mAP、尾三轮平均 mAP、最终 AP75 相对 control 分别为 `+0.01801`、`+0.0156366667` 和 `+0.0154278605`。此外，正式 epoch-100 EMA checkpoint 已由五套 YAML 模型逐一严格加载，950 个状态张量均实现 0 missing / 0 unexpected，并完成有限输出推理。真实旧格式 checkpoint 也已通过声明式模型重建，保留 epoch、updates、optimizer、scaler 和 EMA 载荷。该证据证明新 YAML 入口可承接既有正式权重与恢复载荷，但不单独证明全数据最终精度提升或所有消融均有效。
 
 ## 1. 研究动机与方法定位
 
@@ -205,7 +205,7 @@ L=L_{stock}+0.15L_{FGL}^{main}+0.15\sum_lL_{FGL,l}^{aux}
 
 四个消融 YAML 均是可独立构建的完整模型文件，不依赖运行时命令修改字段。静态配置测试已证明每个消融相对完整 YAML 只改变表中一个叶字段，并且第 0--27 层与 Ultralytics 8.4.90 stock 图一致。
 
-为兼容正式 checkpoint，`no-prebox` 不删除 `pre_bbox_head` 参数，只关闭它作为分布 reference 的作用；有效 criterion 同时应关闭 pre-box 辅助损失。该配置当前仍有一项收口工作：FGL target encoding 在 `preliminary_box=false` 时必须使用原始 layer-0 reference，而不能继续使用计算但未路由的 pre-box。该语义的一致性测试完成前，`no-prebox` 只能作为结构兼容配置，不能作为论文最终消融结果。
+为兼容正式 checkpoint，`no-prebox` 不删除 `pre_bbox_head` 参数，只关闭它作为分布 reference 的作用；有效 criterion 同时关闭 pre-box 辅助损失。FGL target encoding 在 `preliminary_box=false` 时使用原始 `references[0]`，DN 分支使用 `dn_references[0]`，不再使用未路由的 pre-box；该语义已由故意构造不同 reference/pre-box 的测试覆盖。
 
 Stock baseline 不属于第五个 FDR 消融。它继续使用 Ultralytics 原生 `rtdetr-l.yaml` 和四维连续回归头。
 
@@ -231,15 +231,18 @@ Stock baseline 不属于第五个 FDR 消融。它继续使用 Ultralytics 原�
 - 加载同一权重后，完整声明式模型与历史注入模型的 eval 输出精确一致；
 - 五份 YAML 均可构造 state-compatible 模型；
 - `fgl_weight` 与 `supervise_pre_boxes` 从 YAML 进入 criterion；
-- 完整正式 epoch-100 EMA checkpoint 已在真实文件上严格加载并完成有限推理。
+- 完整正式 epoch-100 EMA checkpoint 已在真实文件上对五套 YAML 逐一严格加载并完成有限推理；
+- FDR/FDR 与 FDR/Control 并发构建由同一进程级锁隔离，解析器别名不会泄漏；
+- 私有分布头使用独立 `torch.Generator`，与历史 seed 10000 初始化逐位一致且不污染公共 RNG；
+- 旧格式 checkpoint 的 stock-named 内嵌 YAML 可被识别并规范化为声明式 FDR YAML，普通 stock checkpoint 不会被误识别。
 
 已留存的核心回归快照为：
 
 ```text
-150 passed, 3 skipped
+161 passed, 3 skipped
 ```
 
-该数字是一次已完成的专项回归快照，不代表之后新增但尚未收口的兼容性测试也已通过。
+该结果由最终集成工作树独立重跑获得，覆盖 authority、数学、head、loss、protocol、preflight、model、训练 CLI、五套 YAML 与 checkpoint 验证器。
 
 ### 5.3 正式 epoch-100 checkpoint 严格加载报告
 
@@ -253,11 +256,12 @@ Size: 200024985 bytes
 
 公开发布页：<https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live>。下载后必须先核对上述字节数与 SHA256，再执行反序列化和严格加载；Release 页面地址是公开证据入口，不需要也不应在文档或命令中嵌入访问令牌。
 
-机器报告 `artifacts/fdr-yaml-checkpoint-compatibility.json`：
+机器报告 `artifacts/fdr-yaml-checkpoint-compatibility-all-configs.json`：
 
 | 字段 | 结果 |
 |---|---:|
 | checkpoint source | `ema`（artifact 中 `model=null`） |
+| verified YAML count | 5 |
 | state tensor count | 950 |
 | strict load | `true` |
 | missing keys | 0 |
@@ -266,19 +270,11 @@ Size: 200024985 bytes
 | deterministic smoke output | `[1,300,6]` |
 | finite output | `true` |
 
-该报告证明“完整 YAML 架构可直接承接正式 epoch-100 权重并推理”。它不是精度评估报告，也不证明 optimizer、scheduler、AMP scaler、epoch counter 和 RNG 状态已经通过旧格式 checkpoint 完整恢复。
+五个配置均得到相同的严格加载结论和 `[1,300,6]` 有限输出。另一次真实旧格式 checkpoint 重建审计确认：内嵌 `RTDETRDecoder` YAML 被规范化为 `FDRRTDETRDecoder`，模型转移 `950/950`，并保留 `epoch=99`、`updates=10556`、optimizer、AMP scaler 与 EMA 载荷。训练循环后续仍复用 Ultralytics 8.4.90 原生 resume 状态恢复逻辑。
 
-### 5.4 当前尚未完成的兼容性边界
+### 5.4 兼容性结论边界
 
-以下项目不能写成已通过：
-
-- 真实 epoch-100 权重对全部四份消融 YAML 的一次性严格加载报告尚未冻结；
-- 旧 checkpoint 保存的 legacy model YAML 仍命名为 `RTDETRDecoder`，通过 Ultralytics 原生 `check_resume → setup_model` 重建完整 Trainer 时会被新模型入口拒绝；
-- declarative 模型与历史注入模型的完整训练态输出、DN evidence、FDR loss 和 total loss 的逐张量精确 parity 仍需最终测试；
-- clean subprocess 中经 Ultralytics 通用 loader 对自定义类 checkpoint 的序列化往返尚未冻结；
-- 当前 YAML parser 注册过程的并发构建隔离仍在加固，完成前建议模型构建保持单进程串行。
-
-这些待办不否定已经完成的 epoch-100 权重严格加载，但限制了可以宣称的兼容范围。
+已经可以主张：五套 YAML 的网络状态合同与正式权重兼容；完整配置与历史注入式实现的 state-dict 和 eval 输出一致；旧格式 checkpoint 可完成声明式模型重建；并发解析与私有 RNG 已隔离。仍不能把这些工程测试写成“全部消融有效”或“最终精度提升”，因为消融训练、严格 matched baseline 精度比较及多 seed 统计属于独立的科学验证问题。
 
 ## 6. 与 baseline 对齐的统一实验协议
 
@@ -467,18 +463,22 @@ python scripts/train_rtdetr_fdr.py `
 
 Dry-run 会校验 source authority、数据集哈希、initial-state 和冻结配置，但不会创建 Trainer。
 
-### 8.6 验证 epoch-100 权重与完整 YAML
+### 8.6 验证 epoch-100 权重与五套 YAML
 
 ```powershell
 python scripts/verify_fdr_yaml_checkpoint.py `
-  --cfg configs/rtdetr-l-fdr.yaml `
+  --cfgs configs/rtdetr-l-fdr.yaml `
+         configs/rtdetr-l-fdr-no-fgl.yaml `
+         configs/rtdetr-l-fdr-no-prebox-loss.yaml `
+         configs/rtdetr-l-fdr-no-cumulative.yaml `
+         configs/rtdetr-l-fdr-no-prebox.yaml `
   --checkpoint artifacts/formal-checkpoint/fdr-formal-seed0-fdr-d97e1eb7-epoch-0100.pt `
-  --output artifacts/fdr-yaml-checkpoint-compatibility.json `
+  --output artifacts/fdr-yaml-checkpoint-compatibility-all-configs.json `
   --nc 10 `
   --imgsz 128
 ```
 
-成功报告必须同时满足：`strict_load=true`、`missing_keys=0`、`unexpected_keys=0`、`finite_output=true`、`head_type=FDRRTDETRDecoder`。
+成功报告必须同时满足：`all_configs_verified=true`、`config_count=5`，且每个配置均为 `strict_load=true`、`missing_keys=0`、`unexpected_keys=0`、`finite_output=true`、`head_type=FDRRTDETRDecoder`。
 
 ### 8.7 同一不可变 run 内续跑
 
@@ -495,7 +495,7 @@ python scripts/train_rtdetr_fdr.py `
   --resume C:\path\to\same-run\weights\epoch56.pt
 ```
 
-Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json` 中的 run identity、protocol、source、stage 和 variant 必须一致。当前需要额外注意：历史 checkpoint 内嵌的模型 YAML 仍可能命名为 stock `RTDETRDecoder`，完整 Trainer-state 的 legacy resume 适配尚未收口。修复冻结前，上述命令是接口说明，不应被表述为“所有历史 checkpoint 已验证可续跑”。已完成且可以独立依赖的证据是 EMA/model 权重对完整声明式 YAML 的严格加载。
+Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json` 中的 run identity、protocol、source、stage 和 variant 必须一致。历史 checkpoint 内嵌模型 YAML 即使仍命名为 stock `RTDETRDecoder`，只要其 state signature 确认为 FDR，Trainer 会将其规范化为声明式 FDR YAML；普通 stock checkpoint 不会走该兼容分支。真实 epoch-100 checkpoint 已验证模型重建、950/950 权重转移以及 epoch/updates/optimizer/scaler/EMA 载荷保留。
 
 ## 9. 论文中的原创性边界
 
@@ -525,7 +525,7 @@ Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json`
 
 ## 10. 当前结论
 
-当前 YAML 声明式 FDR 模块已经满足三个核心条件：结构在模型配置中显式可见、完整配置可严格承接正式 epoch-100 权重、固定 10% 子集配对筛选已获得 mAP 与 AP75 同向正收益。它可以作为论文三个创新点中的“定位回归机制改进”进行描述。
+当前 YAML 声明式 FDR 模块已经满足四个核心工程条件：结构在模型配置中显式可见、五套配置可严格承接正式 epoch-100 权重、旧 checkpoint 可恢复为声明式模型、固定 10% 子集配对筛选获得 mAP 与 AP75 同向正收益。它可以作为论文三个创新点中的“定位回归机制改进”进行描述。
 
 但最终论文结论仍必须区分三件事：
 
@@ -533,7 +533,7 @@ Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json`
 2. epoch-100 checkpoint 的当前报告是架构/权重兼容证据；
 3. 最终全数据精度、严格 matched baseline 差值、APtiny/APsmall/逐类别指标、各 YAML 消融和延迟审计必须由后续独立评估分别给出。
 
-在这些证据补齐前，最严谨的表述是：“完整 FDR 方法已通过工程门检与配对筛选，YAML 模块可承接正式权重；最终效果归因与全量对照仍在收口。”
+最严谨的表述是：“完整 FDR 方法已通过工程门检、配对筛选、五配置权重兼容与旧 checkpoint 恢复审计；最终效果归因仍需各消融训练，全量收益仍以严格 matched baseline 独立对照为准。”
 
 ## 11. 实现与证据索引
 
@@ -549,7 +549,7 @@ Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json`
 | 训练与逐 epoch 证据入口 | `scripts/train_rtdetr_fdr.py` |
 | checkpoint 严格验证器 | `scripts/verify_fdr_yaml_checkpoint.py` |
 | 30-epoch Gate2 | `research/fdr/evidence/d97e1eb7/fdr-gate-d97e1eb7/gate2.json` |
-| checkpoint 兼容报告 | `artifacts/fdr-yaml-checkpoint-compatibility.json` |
+| checkpoint 五配置兼容报告 | `artifacts/fdr-yaml-checkpoint-compatibility-all-configs.json` |
 
 ## 参考文献
 
