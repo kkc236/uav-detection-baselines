@@ -14,7 +14,7 @@
 
 最终验证：
 
-- 专项回归：`161 passed, 3 skipped`；
+- 专项回归：`167 passed, 3 skipped`；
 - 完整 FDR + 四个消融 YAML：全部严格加载；
 - 每个配置：950 个 tensor、missing/unexpected `0/0`、有限输出 `[1,300,6]`；
 - 旧格式 checkpoint：950/950 模型重建，恢复 8 个 MuSGD 参数组、581 个

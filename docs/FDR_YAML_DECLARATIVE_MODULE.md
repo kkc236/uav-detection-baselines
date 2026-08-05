@@ -239,7 +239,7 @@ Stock baseline 不属于第五个 FDR 消融。它继续使用 Ultralytics 原�
 已留存的核心回归快照为：
 
 ```text
-161 passed, 3 skipped
+167 passed, 3 skipped
 ```
 
 该结果由最终集成工作树独立重跑获得，覆盖 authority、数学、head、loss、protocol、preflight、model、训练 CLI、五套 YAML 与 checkpoint 验证器。
