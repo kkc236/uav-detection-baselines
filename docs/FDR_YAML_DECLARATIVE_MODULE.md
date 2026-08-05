@@ -548,6 +548,7 @@ Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json`
 | 冻结实验协议 | `src/fdr_protocol.py` |
 | 训练与逐 epoch 证据入口 | `scripts/train_rtdetr_fdr.py` |
 | checkpoint 严格验证器 | `scripts/verify_fdr_yaml_checkpoint.py` |
+| legacy resume-step 验证器 | `scripts/verify_fdr_legacy_resume_step.py` |
 | 30-epoch Gate2 | `research/fdr/evidence/d97e1eb7/fdr-gate-d97e1eb7/gate2.json` |
 | checkpoint 五配置兼容报告 | `research/fdr/evidence/d97e1eb7/yaml-module-final/checkpoint-compatibility-all-configs.json` |
 | 真实 legacy resume-step 报告 | `research/fdr/evidence/d97e1eb7/yaml-module-final/legacy-resume-step.json` |

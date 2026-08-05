@@ -27,3 +27,7 @@
 - `checkpoint-compatibility-all-configs.json`
 - `legacy-resume-step.json`
 
+可重复执行的验证入口：
+
+- `scripts/verify_fdr_yaml_checkpoint.py`
+- `scripts/verify_fdr_legacy_resume_step.py`
