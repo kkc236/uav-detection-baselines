@@ -16,6 +16,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.fdr_head import FDRRTDETRDecoder  # noqa: E402
 from src.rtdetr_fdr import FDRRTDETRDetectionModel  # noqa: E402
 
 
@@ -62,24 +63,9 @@ def _primary_output(prediction: Any) -> torch.Tensor:
     raise TypeError("FDR eval inference did not return a tensor output")
 
 
-def verify_checkpoint(
-    *,
-    cfg: str | Path,
-    checkpoint: str | Path,
-    output: str | Path,
-    nc: int = 10,
-    imgsz: int = 128,
-) -> dict[str, Any]:
-    cfg_path = Path(cfg).resolve()
-    checkpoint_path = Path(checkpoint).resolve()
-    output_path = Path(output).resolve()
-
-    model = FDRRTDETRDetectionModel(
-        cfg_path,
-        ch=3,
-        nc=nc,
-        verbose=False,
-    )
+def _load_checkpoint_state(
+    checkpoint_path: Path,
+) -> tuple[dict[str, Any], str]:
     artifact = torch.load(
         checkpoint_path,
         map_location="cpu",
@@ -97,7 +83,28 @@ def verify_checkpoint(
     else:
         source_model = artifact
         source_field = "direct"
-    source_state = source_model.float().state_dict()
+    return source_model.float().state_dict(), source_field
+
+
+def _verify_config(
+    *,
+    cfg_path: Path,
+    source_state: dict[str, Any],
+    nc: int,
+    imgsz: int,
+) -> dict[str, Any]:
+    model = FDRRTDETRDetectionModel(
+        cfg_path,
+        ch=3,
+        nc=nc,
+        verbose=False,
+    )
+    head = model.model[-1]
+    if not isinstance(head, FDRRTDETRDecoder):
+        raise TypeError(
+            "declarative FDR model must end with FDRRTDETRDecoder; "
+            f"got {type(head).__name__} for {cfg_path}"
+        )
     incompatible = model.load_state_dict(source_state, strict=True)
 
     model.eval()
@@ -106,22 +113,88 @@ def verify_checkpoint(
     primary_output = _primary_output(prediction)
     finite_output = bool(torch.isfinite(primary_output).all().item())
     if not finite_output:
-        raise RuntimeError("FDR eval inference produced non-finite output")
+        raise RuntimeError(
+            f"FDR eval inference produced non-finite output for {cfg_path}"
+        )
+
+    return {
+        "cfg": str(cfg_path),
+        "strict_load": True,
+        "missing_keys": len(incompatible.missing_keys),
+        "unexpected_keys": len(incompatible.unexpected_keys),
+        "finite_output": finite_output,
+        "output_shape": list(primary_output.shape),
+        "head_type": type(head).__name__,
+    }
+
+
+def verify_checkpoint(
+    *,
+    cfg: str | Path,
+    checkpoint: str | Path,
+    output: str | Path,
+    nc: int = 10,
+    imgsz: int = 128,
+) -> dict[str, Any]:
+    cfg_path = Path(cfg).resolve()
+    checkpoint_path = Path(checkpoint).resolve()
+    output_path = Path(output).resolve()
+    source_state, source_field = _load_checkpoint_state(checkpoint_path)
+    config_report = _verify_config(
+        cfg_path=cfg_path,
+        source_state=source_state,
+        nc=nc,
+        imgsz=imgsz,
+    )
 
     report = {
-        "cfg": str(cfg_path),
+        **config_report,
+        "checkpoint": str(checkpoint_path),
+        "sha256": checkpoint_sha256(checkpoint_path),
+        "source_field": source_field,
+        "state_tensor_count": sum(
+            isinstance(value, torch.Tensor) for value in source_state.values()
+        ),
+    }
+    write_json_atomic(output_path, report)
+    return report
+
+
+def verify_checkpoint_configs(
+    *,
+    cfgs: Sequence[str | Path],
+    checkpoint: str | Path,
+    output: str | Path,
+    nc: int = 10,
+    imgsz: int = 128,
+) -> dict[str, Any]:
+    cfg_paths = [Path(cfg).resolve() for cfg in cfgs]
+    if not cfg_paths:
+        raise ValueError("at least one declarative FDR config is required")
+    checkpoint_path = Path(checkpoint).resolve()
+    output_path = Path(output).resolve()
+    source_state, source_field = _load_checkpoint_state(checkpoint_path)
+
+    config_reports = [
+        _verify_config(
+            cfg_path=cfg_path,
+            source_state=source_state,
+            nc=nc,
+            imgsz=imgsz,
+        )
+        for cfg_path in cfg_paths
+    ]
+    report = {
         "checkpoint": str(checkpoint_path),
         "sha256": checkpoint_sha256(checkpoint_path),
         "source_field": source_field,
         "strict_load": True,
-        "missing_keys": len(incompatible.missing_keys),
-        "unexpected_keys": len(incompatible.unexpected_keys),
+        "all_configs_verified": True,
+        "config_count": len(config_reports),
         "state_tensor_count": sum(
             isinstance(value, torch.Tensor) for value in source_state.values()
         ),
-        "finite_output": finite_output,
-        "output_shape": list(primary_output.shape),
-        "head_type": type(model.model[-1]).__name__,
+        "configs": config_reports,
     }
     write_json_atomic(output_path, report)
     return report
@@ -131,7 +204,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Strictly verify an existing checkpoint against declarative FDR YAML."
     )
-    parser.add_argument("--cfg", type=Path, required=True)
+    configs = parser.add_mutually_exclusive_group(required=True)
+    configs.add_argument(
+        "--cfg",
+        type=Path,
+        help="single declarative FDR YAML (backward-compatible mode)",
+    )
+    configs.add_argument(
+        "--cfgs",
+        type=Path,
+        nargs="+",
+        help="declarative FDR YAMLs to verify against the same checkpoint",
+    )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--nc", type=int, default=10)
@@ -141,13 +225,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    report = verify_checkpoint(
-        cfg=args.cfg,
-        checkpoint=args.checkpoint,
-        output=args.output,
-        nc=args.nc,
-        imgsz=args.imgsz,
-    )
+    if args.cfgs is not None:
+        report = verify_checkpoint_configs(
+            cfgs=args.cfgs,
+            checkpoint=args.checkpoint,
+            output=args.output,
+            nc=args.nc,
+            imgsz=args.imgsz,
+        )
+    else:
+        report = verify_checkpoint(
+            cfg=args.cfg,
+            checkpoint=args.checkpoint,
+            output=args.output,
+            nc=args.nc,
+            imgsz=args.imgsz,
+        )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

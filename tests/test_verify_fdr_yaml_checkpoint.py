@@ -90,6 +90,7 @@ def test_verify_checkpoint_strictly_loads_and_writes_success_report(
         return real_torch_load(path, **kwargs)
 
     monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
     monkeypatch.setattr(verifier.torch, "load", recording_load)
 
     report = verifier.verify_checkpoint(
@@ -137,6 +138,7 @@ def test_verify_checkpoint_prefers_non_null_ema_when_model_is_null(
     output = tmp_path / "verification.json"
 
     monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
 
     report = verifier.verify_checkpoint(
         cfg=cfg,
@@ -170,6 +172,7 @@ def test_verify_checkpoint_prefers_ema_over_non_null_model(
     output = tmp_path / "verification.json"
 
     monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
 
     report = verifier.verify_checkpoint(
         cfg=cfg,
@@ -196,6 +199,7 @@ def test_verify_checkpoint_accepts_direct_model_artifact(
     output = tmp_path / "verification.json"
 
     monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
 
     report = verifier.verify_checkpoint(
         cfg=cfg,
@@ -234,6 +238,7 @@ def test_verify_checkpoint_rejects_dict_without_non_null_model(
     output = tmp_path / "verification.json"
 
     monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
 
     with pytest.raises(
         ValueError,
@@ -259,11 +264,16 @@ def test_corrupt_checkpoint_key_exits_nonzero_without_success_json(tmp_path: Pat
 import torch
 from scripts import verify_fdr_yaml_checkpoint as verifier
 
+class TargetHead(torch.nn.Module):
+    pass
+
 class Target(torch.nn.Linear):
     def __init__(self, *args, **kwargs):
         super().__init__(1, 1, bias=True)
+        self.model = torch.nn.ModuleList([TargetHead()])
 
 verifier.FDRRTDETRDetectionModel = Target
+verifier.FDRRTDETRDecoder = TargetHead
 raise SystemExit(verifier.main([
     '--cfg', {str(cfg)!r},
     '--checkpoint', {str(checkpoint)!r},
@@ -312,6 +322,119 @@ def test_cli_argument_parsing_requires_paths_and_applies_defaults():
     )
     assert custom.nc == 4
     assert custom.imgsz == 256
+
+
+def test_verify_checkpoint_configs_strictly_verifies_all_five_with_ema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfgs = []
+    for name in (
+        "full",
+        "no-fgl",
+        "no-prebox-loss",
+        "no-cumulative",
+        "no-prebox",
+    ):
+        cfg = tmp_path / f"{name}.yaml"
+        cfg.write_text("nc: 10\n", encoding="utf-8")
+        cfgs.append(cfg)
+    checkpoint = tmp_path / "formal.pt"
+    torch.save({"model": None, "ema": TinyCheckpointModel()}, checkpoint)
+    output = tmp_path / "reports" / "all-configs.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+    monkeypatch.setattr(verifier, "FDRRTDETRDecoder", TinyHead)
+
+    report = verifier.verify_checkpoint_configs(
+        cfgs=cfgs,
+        checkpoint=checkpoint,
+        output=output,
+        nc=10,
+        imgsz=16,
+    )
+
+    assert TinyCheckpointModel.float_calls == 1
+    assert len(TinyFDRModel.instances) == 5
+    assert all(model.loaded_strict is True for model in TinyFDRModel.instances)
+    assert report["checkpoint"] == str(checkpoint.resolve())
+    assert report["sha256"] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert report["source_field"] == "ema"
+    assert report["strict_load"] is True
+    assert report["all_configs_verified"] is True
+    assert report["config_count"] == 5
+    assert report["state_tensor_count"] == 1
+    assert [entry["cfg"] for entry in report["configs"]] == [
+        str(cfg.resolve()) for cfg in cfgs
+    ]
+    assert all(
+        entry
+        == {
+            "cfg": str(cfg.resolve()),
+            "strict_load": True,
+            "missing_keys": 0,
+            "unexpected_keys": 0,
+            "finite_output": True,
+            "output_shape": [1, 2, 6],
+            "head_type": "TinyHead",
+        }
+        for cfg, entry in zip(cfgs, report["configs"], strict=True)
+    )
+    assert json.loads(output.read_text(encoding="utf-8")) == report
+
+
+def test_verify_checkpoint_rejects_non_fdr_head_without_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "wrong-head.yaml"
+    cfg.write_text("nc: 10\n", encoding="utf-8")
+    checkpoint = tmp_path / "formal.pt"
+    torch.save({"ema": TinyCheckpointModel()}, checkpoint)
+    output = tmp_path / "verification.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+
+    with pytest.raises(TypeError, match="must end with FDRRTDETRDecoder"):
+        verifier.verify_checkpoint(
+            cfg=cfg,
+            checkpoint=checkpoint,
+            output=output,
+            imgsz=16,
+        )
+
+    assert not output.exists()
+
+
+def test_cli_supports_all_configs_without_breaking_single_config():
+    parser = verifier.build_parser()
+
+    single = parser.parse_args(
+        ["--cfg", "full.yaml", "--checkpoint", "last.pt", "--output", "one.json"]
+    )
+    assert single.cfg == Path("full.yaml")
+    assert single.cfgs is None
+
+    multiple = parser.parse_args(
+        [
+            "--cfgs",
+            "full.yaml",
+            "no-fgl.yaml",
+            "no-prebox-loss.yaml",
+            "no-cumulative.yaml",
+            "no-prebox.yaml",
+            "--checkpoint",
+            "last.pt",
+            "--output",
+            "all.json",
+        ]
+    )
+    assert multiple.cfg is None
+    assert multiple.cfgs == [
+        Path("full.yaml"),
+        Path("no-fgl.yaml"),
+        Path("no-prebox-loss.yaml"),
+        Path("no-cumulative.yaml"),
+        Path("no-prebox.yaml"),
+    ]
 
 
 def test_atomic_json_keeps_destination_intact_until_replace(
