@@ -1,17 +1,89 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import threading
 
 import pytest
 import torch
 from torch import nn
+from ultralytics.nn.modules.head import RTDETRDecoder
 from ultralytics.nn.modules.transformer import MLP
 
+import src.fdr_head as fdr_head
 from src.fdr_head import (
     FDRDeformableTransformerDecoder,
     build_distribution_heads,
     cumulative_distribution_logits,
 )
+
+
+def _old_global_seed_distribution_heads(
+    hidden_dim: int,
+    num_layers: int = 6,
+    *,
+    private_seed: int,
+) -> nn.ModuleList:
+    """Reference the exact pre-isolation construction sequence."""
+
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(private_seed)
+        heads = nn.ModuleList(
+            [MLP(hidden_dim, hidden_dim, 132, num_layers=3) for _ in range(num_layers)]
+        )
+    for head in heads:
+        nn.init.zeros_(head.layers[-1].weight)
+        nn.init.zeros_(head.layers[-1].bias)
+    return heads
+
+
+def test_yaml_instantiable_fdr_head_is_a_real_rtdetr_decoder_module() -> None:
+    assert hasattr(fdr_head, "FDRRTDETRDecoder")
+    assert issubclass(fdr_head.FDRRTDETRDecoder, RTDETRDecoder)
+
+
+def _legacy_injected_head(seed: int = 0, private_seed: int = 10_000) -> RTDETRDecoder:
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        head = RTDETRDecoder(nc=10, ch=(256, 256, 256))
+    stock_pre_bbox_head = head.dec_bbox_head[0]
+    distribution_heads = build_distribution_heads(
+        head.hidden_dim,
+        head.num_decoder_layers,
+        private_seed=private_seed,
+    )
+    head.decoder = FDRDeformableTransformerDecoder.from_stock(
+        head.decoder,
+        pre_bbox_head=stock_pre_bbox_head,
+    )
+    head.dec_bbox_head = distribution_heads
+    head.decoder.reg_max = 32
+    head.decoder.final_layers = [module.layers[-1] for module in distribution_heads]
+    return head
+
+
+def test_declarative_head_matches_legacy_state_contract_exactly() -> None:
+    expected = _legacy_injected_head()
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        actual = fdr_head.FDRRTDETRDecoder(
+            nc=10,
+            ch=(256, 256, 256),
+            options={
+                "hidden_dim": 256,
+                "num_queries": 300,
+                "num_decoder_layers": 6,
+                "reg_max": 32,
+                "reg_scale": 4.0,
+                "up": 0.5,
+                "cumulative": True,
+                "preliminary_box": True,
+                "private_seed": 10_000,
+            },
+        )
+
+    assert expected.state_dict().keys() == actual.state_dict().keys()
+    for name, tensor in expected.state_dict().items():
+        torch.testing.assert_close(actual.state_dict()[name], tensor, rtol=0, atol=0)
 
 
 class _FakeLayer(nn.Module):
@@ -94,6 +166,82 @@ def test_private_distribution_initialization_does_not_advance_public_rng() -> No
         )
 
 
+def test_private_distribution_initialization_is_bit_exact_with_legacy_seed_sequence() -> None:
+    expected = _old_global_seed_distribution_heads(16, private_seed=10_000)
+    actual = build_distribution_heads(16, 6, private_seed=10_000)
+
+    assert expected.state_dict().keys() == actual.state_dict().keys()
+    for name, tensor in expected.state_dict().items():
+        torch.testing.assert_close(actual.state_dict()[name], tensor, rtol=0, atol=0)
+
+
+def test_concurrent_private_initialization_is_rng_isolated_and_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force nested construction without timing assumptions or sleeps."""
+
+    original_mlp = fdr_head.MLP
+    entered = {name: threading.Event() for name in ("fdr-head-a", "fdr-head-b")}
+    release = {name: threading.Event() for name in entered}
+    completed = {name: threading.Event() for name in entered}
+    first_call_seen: set[str] = set()
+    first_call_lock = threading.Lock()
+    results: dict[str, nn.ModuleList] = {}
+    failures: list[BaseException] = []
+
+    def controlled_mlp(*args, **kwargs):
+        name = threading.current_thread().name
+        if name in entered:
+            with first_call_lock:
+                first_call = name not in first_call_seen
+                first_call_seen.add(name)
+            if first_call:
+                entered[name].set()
+                if not release[name].wait(timeout=10):
+                    raise TimeoutError(f"timed out releasing {name}")
+        return original_mlp(*args, **kwargs)
+
+    def construct() -> None:
+        name = threading.current_thread().name
+        try:
+            results[name] = build_distribution_heads(16, 6, private_seed=10_000)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+        finally:
+            completed[name].set()
+
+    monkeypatch.setattr(fdr_head, "MLP", controlled_mlp)
+    torch.manual_seed(314_159)
+    public_rng_before = torch.random.get_rng_state().clone()
+
+    first = threading.Thread(target=construct, name="fdr-head-a")
+    second = threading.Thread(target=construct, name="fdr-head-b")
+    first.start()
+    assert entered["fdr-head-a"].wait(timeout=10)
+    second.start()
+    assert entered["fdr-head-b"].wait(timeout=10)
+
+    release["fdr-head-a"].set()
+    assert completed["fdr-head-a"].wait(timeout=10)
+    release["fdr-head-b"].set()
+    assert completed["fdr-head-b"].wait(timeout=10)
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not failures
+    torch.testing.assert_close(
+        torch.random.get_rng_state(), public_rng_before, rtol=0, atol=0
+    )
+    assert results.keys() == entered.keys()
+    for left, right in zip(
+        results["fdr-head-a"].state_dict().values(),
+        results["fdr-head-b"].state_dict().values(),
+    ):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+
 def test_private_distribution_seed_is_reproducible_and_distinct() -> None:
     first = build_distribution_heads(16, 6, private_seed=10_000)
     second = build_distribution_heads(16, 6, private_seed=10_000)
@@ -150,6 +298,47 @@ def test_cumulative_logits_keep_prior_distribution_gradients() -> None:
         assert grad is not None
         assert torch.isfinite(grad).all()
         assert grad.abs().sum() > 0
+
+
+def test_no_cumulative_ablation_uses_only_each_layers_distribution() -> None:
+    embed, refs, feats, shapes, pre, dist, scores = _inputs(batch=1, queries=2)
+    for index, head in enumerate(dist):
+        head.layers[-1].bias.data.fill_(float(index + 1))
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(),
+        pre_bbox_head=pre,
+    )
+    decoder.cumulative = False
+    decoder.train()
+    decoder(embed, refs, feats, shapes, dist, scores, _QueryPos(16))
+    assert decoder.last_corner_logits is not None
+    for index, logits in enumerate(decoder.last_corner_logits):
+        torch.testing.assert_close(
+            logits,
+            torch.full_like(logits, float(index + 1)),
+            rtol=0,
+            atol=0,
+        )
+
+
+def test_no_prebox_ablation_routes_original_reference_but_keeps_prebox_evidence() -> None:
+    embed, refs, feats, shapes, pre, dist, scores = _inputs(batch=1, queries=2)
+    pre.layers[-1].weight.data.zero_()
+    pre.layers[-1].bias.data.fill_(2.0)
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(),
+        pre_bbox_head=pre,
+    )
+    decoder.preliminary_box = False
+    decoder.train()
+    decoder(embed, refs, feats, shapes, dist, scores, _QueryPos(16))
+
+    assert decoder.last_pre_bboxes is not None
+    assert decoder.last_references is not None
+    expected_reference = refs.sigmoid().detach()
+    for reference in decoder.last_references:
+        torch.testing.assert_close(reference, expected_reference, rtol=0, atol=0)
+    assert not torch.equal(decoder.last_pre_bboxes, expected_reference)
 
 
 def test_eval_decoder_returns_only_eval_layer_but_keeps_stock_signature() -> None:
