@@ -7,6 +7,9 @@ postprocess implementation remain owned by Ultralytics 8.4.90.
 
 from __future__ import annotations
 
+import re
+import threading
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,19 +17,101 @@ from typing import Any
 import torch
 from torch import Tensor
 from ultralytics.models.rtdetr.train import RTDETRTrainer
-from ultralytics.nn.tasks import RTDETRDetectionModel
+from ultralytics.nn import tasks as ultralytics_tasks
+from ultralytics.nn.tasks import RTDETRDetectionModel, yaml_model_load
 from ultralytics.utils import RANK
 
 from src.fdr_head import (
     FDR_OUTPUT_DIM,
     FDRDeformableTransformerDecoder,
-    build_distribution_heads,
+    FDRRTDETRDecoder,
 )
 from src.fdr_loss import FDRDetectionLoss
-from src.fdr_math import REG_MAX, REG_SCALE
 from src.fdr_protocol import load_fdr_initial_state
 from src.rtdetr_lpr import FixedPairedProtocolMixin
 from src.rtdetr_vsf_rmr import apply_resume_runtime_overrides
+
+
+FDR_MODEL_CFG = Path(__file__).resolve().parents[1] / "configs" / "rtdetr-l-fdr.yaml"
+_MODEL_PARSE_LOCK = threading.RLock()
+
+
+def register_fdr_module() -> None:
+    """Expose the repository-owned head to Ultralytics' YAML parser."""
+
+    ultralytics_tasks.FDRRTDETRDecoder = FDRRTDETRDecoder
+
+
+def build_stock_rtdetr_model(*args: Any, **kwargs: Any) -> RTDETRDetectionModel:
+    """Build a stock model without racing the temporary FDR parser alias."""
+
+    with _MODEL_PARSE_LOCK:
+        return RTDETRDetectionModel(*args, **kwargs)
+
+
+def _legacy_fdr_state_signature(weights: Any) -> bool:
+    """Recognize the exact structural signature of pre-declarative FDR weights."""
+
+    if weights is None or not callable(getattr(weights, "state_dict", None)):
+        return False
+    state = weights.state_dict()
+    has_pre_box = any(
+        name.endswith(".decoder.pre_bbox_head.layers.2.weight")
+        and tensor.ndim >= 1
+        and int(tensor.shape[0]) == 4
+        for name, tensor in state.items()
+    )
+    distribution_layers: set[int] = set()
+    pattern = re.compile(r"(?:^|\.)dec_bbox_head\.(\d+)\.layers\.2\.weight$")
+    for name, tensor in state.items():
+        match = pattern.search(name)
+        if match and tensor.ndim >= 1 and int(tensor.shape[0]) == FDR_OUTPUT_DIM:
+            distribution_layers.add(int(match.group(1)))
+    return has_pre_box and distribution_layers == set(range(6))
+
+
+def _normalise_legacy_fdr_cfg(
+    cfg: str | Path | dict,
+    weights: Any,
+) -> tuple[str | Path | dict, bool]:
+    """Upgrade only signature-proven legacy FDR YAML to the declarative graph."""
+
+    payload = deepcopy(cfg) if isinstance(cfg, dict) else yaml_model_load(cfg)
+    final_layer = payload.get("head", [None])[-1]
+    if not isinstance(final_layer, list) or len(final_layer) != 4:
+        return cfg, False
+    module = final_layer[2]
+    module_name = module if isinstance(module, str) else getattr(module, "__name__", "")
+    if module_name == "FDRRTDETRDecoder":
+        return cfg, False
+    if module_name != "RTDETRDecoder" or not _legacy_fdr_state_signature(weights):
+        return cfg, False
+
+    declarative = yaml_model_load(FDR_MODEL_CFG)
+    if "nc" in payload:
+        declarative["nc"] = payload["nc"]
+    options = declarative["head"][-1][3][-1]
+    options["private_seed"] = int(getattr(weights, "private_seed", 10_000))
+    return declarative, True
+
+
+def _cfg_with_private_seed(
+    cfg: str | Path | dict,
+    private_seed: int | None,
+) -> str | Path | dict:
+    """Return an FDR YAML payload with an optional deterministic seed override."""
+
+    if private_seed is None:
+        return cfg
+    payload = deepcopy(cfg) if isinstance(cfg, dict) else yaml_model_load(cfg)
+    final_layer = payload.get("head", [None])[-1]
+    if len(final_layer) != 4 or final_layer[2] != "FDRRTDETRDecoder":
+        raise TypeError("FDR model YAML must end with FDRRTDETRDecoder")
+    arguments = final_layer[3]
+    if len(arguments) != 3 or not isinstance(arguments[2], dict):
+        raise TypeError("FDRRTDETRDecoder YAML arguments must end with an options mapping")
+    arguments[2]["private_seed"] = int(private_seed)
+    return payload
 
 
 @dataclass(frozen=True)
@@ -97,36 +182,31 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
 
     def __init__(
         self,
-        cfg: str | Path = "rtdetr-l.yaml",
+        cfg: str | Path | dict = FDR_MODEL_CFG,
         ch: int = 3,
         nc: int | None = None,
         verbose: bool = True,
         *,
-        private_seed: int = 10_000,
+        private_seed: int | None = None,
     ) -> None:
-        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+        with _MODEL_PARSE_LOCK:
+            register_fdr_module()
+            cfg = _cfg_with_private_seed(cfg, private_seed)
+            stock_decoder_type = ultralytics_tasks.RTDETRDecoder
+            ultralytics_tasks.RTDETRDecoder = FDRRTDETRDecoder
+            try:
+                super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+            finally:
+                ultralytics_tasks.RTDETRDecoder = stock_decoder_type
         head = self.model[-1]
+        if not isinstance(head, FDRRTDETRDecoder):
+            raise TypeError("FDR model YAML must end with FDRRTDETRDecoder")
         if int(head.num_queries) != 300:
             raise ValueError("the frozen FDR protocol requires exactly 300 queries")
         if int(head.num_decoder_layers) != 6:
             raise ValueError("the frozen FDR protocol requires exactly six decoder layers")
-
-        stock_pre_bbox_head = head.dec_bbox_head[0]
-        distribution_heads = build_distribution_heads(
-            int(head.hidden_dim),
-            int(head.num_decoder_layers),
-            private_seed=int(private_seed),
-        )
-        head.decoder = FDRDeformableTransformerDecoder.from_stock(
-            head.decoder,
-            pre_bbox_head=stock_pre_bbox_head,
-        )
-        head.dec_bbox_head = distribution_heads
-
-        # Read-only compatibility view used by protocol and preflight checks.
-        head.decoder.reg_max = REG_MAX
-        head.decoder.final_layers = [module.layers[-1] for module in distribution_heads]
-        self.private_seed = int(private_seed)
+        self.private_seed = int(head.fdr_options["private_seed"])
+        self.fdr_loss_options = dict(self.yaml.get("fdr_loss", {}))
         self.nc = int(self.yaml["nc"])
         self.last_fdr_evidence: FDRTrainingEvidence | None = None
         self.last_fdr_losses: dict[str, Tensor] = {}
@@ -165,8 +245,11 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
         return FDRDetectionLoss(
             nc=self.nc,
             use_vfl=True,
-            fgl_weight=0.15,
-            supervise_pre_boxes=True,
+            fgl_weight=float(self.fdr_loss_options.get("fgl_weight", 0.15)),
+            supervise_pre_boxes=bool(
+                self.fdr_loss_options.get("supervise_pre_boxes", True)
+                and self.fdr.preliminary_box
+            ),
         )
 
     def loss(
@@ -222,6 +305,12 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
         # when consuming the six-layer corner/pre evidence.
         stock_bboxes = torch.cat([enc_bboxes.unsqueeze(0), dec_bboxes])
         stock_scores = torch.cat([enc_scores.unsqueeze(0), dec_scores])
+        fgl_reference = (
+            evidence.pre_boxes if self.fdr.preliminary_box else evidence.references[0]
+        )
+        dn_fgl_reference = evidence.dn_pre_boxes
+        if not self.fdr.preliminary_box and evidence.dn_references is not None:
+            dn_fgl_reference = evidence.dn_references[0]
         losses = self.criterion.stock_plus_fgl(
             (stock_bboxes, stock_scores),
             targets,
@@ -229,9 +318,9 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
             dn_scores=dn_scores,
             dn_meta=dn_meta,
             corner_logits=evidence.corner_logits,
-            pre_boxes=evidence.pre_boxes,
+            pre_boxes=fgl_reference,
             dn_corner_logits=evidence.dn_corner_logits,
-            dn_pre_boxes=evidence.dn_pre_boxes,
+            dn_pre_boxes=dn_fgl_reference,
         )
         self.last_fdr_losses = losses
         total = sum(losses.values())
@@ -342,12 +431,16 @@ class FDRTrainer(FDRFixedPairedProtocolMixin, RTDETRTrainer):
         weights: str | None = None,
         verbose: bool = True,
     ) -> FDRRTDETRDetectionModel:
+        model_cfg, legacy_resume = _normalise_legacy_fdr_cfg(
+            cfg or FDR_MODEL_CFG,
+            weights,
+        )
         model = FDRRTDETRDetectionModel(
-            cfg or "rtdetr-l.yaml",
+            model_cfg,
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,
-            private_seed=10_000 + self.experiment_seed,
+            private_seed=None if legacy_resume else 10_000 + self.experiment_seed,
         )
         if weights:
             model.load(weights)
@@ -387,7 +480,7 @@ class FDRControlTrainer(FDRFixedPairedProtocolMixin, RTDETRTrainer):
         weights: str | None = None,
         verbose: bool = True,
     ) -> RTDETRDetectionModel:
-        model = RTDETRDetectionModel(
+        model = build_stock_rtdetr_model(
             cfg or "rtdetr-l.yaml",
             nc=self.data["nc"],
             ch=self.data["channels"],
@@ -438,6 +531,7 @@ __all__ = [
     "FDRRTDETRDetectionModel",
     "FDRTrainer",
     "FDRTrainingEvidence",
+    "build_stock_rtdetr_model",
     "run_f1_preflight",
     "run_f2_preflight",
     "run_f3_preflight",

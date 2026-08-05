@@ -95,16 +95,17 @@ def _read_manifest(context: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _models(context: Any, device: torch.device) -> tuple[Any, Any, dict[str, Any]]:
-    from ultralytics.nn.tasks import RTDETRDetectionModel
-
-    from src.rtdetr_fdr import FDRRTDETRDetectionModel
+    from src.rtdetr_fdr import (
+        FDR_MODEL_CFG,
+        FDRRTDETRDetectionModel,
+        build_stock_rtdetr_model,
+    )
 
     _manifest, artifact = _read_manifest(context)
-    control = RTDETRDetectionModel(
+    control = build_stock_rtdetr_model(
         "rtdetr-l.yaml", ch=3, nc=NUM_CLASSES, verbose=False
     ).to(device)
-    method = FDRRTDETRDetectionModel(
-        "rtdetr-l.yaml",
+    method = FDRRTDETRDetectionModel(FDR_MODEL_CFG,
         ch=3,
         nc=NUM_CLASSES,
         verbose=False,

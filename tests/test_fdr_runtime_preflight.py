@@ -23,6 +23,13 @@ def test_default_preflight_gate_symbols_are_callable() -> None:
         assert callable(getattr(integration, name))
 
 
+def test_runtime_gate_constructs_method_from_declarative_fdr_yaml() -> None:
+    source = inspect.getsource(runtime._models)
+    assert "FDR_MODEL_CFG" in source
+    assert "FDRRTDETRDetectionModel(FDR_MODEL_CFG" in source.replace("\n", " ")
+    assert "build_stock_rtdetr_model" in source
+
+
 def test_adjacent_target_interpolation_reconstructs_continuous_distances() -> None:
     from src.fdr_runtime_preflight import interpolate_target_distances
 

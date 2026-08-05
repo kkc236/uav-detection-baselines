@@ -2,26 +2,72 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import threading
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 from ultralytics.models.utils.loss import RTDETRDetectionLoss
-from ultralytics.nn.tasks import RTDETRDetectionModel
+from ultralytics.nn import tasks as ultralytics_tasks
+from ultralytics.nn.tasks import RTDETRDetectionModel, yaml_model_load
 
-from src.fdr_head import FDR_OUTPUT_DIM, FDRDeformableTransformerDecoder
+from src.fdr_head import (
+    FDR_OUTPUT_DIM,
+    FDRDeformableTransformerDecoder,
+    FDRRTDETRDecoder,
+    build_distribution_heads,
+)
 from src.fdr_loss import FDRDetectionLoss, stock_loss_subtotal
 from src.rtdetr_fdr import (
     FDRControlTrainer,
     FDRRTDETRDetectionModel,
     FDRTrainer,
+    FDRTrainingEvidence,
     split_fdr_evidence,
 )
 from src.rtdetr_lpr import FixedPairedProtocolMixin
 
 
 EXCLUDED = ("ddf", "teacher", "lqe", "go_lsd", "target_gate")
+FDR_CONFIG_ROOT = Path("configs")
+
+
+def _declarative_cfg(
+    *,
+    private_seed: int = 10_000,
+    cumulative: bool = True,
+    preliminary_box: bool = True,
+    fgl_weight: float = 0.15,
+    supervise_pre_boxes: bool = True,
+) -> dict:
+    cfg = deepcopy(yaml_model_load("rtdetr-l.yaml"))
+    cfg["head"][-1] = [
+        [21, 24, 27],
+        1,
+        "FDRRTDETRDecoder",
+        [
+            "nc",
+            [256, 256, 256],
+            {
+                "hidden_dim": 256,
+                "num_queries": 300,
+                "num_decoder_layers": 6,
+                "reg_max": 32,
+                "reg_scale": 4.0,
+                "up": 0.5,
+                "cumulative": cumulative,
+                "preliminary_box": preliminary_box,
+                "private_seed": private_seed,
+            },
+        ],
+    ]
+    cfg["fdr_loss"] = {
+        "fgl_weight": fgl_weight,
+        "supervise_pre_boxes": supervise_pre_boxes,
+    }
+    return cfg
 
 
 def _stock(seed: int = 0) -> RTDETRDetectionModel:
@@ -30,11 +76,30 @@ def _stock(seed: int = 0) -> RTDETRDetectionModel:
         return RTDETRDetectionModel("rtdetr-l.yaml", nc=10, verbose=False)
 
 
+def _legacy_fdr(seed: int = 0, private_seed: int = 10_000) -> RTDETRDetectionModel:
+    model = _stock(seed)
+    head = model.model[-1]
+    stock_pre_bbox_head = head.dec_bbox_head[0]
+    distribution_heads = build_distribution_heads(
+        int(head.hidden_dim),
+        int(head.num_decoder_layers),
+        private_seed=private_seed,
+    )
+    head.decoder = FDRDeformableTransformerDecoder.from_stock(
+        head.decoder,
+        pre_bbox_head=stock_pre_bbox_head,
+    )
+    head.dec_bbox_head = distribution_heads
+    head.decoder.reg_max = 32
+    head.decoder.final_layers = [module.layers[-1] for module in distribution_heads]
+    return model
+
+
 def _fdr(seed: int = 0, private_seed: int = 10_000) -> FDRRTDETRDetectionModel:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
         return FDRRTDETRDetectionModel(
-            "rtdetr-l.yaml",
+            _declarative_cfg(private_seed=private_seed),
             nc=10,
             verbose=False,
             private_seed=private_seed,
@@ -70,6 +135,223 @@ def _targets(batch_size: int, *, empty: bool = False) -> dict[str, object]:
     }
 
 
+def test_declarative_yaml_builds_the_fdr_head_without_post_build_replacement() -> None:
+    model = _fdr()
+    assert isinstance(model.model[-1], FDRRTDETRDecoder)
+    assert isinstance(model.fdr, FDRDeformableTransformerDecoder)
+
+
+def test_declarative_model_matches_legacy_state_contract_exactly() -> None:
+    expected = _legacy_fdr()
+    actual = _fdr()
+    assert expected.state_dict().keys() == actual.state_dict().keys()
+    for name, tensor in expected.state_dict().items():
+        torch.testing.assert_close(actual.state_dict()[name], tensor, rtol=0, atol=0)
+
+
+def test_declarative_model_matches_legacy_eval_output_exactly() -> None:
+    expected_model = _legacy_fdr()
+    actual_model = _fdr()
+    actual_model.load_state_dict(expected_model.state_dict(), strict=True)
+    expected_model.eval()
+    actual_model.eval()
+    image = torch.zeros(1, 3, 128, 128)
+    with torch.no_grad():
+        expected_output, expected_raw = expected_model(image)
+        actual_output, actual_raw = actual_model(image)
+
+    torch.testing.assert_close(actual_output, expected_output, rtol=0, atol=0)
+    for actual, expected in zip(actual_raw[:-1], expected_raw[:-1]):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert actual_raw[-1] is expected_raw[-1] is None
+
+
+def test_fdr_yaml_parser_registration_is_restored_after_construction() -> None:
+    stock_decoder_type = ultralytics_tasks.RTDETRDecoder
+    _fdr()
+    assert ultralytics_tasks.RTDETRDecoder is stock_decoder_type
+    assert type(_stock().model[-1]) is stock_decoder_type
+
+
+def test_fdr_model_parsing_is_serialized_across_threads(monkeypatch) -> None:
+    """Two FDR builders must never overlap while the parser alias is installed."""
+
+    import src.rtdetr_fdr as integration
+
+    native_decoder = ultralytics_tasks.RTDETRDecoder
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    second_inside = threading.Event()
+    failures: list[BaseException] = []
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    class FakeFDRHead:
+        num_queries = 300
+        num_decoder_layers = 6
+        fdr_options = {"private_seed": 10_000}
+
+    def fake_parent_init(self, *args, **kwargs):
+        del args, kwargs
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            assert ultralytics_tasks.RTDETRDecoder is FakeFDRHead
+            if threading.current_thread().name == "fdr-first":
+                first_inside.set()
+                assert release_first.wait(2)
+            else:
+                second_inside.set()
+            self.model = [FakeFDRHead()]
+            self.yaml = {"nc": 10, "fdr_loss": {}}
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(integration, "FDRRTDETRDecoder", FakeFDRHead)
+    monkeypatch.setattr(RTDETRDetectionModel, "__init__", fake_parent_init)
+
+    def build() -> None:
+        try:
+            integration.FDRRTDETRDetectionModel(_declarative_cfg(), verbose=False)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    first = threading.Thread(target=build, name="fdr-first")
+    second = threading.Thread(target=build, name="fdr-second")
+    first.start()
+    assert first_inside.wait(2)
+    second.start()
+    try:
+        assert not second_inside.wait(0.1)
+    finally:
+        release_first.set()
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert failures == []
+    assert second_inside.is_set()
+    assert max_active == 1
+    assert ultralytics_tasks.RTDETRDecoder is native_decoder
+
+
+def test_fdr_and_control_model_parsing_share_one_lock(monkeypatch) -> None:
+    """A stock control must not parse while the FDR decoder alias is active."""
+
+    import src.rtdetr_fdr as integration
+
+    native_decoder = ultralytics_tasks.RTDETRDecoder
+    fdr_inside = threading.Event()
+    release_fdr = threading.Event()
+    control_inside = threading.Event()
+    failures: list[BaseException] = []
+    observed_control_alias: list[object] = []
+
+    class FakeFDRHead:
+        num_queries = 300
+        num_decoder_layers = 6
+        fdr_options = {"private_seed": 10_000}
+
+    def fake_parent_init(self, *args, **kwargs):
+        del args, kwargs
+        assert ultralytics_tasks.RTDETRDecoder is FakeFDRHead
+        fdr_inside.set()
+        assert release_fdr.wait(2)
+        self.model = [FakeFDRHead()]
+        self.yaml = {"nc": 10, "fdr_loss": {}}
+
+    class FakeStockModel:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            observed_control_alias.append(ultralytics_tasks.RTDETRDecoder)
+            control_inside.set()
+
+    monkeypatch.setattr(integration, "FDRRTDETRDecoder", FakeFDRHead)
+    monkeypatch.setattr(RTDETRDetectionModel, "__init__", fake_parent_init)
+    monkeypatch.setattr(integration, "RTDETRDetectionModel", FakeStockModel)
+
+    control_trainer = object.__new__(FDRControlTrainer)
+    control_trainer.data = {"nc": 10, "channels": 3}
+    control_trainer.initial_state_path = None
+
+    def build_fdr() -> None:
+        try:
+            integration.FDRRTDETRDetectionModel(_declarative_cfg(), verbose=False)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    def build_control() -> None:
+        try:
+            control_trainer.get_model(verbose=False)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    fdr_thread = threading.Thread(target=build_fdr)
+    control_thread = threading.Thread(target=build_control)
+    fdr_thread.start()
+    assert fdr_inside.wait(2)
+    control_thread.start()
+    try:
+        assert not control_inside.wait(0.1)
+    finally:
+        release_fdr.set()
+    fdr_thread.join(2)
+    control_thread.join(2)
+
+    assert not fdr_thread.is_alive() and not control_thread.is_alive()
+    assert failures == []
+    assert observed_control_alias == [native_decoder]
+    assert ultralytics_tasks.RTDETRDecoder is native_decoder
+
+
+def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
+    model = FDRRTDETRDetectionModel(
+        _declarative_cfg(fgl_weight=0.0, supervise_pre_boxes=False),
+        nc=10,
+        verbose=False,
+    )
+    criterion = model.init_criterion()
+    assert criterion.fgl_weight == 0.0
+    assert criterion.supervise_pre_boxes is False
+
+
+@pytest.mark.parametrize(
+    ("filename", "cumulative", "preliminary_box", "fgl_weight", "pre_loss"),
+    (
+        ("rtdetr-l-fdr.yaml", True, True, 0.15, True),
+        ("rtdetr-l-fdr-no-fgl.yaml", True, True, 0.0, True),
+        ("rtdetr-l-fdr-no-prebox-loss.yaml", True, True, 0.15, False),
+        ("rtdetr-l-fdr-no-cumulative.yaml", False, True, 0.15, True),
+        ("rtdetr-l-fdr-no-prebox.yaml", True, False, 0.15, False),
+    ),
+)
+def test_each_standalone_ablation_yaml_builds_one_compatible_functional_unit(
+    filename: str,
+    cumulative: bool,
+    preliminary_box: bool,
+    fgl_weight: float,
+    pre_loss: bool,
+    fdr_model: FDRRTDETRDetectionModel,
+) -> None:
+    method = FDRRTDETRDetectionModel(
+        FDR_CONFIG_ROOT / filename,
+        nc=10,
+        verbose=False,
+    )
+    assert fdr_model.state_dict().keys() == method.state_dict().keys()
+    for key in fdr_model.state_dict():
+        assert fdr_model.state_dict()[key].shape == method.state_dict()[key].shape
+    assert method.fdr.cumulative is cumulative
+    assert method.fdr.preliminary_box is preliminary_box
+    criterion = method.init_criterion()
+    assert criterion.fgl_weight == fgl_weight
+    assert criterion.supervise_pre_boxes is pre_loss
+
+
 def test_model_replaces_only_decoder_box_contract_and_preserves_public_state():
     stock = _stock()
     method = _fdr()
@@ -96,7 +378,10 @@ def test_private_head_construction_does_not_advance_public_rng():
 
     torch.random.set_rng_state(state)
     FDRRTDETRDetectionModel(
-        "rtdetr-l.yaml", nc=10, verbose=False, private_seed=10_731
+        _declarative_cfg(private_seed=10_731),
+        nc=10,
+        verbose=False,
+        private_seed=10_731,
     )
     actual = torch.random.get_rng_state()
     assert torch.equal(actual, expected)
@@ -303,6 +588,63 @@ def test_real_batch_fgl_zero_preserves_exact_stock_subtotal_without_rematching()
     assert fdr.fgl_extra_match_calls == 0
 
 
+@pytest.mark.parametrize("preliminary_box", (True, False))
+def test_fgl_reference_follows_the_enabled_box_representation(preliminary_box: bool):
+    model = FDRRTDETRDetectionModel(
+        _declarative_cfg(preliminary_box=preliminary_box),
+        nc=10,
+        verbose=False,
+    )
+    model.train()
+    normal_queries, denoising_queries = 2, 1
+    references = torch.full((6, 1, normal_queries, 4), 0.20)
+    pre_boxes = torch.full((1, normal_queries, 4), 0.80)
+    dn_references = torch.full((6, 1, denoising_queries, 4), 0.30)
+    dn_pre_boxes = torch.full((1, denoising_queries, 4), 0.70)
+    model.last_fdr_evidence = FDRTrainingEvidence(
+        corner_logits=torch.zeros(6, 1, normal_queries, FDR_OUTPUT_DIM),
+        references=references,
+        pre_boxes=pre_boxes,
+        dn_corner_logits=torch.zeros(6, 1, denoising_queries, FDR_OUTPUT_DIM),
+        dn_references=dn_references,
+        dn_pre_boxes=dn_pre_boxes,
+    )
+    recorded: dict[str, object] = {}
+
+    class RecordingCriterion:
+        def stock_plus_fgl(self, predictions, targets, **kwargs):
+            del predictions, targets
+            recorded.update(kwargs)
+            zero = torch.zeros((), requires_grad=True)
+            return {"loss_giou": zero, "loss_class": zero, "loss_bbox": zero}
+
+    model.criterion = RecordingCriterion()
+    total_queries = normal_queries + denoising_queries
+    predictions = (
+        torch.zeros(6, 1, total_queries, 4),
+        torch.zeros(6, 1, total_queries, 10),
+        torch.zeros(1, normal_queries, 4),
+        torch.zeros(1, normal_queries, 10),
+        {"dn_num_split": [denoising_queries, normal_queries]},
+    )
+    batch = {
+        "img": torch.zeros(1, 3, 128, 128),
+        "cls": torch.zeros((0, 1)),
+        "bboxes": torch.zeros((0, 4)),
+        "batch_idx": torch.zeros((0,)),
+    }
+
+    total, _displayed = model.loss(batch, predictions)
+
+    assert torch.isfinite(total)
+    expected = pre_boxes if preliminary_box else references[0]
+    expected_dn = dn_pre_boxes if preliminary_box else dn_references[0]
+    torch.testing.assert_close(recorded["pre_boxes"], expected, rtol=0, atol=0)
+    torch.testing.assert_close(recorded["dn_pre_boxes"], expected_dn, rtol=0, atol=0)
+    assert recorded["pre_boxes"].data_ptr() == expected.data_ptr()
+    assert recorded["dn_pre_boxes"].data_ptr() == expected_dn.data_ptr()
+
+
 def test_validation_loss_accepts_stock_eval_prediction_wrapper():
     model = _fdr(private_seed=31_001)
     model.eval()
@@ -436,3 +778,57 @@ def test_fdr_resume_applies_only_runtime_overrides(monkeypatch):
     trainer.check_resume(overrides)
     assert recorded == [overrides]
     assert trainer.args.epochs == 100
+
+
+def test_legacy_fdr_resume_normalizes_stock_yaml_and_preserves_checkpoint_state(
+    monkeypatch,
+):
+    import ultralytics.engine.trainer as engine_trainer
+
+    legacy = _legacy_fdr(private_seed=10_000)
+    legacy.yaml = deepcopy(yaml_model_load("rtdetr-l.yaml"))
+    optimizer_state = {"sentinel": "optimizer"}
+    scaler_state = {"sentinel": "scaler"}
+    checkpoint = {
+        "epoch": 4,
+        "model": legacy,
+        "ema": legacy,
+        "optimizer": optimizer_state,
+        "scaler": scaler_state,
+        "updates": 17,
+    }
+    monkeypatch.setattr(
+        engine_trainer,
+        "load_checkpoint",
+        lambda _path: (legacy, checkpoint),
+    )
+
+    trainer = object.__new__(FDRTrainer)
+    trainer.model = "legacy-formal-last.pt"
+    trainer.args = SimpleNamespace(pretrained=False)
+    trainer.resume = True
+    trainer.data = {"nc": 10, "channels": 3}
+    trainer.experiment_seed = 0
+    trainer.initial_state_path = None
+
+    returned = trainer.setup_model()
+
+    assert returned is checkpoint
+    assert returned["optimizer"] is optimizer_state
+    assert returned["scaler"] is scaler_state
+    assert returned["ema"] is legacy
+    assert isinstance(trainer.model, FDRRTDETRDetectionModel)
+    assert isinstance(trainer.model.model[-1], FDRRTDETRDecoder)
+    assert trainer.model.yaml["head"][-1][2] == "FDRRTDETRDecoder"
+    assert trainer.model.state_dict().keys() == legacy.state_dict().keys()
+
+
+def test_fresh_stock_model_is_not_misclassified_as_legacy_fdr() -> None:
+    trainer = object.__new__(FDRTrainer)
+    trainer.data = {"nc": 10, "channels": 3}
+    trainer.experiment_seed = 0
+    trainer.initial_state_path = None
+    stock = _stock()
+
+    with pytest.raises(TypeError, match="must end with FDRRTDETRDecoder"):
+        trainer.get_model(cfg=stock.yaml, weights=stock, verbose=False)
