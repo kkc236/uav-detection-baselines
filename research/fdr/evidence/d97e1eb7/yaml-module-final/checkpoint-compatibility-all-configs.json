@@ -1,0 +1,17 @@
+{
+  "all_configs_verified": true,
+  "checkpoint": "fdr-formal-seed0-fdr-d97e1eb7-epoch-0100.pt",
+  "checkpoint_release": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live",
+  "sha256": "c2f638744508adfe7b6c4a1ef3e08c503273f628062e4650ad59ffff4c6588c2",
+  "source_field": "ema",
+  "state_tensor_count": 950,
+  "config_count": 5,
+  "configs": [
+    {"cfg": "configs/rtdetr-l-fdr.yaml", "strict_load": true, "missing_keys": 0, "unexpected_keys": 0, "head_type": "FDRRTDETRDecoder", "output_shape": [1, 300, 6], "finite_output": true},
+    {"cfg": "configs/rtdetr-l-fdr-no-fgl.yaml", "strict_load": true, "missing_keys": 0, "unexpected_keys": 0, "head_type": "FDRRTDETRDecoder", "output_shape": [1, 300, 6], "finite_output": true},
+    {"cfg": "configs/rtdetr-l-fdr-no-prebox-loss.yaml", "strict_load": true, "missing_keys": 0, "unexpected_keys": 0, "head_type": "FDRRTDETRDecoder", "output_shape": [1, 300, 6], "finite_output": true},
+    {"cfg": "configs/rtdetr-l-fdr-no-cumulative.yaml", "strict_load": true, "missing_keys": 0, "unexpected_keys": 0, "head_type": "FDRRTDETRDecoder", "output_shape": [1, 300, 6], "finite_output": true},
+    {"cfg": "configs/rtdetr-l-fdr-no-prebox.yaml", "strict_load": true, "missing_keys": 0, "unexpected_keys": 0, "head_type": "FDRRTDETRDecoder", "output_shape": [1, 300, 6], "finite_output": true}
+  ]
+}
+

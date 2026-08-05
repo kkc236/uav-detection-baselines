@@ -256,7 +256,7 @@ Size: 200024985 bytes
 
 公开发布页：<https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live>。下载后必须先核对上述字节数与 SHA256，再执行反序列化和严格加载；Release 页面地址是公开证据入口，不需要也不应在文档或命令中嵌入访问令牌。
 
-机器报告 `artifacts/fdr-yaml-checkpoint-compatibility-all-configs.json`：
+仓库内冻结报告 `research/fdr/evidence/d97e1eb7/yaml-module-final/checkpoint-compatibility-all-configs.json`：
 
 | 字段 | 结果 |
 |---|---:|
@@ -270,7 +270,7 @@ Size: 200024985 bytes
 | deterministic smoke output | `[1,300,6]` |
 | finite output | `true` |
 
-五个配置均得到相同的严格加载结论和 `[1,300,6]` 有限输出。另一次真实旧格式 checkpoint 重建审计确认：内嵌 `RTDETRDecoder` YAML 被规范化为 `FDRRTDETRDecoder`，模型转移 `950/950`，并保留 `epoch=99`、`updates=10556`、optimizer、AMP scaler 与 EMA 载荷。训练循环后续仍复用 Ultralytics 8.4.90 原生 resume 状态恢复逻辑。
+五个配置均得到相同的严格加载结论和 `[1,300,6]` 有限输出。另一次真实旧格式 checkpoint resume-step 审计确认：内嵌 `RTDETRDecoder` YAML 被规范化为 `FDRRTDETRDecoder`，模型转移 `950/950`，恢复 8 个 MuSGD 参数组、581 个 optimizer state、AMP scale 128 与 EMA updates 10556；随后真实执行一次 `128x128` 前向、反向、MuSGD step 和 EMA update，loss/梯度有限，EMA updates 增至 10557。机器报告位于 `research/fdr/evidence/d97e1eb7/yaml-module-final/legacy-resume-step.json`。
 
 ### 5.4 兼容性结论边界
 
@@ -549,7 +549,8 @@ Resume 文件必须位于原 run 的 `weights` 目录，且相邻 `fdr-run.json`
 | 训练与逐 epoch 证据入口 | `scripts/train_rtdetr_fdr.py` |
 | checkpoint 严格验证器 | `scripts/verify_fdr_yaml_checkpoint.py` |
 | 30-epoch Gate2 | `research/fdr/evidence/d97e1eb7/fdr-gate-d97e1eb7/gate2.json` |
-| checkpoint 五配置兼容报告 | `artifacts/fdr-yaml-checkpoint-compatibility-all-configs.json` |
+| checkpoint 五配置兼容报告 | `research/fdr/evidence/d97e1eb7/yaml-module-final/checkpoint-compatibility-all-configs.json` |
+| 真实 legacy resume-step 报告 | `research/fdr/evidence/d97e1eb7/yaml-module-final/legacy-resume-step.json` |
 
 ## 参考文献
 
