@@ -85,7 +85,18 @@ def verify_checkpoint(
         map_location="cpu",
         weights_only=False,
     )
-    source_model = artifact["model"] if isinstance(artifact, dict) else artifact
+    if isinstance(artifact, dict):
+        for source_field in ("ema", "model"):
+            source_model = artifact.get(source_field)
+            if source_model is not None:
+                break
+        else:
+            raise ValueError(
+                "checkpoint dict contains neither a non-null 'ema' nor 'model'"
+            )
+    else:
+        source_model = artifact
+        source_field = "direct"
     source_state = source_model.float().state_dict()
     incompatible = model.load_state_dict(source_state, strict=True)
 
@@ -101,6 +112,7 @@ def verify_checkpoint(
         "cfg": str(cfg_path),
         "checkpoint": str(checkpoint_path),
         "sha256": checkpoint_sha256(checkpoint_path),
+        "source_field": source_field,
         "strict_load": True,
         "missing_keys": len(incompatible.missing_keys),
         "unexpected_keys": len(incompatible.unexpected_keys),

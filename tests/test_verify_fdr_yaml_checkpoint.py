@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class TinyCheckpointModel(nn.Module):
     float_calls = 0
 
-    def __init__(self) -> None:
+    def __init__(self, weight: float = 2.0) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.tensor([2.0], dtype=torch.float64))
+        self.weight = nn.Parameter(torch.tensor([weight], dtype=torch.float64))
 
     def float(self) -> TinyCheckpointModel:
         type(self).float_calls += 1
@@ -113,6 +113,7 @@ def test_verify_checkpoint_strictly_loads_and_writes_success_report(
         "cfg": str(cfg.resolve()),
         "checkpoint": str(checkpoint.resolve()),
         "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "source_field": "model",
         "strict_load": True,
         "missing_keys": 0,
         "unexpected_keys": 0,
@@ -124,6 +125,128 @@ def test_verify_checkpoint_strictly_loads_and_writes_success_report(
     assert report == expected
     assert json.loads(output.read_text(encoding="utf-8")) == expected
     assert list(output.parent.glob("*.tmp")) == []
+
+
+def test_verify_checkpoint_prefers_non_null_ema_when_model_is_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "fdr.yaml"
+    cfg.write_text("nc: 10\n", encoding="utf-8")
+    checkpoint = tmp_path / "ema.pt"
+    torch.save({"model": None, "ema": TinyCheckpointModel()}, checkpoint)
+    output = tmp_path / "verification.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+
+    report = verifier.verify_checkpoint(
+        cfg=cfg,
+        checkpoint=checkpoint,
+        output=output,
+        imgsz=16,
+    )
+
+    assert report["source_field"] == "ema"
+    assert TinyCheckpointModel.float_calls == 1
+    assert TinyFDRModel.instances[0].loaded_strict is True
+    torch.testing.assert_close(
+        TinyFDRModel.instances[0].weight,
+        torch.tensor([2.0]),
+    )
+
+
+def test_verify_checkpoint_prefers_ema_over_non_null_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "fdr.yaml"
+    cfg.write_text("nc: 10\n", encoding="utf-8")
+    checkpoint = tmp_path / "ema-and-model.pt"
+    torch.save(
+        {
+            "model": TinyCheckpointModel(weight=3.0),
+            "ema": TinyCheckpointModel(weight=2.0),
+        },
+        checkpoint,
+    )
+    output = tmp_path / "verification.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+
+    report = verifier.verify_checkpoint(
+        cfg=cfg,
+        checkpoint=checkpoint,
+        output=output,
+        imgsz=16,
+    )
+
+    assert report["source_field"] == "ema"
+    assert TinyCheckpointModel.float_calls == 1
+    torch.testing.assert_close(
+        TinyFDRModel.instances[0].weight,
+        torch.tensor([2.0]),
+    )
+
+
+def test_verify_checkpoint_accepts_direct_model_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "fdr.yaml"
+    cfg.write_text("nc: 10\n", encoding="utf-8")
+    checkpoint = tmp_path / "direct.pt"
+    torch.save(TinyCheckpointModel(), checkpoint)
+    output = tmp_path / "verification.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+
+    report = verifier.verify_checkpoint(
+        cfg=cfg,
+        checkpoint=checkpoint,
+        output=output,
+        imgsz=16,
+    )
+
+    assert report["source_field"] == "direct"
+    assert TinyCheckpointModel.float_calls == 1
+    assert TinyFDRModel.instances[0].loaded_strict is True
+    torch.testing.assert_close(
+        TinyFDRModel.instances[0].weight,
+        torch.tensor([2.0]),
+    )
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        {},
+        {"model": None},
+        {"ema": None},
+        {"model": None, "ema": None},
+    ],
+)
+def test_verify_checkpoint_rejects_dict_without_non_null_model(
+    artifact: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cfg = tmp_path / "fdr.yaml"
+    cfg.write_text("nc: 10\n", encoding="utf-8")
+    checkpoint = tmp_path / "missing-model.pt"
+    torch.save(artifact, checkpoint)
+    output = tmp_path / "verification.json"
+
+    monkeypatch.setattr(verifier, "FDRRTDETRDetectionModel", TinyFDRModel)
+
+    with pytest.raises(
+        ValueError,
+        match="checkpoint dict contains neither a non-null 'ema' nor 'model'",
+    ):
+        verifier.verify_checkpoint(
+            cfg=cfg,
+            checkpoint=checkpoint,
+            output=output,
+            imgsz=16,
+        )
+
+    assert not output.exists()
 
 
 def test_corrupt_checkpoint_key_exits_nonzero_without_success_json(tmp_path: Path):
