@@ -178,6 +178,23 @@ def test_settings_are_frozen_and_screen_keeps_50_epoch_schedule(
     }
 
 
+def test_control_and_fdr_settings_differ_only_by_model_and_name(tmp_path: Path) -> None:
+    module = _load_module()
+    data_yaml = tmp_path / "screen.yaml"
+    control = module.build_settings(
+        _args(tmp_path, variant="control"), data_yaml
+    )
+    fdr = module.build_settings(_args(tmp_path, variant="fdr"), data_yaml)
+
+    assert control["model"] == "rtdetr-l.yaml"
+    assert Path(fdr["model"]) == (module.ROOT / "configs" / "rtdetr-l-fdr.yaml").resolve()
+    assert Path(fdr["model"]).is_file()
+    assert control.keys() == fdr.keys()
+    assert {
+        key for key in control if control[key] != fdr[key]
+    } == {"model", "name"}
+
+
 def test_resume_is_the_only_runtime_training_override(tmp_path: Path) -> None:
     module = _load_module()
     checkpoint = tmp_path / "run" / "weights" / "last.pt"

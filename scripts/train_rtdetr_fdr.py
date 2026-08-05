@@ -19,6 +19,7 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FDR_MODEL_CONFIG = ROOT / "configs" / "rtdetr-l-fdr.yaml"
 sys.path.insert(0, str(ROOT))
 
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
@@ -373,6 +374,11 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
     name = args.name or f"{args.stage}-seed0-{args.variant}-fdr-v1"
     settings = {
         **FROZEN_SETTINGS,
+        "model": (
+            str(FDR_MODEL_CONFIG)
+            if args.variant == "fdr"
+            else FROZEN_SETTINGS["model"]
+        ),
         "data": str(Path(data_yaml).resolve()),
         "epochs": epochs,
         "seed": 0,
