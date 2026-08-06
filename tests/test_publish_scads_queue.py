@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from scripts.publish_scads_queue import (
+    GitHubReleaseClient,
     append_ledger,
     asset_names,
     publish_record,
@@ -112,6 +114,27 @@ def test_remote_size_conflict_fails_closed(tmp_path: Path) -> None:
     client.remote[checkpoint_asset] = b"wrong"
     with pytest.raises(ValueError, match="immutable remote asset size conflict"):
         publish_record(record, client=client, ledger_path=tmp_path / "ledger.jsonl")
+
+
+def test_old_gh_upload_stages_checkpoint_under_remote_asset_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "epoch0.pt"
+    source.write_bytes(b"checkpoint")
+    expected_name = "fdr-screen-seed0-source-protocol-epoch-0001.pt"
+    observed = []
+    client = GitHubReleaseClient(repo="owner/repo", tag="tag", target="branch")
+
+    def fake_run(command, *, check=True):
+        upload = Path(command[4])
+        observed.append((list(command), upload.name, upload.read_bytes()))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    client.upload(source, expected_name)
+
+    assert observed[0][1:] == (expected_name, b"checkpoint")
+    assert "#" not in observed[0][0][4]
 
 
 def test_prune_removes_only_verified_old_epoch_checkpoints(tmp_path: Path) -> None:

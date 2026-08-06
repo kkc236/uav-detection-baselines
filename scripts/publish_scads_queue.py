@@ -233,17 +233,30 @@ class GitHubReleaseClient:
         }
 
     def upload(self, path: Path, asset_name: str) -> None:
-        self._run(
-            [
-                "gh",
-                "release",
-                "upload",
-                self.tag,
-                f"{Path(path).resolve()}#{asset_name}",
-                "--repo",
-                self.repo,
-            ]
-        )
+        source = Path(path).resolve()
+
+        def upload_source(upload_path: Path) -> None:
+            self._run(
+                [
+                    "gh",
+                    "release",
+                    "upload",
+                    self.tag,
+                    str(upload_path),
+                    "--repo",
+                    self.repo,
+                ]
+            )
+
+        if source.name == asset_name:
+            upload_source(source)
+            return
+        with tempfile.TemporaryDirectory(
+            prefix=".scads-upload-", dir=source.parent
+        ) as temporary:
+            staged = Path(temporary) / asset_name
+            os.link(source, staged)
+            upload_source(staged)
 
     def download(self, asset_name: str, destination: Path) -> Path:
         destination.mkdir(parents=True, exist_ok=False)
