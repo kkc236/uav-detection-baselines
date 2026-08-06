@@ -168,6 +168,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         pre_boxes: Tensor,
         gt_bboxes: Tensor,
         matches: MatchIndices,
+        support_projects: Tensor | None = None,
     ) -> Tensor:
         predicted_index, target_index = self._get_index(matches)
         if target_index.numel() == 0:
@@ -178,12 +179,15 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         )
         matched_reference = pre_boxes[predicted_index].detach()
         matched_targets_cxcywh = gt_bboxes[target_index]
-        target_indices, right_weight, left_weight = bbox2distance(
+        matched_project = (
+            support_projects[predicted_index]
+            if support_projects is not None
+            else None
+        )
+        target_indices, right_weight, left_weight = self._encode_fgl_targets(
             matched_reference,
             cxcywh_to_xyxy(matched_targets_cxcywh),
-            REG_MAX,
-            REG_SCALE,
-            UP,
+            matched_project,
         )
         matched_boxes = pred_bboxes[predicted_index]
         matched_iou = bbox_iou(
@@ -199,6 +203,24 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             avg_factor=max(int(target_index.numel()), 1),
         )
 
+    def _encode_fgl_targets(
+        self,
+        references: Tensor,
+        targets_xyxy: Tensor,
+        support_projects: Tensor | None,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Encode fixed-support FDR targets; subclasses may provide projects."""
+
+        if support_projects is not None:
+            raise ValueError("fixed FDR loss does not accept adaptive projects")
+        return bbox2distance(
+            references,
+            targets_xyxy,
+            REG_MAX,
+            REG_SCALE,
+            UP,
+        )
+
     def _fgl_group(
         self,
         corner_logits: Tensor,
@@ -208,6 +230,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         assignments: Sequence[MatchIndices],
         *,
         postfix: str,
+        support_projects: Tensor | None = None,
     ) -> dict[str, Tensor]:
         self._validate_layer_tensor(
             "corner_logits",
@@ -219,6 +242,14 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             raise ValueError(
                 f"pre_boxes must have shape {tuple(pred_bboxes.shape[1:])}"
             )
+        if support_projects is not None and support_projects.shape != (
+            *pre_boxes.shape[:-1],
+            REG_MAX + 1,
+        ):
+            raise ValueError(
+                "support_projects must have shape "
+                f"{(*pre_boxes.shape[:-1], REG_MAX + 1)}"
+            )
         if len(assignments) != pred_bboxes.shape[0]:
             raise ValueError("FGL requires one stock assignment per prediction layer")
 
@@ -229,6 +260,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                 pre_boxes,
                 gt_bboxes,
                 assignments[layer],
+                support_projects,
             )
             for layer in range(pred_bboxes.shape[0])
         ]
@@ -278,6 +310,8 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         dn_corner_logits: Tensor | None = None,
         dn_pre_boxes: Tensor | None = None,
         normal_match_indices: Sequence[MatchIndices] | None = None,
+        support_projects: Tensor | None = None,
+        dn_support_projects: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Compute full stock loss, then decoder-only FGL/pre-box losses."""
 
@@ -339,6 +373,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                     batch["bboxes"],
                     decoder_assignments,
                     postfix="",
+                    support_projects=support_projects,
                 )
             )
 
@@ -369,6 +404,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                         batch["bboxes"],
                         denoising_assignments,
                         postfix="_dn",
+                        support_projects=dn_support_projects,
                     )
                 )
             if self.supervise_pre_boxes and dn_pre_boxes is not None:
