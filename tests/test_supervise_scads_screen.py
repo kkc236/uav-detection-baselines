@@ -9,6 +9,7 @@ import pytest
 from scripts.supervise_scads_screen import (
     EXPECTED_EPOCHS,
     arm_evidence,
+    normalize_paths,
     scads_command,
     verified_epochs,
 )
@@ -71,3 +72,30 @@ def test_scads_command_exposes_no_training_hyperparameter_override(tmp_path: Pat
     assert command[command.index("--stage") + 1] == "screen"
     for forbidden in ("--epochs", "--batch", "--imgsz", "--seed", "--lr0"):
         assert forbidden not in command
+
+
+def test_normalize_paths_preserves_virtualenv_python_symlink(tmp_path: Path) -> None:
+    system_python = tmp_path / "usr" / "bin" / "python"
+    system_python.parent.mkdir(parents=True)
+    system_python.touch()
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(system_python)
+    args = argparse.Namespace(
+        training_root=tmp_path / "source",
+        experiment_root=tmp_path / "experiment",
+        dataset_root=tmp_path / "VisDrone",
+        python=venv_python,
+        fdr_pid=tmp_path / "fdr.pid",
+        scads_pid=tmp_path / "scads.pid",
+        publisher_pid=tmp_path / "publisher.pid",
+        ledger=tmp_path / "ledger.jsonl",
+        status_file=tmp_path / "status.json",
+        log=tmp_path / "scads.log",
+    )
+
+    normalized = normalize_paths(args)
+
+    assert normalized.python == venv_python.absolute()
+    assert normalized.python.is_symlink()
+    assert scads_command(normalized)[0] == str(venv_python.absolute())

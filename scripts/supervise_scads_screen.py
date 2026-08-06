@@ -81,7 +81,7 @@ def verified_epochs(ledger: Path, *, run_id: str) -> list[int]:
 def scads_command(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment_root.resolve()
     return [
-        str(args.python.resolve()),
+        str(args.python.absolute()),
         "-u",
         str((args.training_root / "scripts" / "train_rtdetr_scads.py").resolve()),
         "--variant",
@@ -143,12 +143,11 @@ def _validate_complete_arm(run: Path, variant: str) -> tuple[list[dict[str, Any]
     return rows, next(iter(run_ids))
 
 
-def execute(args: argparse.Namespace) -> None:
+def normalize_paths(args: argparse.Namespace) -> argparse.Namespace:
     for name in (
         "training_root",
         "experiment_root",
         "dataset_root",
-        "python",
         "fdr_pid",
         "scads_pid",
         "publisher_pid",
@@ -157,6 +156,14 @@ def execute(args: argparse.Namespace) -> None:
         "log",
     ):
         setattr(args, name, Path(getattr(args, name)).resolve())
+    # Resolving a venv interpreter follows its symlink to the system Python and
+    # silently drops the virtual environment's site-packages.
+    args.python = Path(args.python).absolute()
+    return args
+
+
+def execute(args: argparse.Namespace) -> None:
+    args = normalize_paths(args)
     fdr_run = args.experiment_root / "runs" / "screen-seed0-fdr-scads-v1"
     scads_run = args.experiment_root / "runs" / "screen-seed0-scads-scads-v1"
     while process_alive(args.fdr_pid):
