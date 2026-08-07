@@ -1,2 +1,6 @@
 gate-report.json -text
 core-metrics-comparison.png binary
+*.csv text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.txt text eol=lf

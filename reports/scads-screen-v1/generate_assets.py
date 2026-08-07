@@ -37,9 +37,14 @@ def f1(precision: float, recall: float) -> float:
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_text_lf(path: Path, content: str, encoding: str) -> None:
+    with path.open("w", encoding=encoding, newline="\n") as stream:
+        stream.write(content)
 
 
 def core_rows(report: dict) -> list[dict]:
@@ -306,7 +311,7 @@ python reports/scads-screen-v1/generate_assets.py reports/scads-screen-v1/gate-r
 
 Gate JSON SHA-256：`{gate_hash}`。
 """
-    destination.write_text(content, encoding="utf-8")
+    write_text_lf(destination, content, encoding="utf-8")
 
 
 def write_checksums(destination: Path) -> None:
@@ -325,7 +330,7 @@ def write_checksums(destination: Path) -> None:
     for name in names:
         digest = hashlib.sha256((REPORT_DIR / name).read_bytes()).hexdigest().upper()
         lines.append(f"{digest}  {name}")
-    destination.write_text("\n".join(lines) + "\n", encoding="ascii")
+    write_text_lf(destination, "\n".join(lines) + "\n", encoding="ascii")
 
 
 def main() -> None:
