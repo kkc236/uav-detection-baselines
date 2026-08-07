@@ -1,0 +1,15 @@
+﻿field,value
+dataset,VisDrone
+stage,screen
+epochs_per_arm,30
+training_subset_images,647
+validation_images,548
+validation_instances,38759
+gpu,NVIDIA GeForce RTX 4090
+image_size,640
+evaluation_batch,8
+confidence_threshold,0.001
+max_detections,300
+nms,False
+seed,0
+published_checkpoints,60
