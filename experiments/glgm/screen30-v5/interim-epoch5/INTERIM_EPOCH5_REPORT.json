@@ -1,0 +1,41 @@
+{
+  "schema": "glgm-screen30-interim-v1",
+  "created_utc": "2026-08-08T15:35:18Z",
+  "authority": "/home/ubuntu/glgm/work/screen30-seed0-v5",
+  "arm": "control",
+  "completed_epochs": 5,
+  "formal_result": false,
+  "reason": "interim numerical-stability milestone only",
+  "epoch_5": {
+    "train_giou_loss": 0.91789,
+    "train_cls_loss": 0.4652,
+    "train_l1_loss": 0.11164,
+    "precision": 0.49848,
+    "recall": 0.42561,
+    "map50": 0.40197,
+    "map50_95": 0.2279,
+    "val_giou_loss": 0.72978,
+    "val_cls_loss": 0.51211,
+    "val_l1_loss": 0.07395
+  },
+  "numerical_gate": {
+    "all_csv_numeric_values_finite": true,
+    "pre_save_full_state_guard_triggered": false,
+    "passed_prior_failure_epoch": true
+  },
+  "prior_invalid_v1_epoch_5": {
+    "precision": 0.47268,
+    "recall": 0.39309,
+    "map50": 0.36512,
+    "map50_95": 0.21075,
+    "non_finite_fields": [
+      "val/giou_loss",
+      "val/cls_loss",
+      "val/l1_loss"
+    ]
+  },
+  "publication": {
+    "contains_model_checkpoint": false,
+    "scientific_comparison_deferred_until_both_arms_complete": true
+  }
+}
