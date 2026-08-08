@@ -4,7 +4,7 @@
 
 **Goal:** Add one identity-initialized, AMP-safe FrequencyCM P5 preprocessor to the formal FDR detector and run a fresh strict full-data seed-0 100-epoch experiment with recoverable per-epoch publication.
 
-**Architecture:** Preserve the existing FDR YAML graph and decoder index by resolving the YAML-visible `FDRRTDETRDecoder` symbol to a subclass that preprocesses only its third input feature with FrequencyCM. Reuse the frozen FDR initial state for every shared tensor, initialize only `frequency_cm.*` with a private seed, and extend the existing formal trainer/protocol without changing frozen hyperparameters.
+**Architecture:** Add FrequencyCM as a standalone YAML graph layer after final fused P5, moving the decoder from index 28 to index 29 and routing `[21, 24, 28]` into the unchanged `FDRRTDETRDecoder`. Reuse the frozen FDR initial state through one declared decoder-key alias, initialize only the YAML layer's private tensors with a private seed, and extend the existing formal trainer/protocol without changing frozen hyperparameters.
 
 **Tech Stack:** Python 3.10, PyTorch 2.5.1+cu121, Ultralytics 8.4.90, pytest, CUDA AMP, Git/GitHub Releases.
 
@@ -52,7 +52,7 @@ Run `pytest -q tests/test_frequency_cm.py`. Expected: all tests pass.
 
 Commit `test/feat: add AMP-safe FrequencyCM unit`.
 
-### Task 2: Integrate FrequencyCM without changing FDR shared keys
+### Task 2: Integrate FrequencyCM as a removable YAML layer
 
 **Files:**
 - Create: `tests/test_rtdetr_fdr_frequencycm.py`
@@ -62,39 +62,36 @@ Commit `test/feat: add AMP-safe FrequencyCM unit`.
 
 - [ ] **Step 1: Write failing integration tests**
 
-Require exactly one FrequencyCM, final head type `FDRFrequencyCMRTDETRDecoder`, unchanged decoder index, identical shared key names, exact initialized shared tensors, only `frequency_cm.*` missing from the old FDR artifact, and finite inference/training contracts.
+Require exactly one FrequencyCM at model index 28, the unchanged `FDRRTDETRDecoder` at index 29, decoder inputs `[21, 24, 28]`, exact initialized shared tensors after the sole `model.28.* -> model.29.*` alias, only `model.28.*` FrequencyCM keys as new private state, and finite inference/training contracts.
 
 ```python
 def test_frequencycm_model_preserves_fdr_shared_state_keys(fdr_artifact):
     model = FDRFrequencyCMDetectionModel(nc=10, verbose=False)
     report = load_fdr_frequencycm_initial_state(model, fdr_artifact)
     assert report["shared_mismatch_count"] == 0
-    assert all("frequency_cm" in name for name in report["private_keys"])
+    assert all(name.startswith("model.28.") for name in report["private_keys"])
 ```
 
 - [ ] **Step 2: Verify RED**
 
 Run `pytest -q tests/test_rtdetr_fdr_frequencycm.py`. Expected: import failure for the integration module.
 
-- [ ] **Step 3: Generalize the existing parser alias safely**
+- [ ] **Step 3: Register the standalone parser module safely**
 
-Add a `DECODER_CLASS` class attribute to `FDRRTDETRDetectionModel`; the default remains `FDRRTDETRDecoder`. Resolve and temporarily register that class under both parser symbols while holding the existing re-entrant parser lock.
+Expose `FrequencyCM` to the Ultralytics YAML parser while holding the existing re-entrant parser lock. Its same-channel contract lets the parser retain the input channel metadata without modifying the installed Ultralytics package.
 
-- [ ] **Step 4: Implement the decoder/model/trainer subclasses**
+- [ ] **Step 4: Implement the model/trainer integration and authority alias**
 
-The decoder applies FrequencyCM only to `features[-1]`, then calls the unchanged FDR parent. The trainer partitions gradient evidence into common, FDR-private, and FrequencyCM-private disjoint groups.
+The model uses the unchanged FDR decoder and loss. The initial-state loader remaps only the old decoder prefix from model index 28 to 29, verifies every remapped tensor byte-for-byte, and leaves the FrequencyCM layer at its deterministic identity initialization. The trainer partitions gradient evidence into common, FDR-private, and FrequencyCM-private disjoint groups.
 
 ```python
-class FDRFrequencyCMRTDETRDecoder(FDRRTDETRDecoder):
-    def forward(self, features, batch=None):
-        routed = list(features)
-        routed[-1] = self.frequency_cm(routed[-1])
-        return super().forward(routed, batch=batch)
+def remap_fdr_decoder_key(name: str) -> str:
+    return "model.29." + name.removeprefix("model.28.") if name.startswith("model.28.") else name
 ```
 
 - [ ] **Step 5: Add an isolated YAML**
 
-Copy the formal FDR graph, keep the final decoder at index 28, and add fixed FrequencyCM options to its final options mapping. Leave `configs/rtdetr-l-fdr.yaml` byte-unchanged.
+Copy the formal FDR graph, insert `[-1, 1, FrequencyCM, [256, 20000]]` as index 28, move the decoder to index 29, and route `[21, 24, 28]`. Leave `configs/rtdetr-l-fdr.yaml` byte-unchanged.
 
 - [ ] **Step 6: Verify GREEN and regression safety**
 

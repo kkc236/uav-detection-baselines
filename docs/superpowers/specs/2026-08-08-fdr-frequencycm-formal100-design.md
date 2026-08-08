@@ -18,17 +18,17 @@ The experiment is an incremental comparison against the completed strict FDR arm
 
 ## 3. Architecture
 
-The existing FDR feature inputs are P3, P4, and final fused P5 at model indices `[21, 24, 27]`. Insert one `FrequencyCM(256, 256)` after index 27 and route the decoder from `[21, 24, 28]`.
+The existing FDR feature inputs are P3, P4, and final fused P5 at model indices `[21, 24, 27]`. Insert one YAML-visible `FrequencyCM(256)` layer after index 27. It becomes model index 28, moves the FDR decoder from index 28 to index 29, and routes the decoder from `[21, 24, 28]`.
 
 ```text
 P3 index 21 -----------------------------+
 P4 index 24 --------------------------+  |
-P5 index 27 -> FrequencyCM index 28 --+--+--> FDRRTDETRDecoder
+P5 index 27 -> FrequencyCM index 28 --+--+--> FDRRTDETRDecoder index 29
 ```
 
 No FrequencyCM instance is added to P3, P4, the backbone, AIFI, Query selection, classification heads, matcher, FDR distribution heads, or loss functions.
 
-The stock `configs/rtdetr-l-fdr.yaml` remains unchanged. The experiment uses a separate `configs/rtdetr-l-fdr-frequencycm.yaml`, making the new feature module a declarative and independently removable unit.
+The stock `configs/rtdetr-l-fdr.yaml` remains unchanged. The experiment uses a separate `configs/rtdetr-l-fdr-frequencycm.yaml`, making the new feature module a declarative and independently removable graph layer. Selecting the original FDR YAML removes FrequencyCM without a code or inference-time branch.
 
 ## 4. FrequencyCM contract
 
@@ -45,7 +45,7 @@ The implementation must not claim explicit high-pass/low-pass decomposition or i
 
 ## 5. Initialization and optimizer isolation
 
-- Shared FDR tensors are restored from the existing formal initial state with exact name/shape/value checks.
+- Shared FDR tensors are restored from the existing formal initial state with exact name/shape/value checks. Because the inserted YAML layer moves the decoder from index 28 to index 29, the loader performs the single declared structural alias `model.28.* -> model.29.*`; layers 0 through 27 retain their original names. The loader rejects every undeclared missing, extra, or remapped key.
 - FrequencyCM-private tensors use a fixed private seed distinct from FDR's private seed 10000.
 - `gamma` and `beta` are zero.
 - All FrequencyCM trainable tensors are included in MuSGD without changing shared parameter groups, LR, momentum, weight decay, scheduler, AMP scale, or gradient clipping semantics.
