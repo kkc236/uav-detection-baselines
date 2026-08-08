@@ -1,0 +1,60 @@
+{
+  "checkpoint_reload_verified": true,
+  "common_tensor_count": 1241,
+  "control_init": {
+    "path": "/home/ubuntu/glgm/work/preflight-20260808T1300Z/control_paired_init.pt",
+    "sha256": "4257D33B3F19E23E88209FEFD778C4AF4C6E4E14FB40CB7A047A338E673902D1"
+  },
+  "control_parameters": 67324002,
+  "created_utc": "2026-08-08T13:01:10.401011+00:00",
+  "cuda_available": true,
+  "cuda_runtime": "12.4",
+  "full_forward": {
+    "device": "cuda:0",
+    "peak_vram_bytes": 546590720
+  },
+  "glgm_init": {
+    "path": "/home/ubuntu/glgm/work/preflight-20260808T1300Z/glgm_paired_init.pt",
+    "sha256": "C25C5E5F6623E22D6865EB751A1D8700A16C03EC23A32939D0A1793E1A53C4E1"
+  },
+  "glgm_parameters": 73963081,
+  "gpus": [
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA GeForce RTX 4090"
+  ],
+  "initialization": {
+    "base_weights": "/home/ubuntu/glgm/weights/rtdetr-x.pt",
+    "base_weights_sha256": "DCFF6D3AEABA176924EB9E664E5B0880597E0828C109F3F8AAE7EE5A07546D5C",
+    "loaded_public_parameter_count": 67429032,
+    "loaded_public_parameter_fraction": 0.9996953279858725,
+    "loaded_public_tensor_count": 1226,
+    "mode": "stock_rtdetr_x_pretrained",
+    "public_parameter_count": 67449582
+  },
+  "module_only_forward_backward": true,
+  "parameter_delta": 6639079,
+  "parameter_delta_percent": 9.861384948565595,
+  "pip_freeze_sha256": "379D4F2927DDE3663878A2D1A9D438AC3DDC114F45CA60AD680EC8B90F2C6AAC",
+  "private_seed": 10000,
+  "private_state_sha256": "748E508D5C7EA669217D1764110A3774FFF6916105D80C6A05F94D15B0B6EF6C",
+  "private_tensor_count": 27,
+  "public_seed": 0,
+  "public_state_sha256": "325E80C7FA9826028169F1D99071C09DA1C900FBABB029CBE43B675C151F6BE3",
+  "python": "3.12.8",
+  "repo_dir": "/home/ubuntu/glgm/source/ultralytics-main",
+  "schema": "glgm-paired-preflight-v1",
+  "source_sha256": {
+    "audit_script.py": "5AE97934358A70C8F7B9BD9B031FF76B47579B1443DFA2B5705A7ED6A89D276C",
+    "block.py": "E46A291A7652B28AF1E790A843B0222EE681ED157118AEA89BB0AD19DE2A7435",
+    "control_yaml": "C4692A464D24D80680073D06554A35DD9F428A48DEF532689055CDC8589265D0",
+    "experiment_script.py": "09221D03F8CE165ACE0611432C70260E7ABD8151F6AF5FD43183B59DF80582A8",
+    "glgm_yaml": "B518F6325381C1279AF1EA20A1ACF35465ABB885B4C088E8078F8CCAC3092493",
+    "modules_init.py": "290E377F1BC62D9615DC92D832284889208AC3734A7FBD52EFD537718D59E595",
+    "prepare_script.py": "8A93D350924C3FD42193733F2ABA15A8F0B5F48B1FB2D6F6DB718E977C1C5B0D",
+    "repo_tree_sha256": "5B1D010E1353E3E6114A63936567C0BCF67804EAD2D1E912BE27B3A155225045",
+    "run_pair.sh": "9851A92279D7830EE2CAE8AB9D638800BDF346AEC3D748E40BF0D6CA933FD6DB",
+    "tasks.py": "3EED47EB973C662D70DEA1872C98CE6B2C1504B7AF38C66803B96A0674651159"
+  },
+  "torch": "2.5.1+cu124",
+  "ultralytics": "8.4.116"
+}

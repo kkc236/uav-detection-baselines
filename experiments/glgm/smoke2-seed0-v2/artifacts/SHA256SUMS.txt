@@ -1,0 +1,17 @@
+99288d4a4cb4e1302d9d42ada2ca19224e659b6c55abaf8cd6c59b1c580fb943  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/comparison-best.json
+8ed60809f6bc7d8eb0c249628625d1c7c53aefe75c47bfb4b277bf1e8dd33dee  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/comparison-last.json
+472e7f6940f70289d8279db3bf566f7e29b7fd135ee406c2c7405d95efa77dd4  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control-best-benchmark.json
+324a54ca7f10aae1ba6ad5f3fa4b85d36f29e4e2921ef1111278fc121257b64a  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control-best-metrics.json
+8662030de2eae2925cba2a3bdbca8ada543d00d60217f3395e72b20e16358f31  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control-last-metrics.json
+2a327c2e8b8dc6cbb01a8f6d60b6d71e8f590b84490a97a9ef356320d5c19337  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control-train-receipt.json
+8059cb486be2f5c578ea1448d38248a289681538f559e106cdbc1d342c3a96c9  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control_paired_init.pt
+295e80d767a32d169f659a3bee3d8b13bc87a9590b4d5d9dbc92828804d8a9b5  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm-best-benchmark.json
+4cf08c288da3c746f4706ba8fbff0fc334a0a5b5ed3049c8d4546024b4b15c00  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm-best-metrics.json
+3a22bad06578cb9897e7fdd1a9ad83a7a94f0c3380caadc3be805f77f7b56f57  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm-last-metrics.json
+b2b4721fcb798e3647f7d7f2c94798fa77840a40c18e8cdb394e0a20641f33b1  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm-train-receipt.json
+23f469b1ade7bdfd2e5bdd913057cb6e02031a05a7e08a4f1e4694bec242031b  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm_paired_init.pt
+f0fcb746b4aec999a03817644eea6bf490f199d87c0649d6d845663f521bcb53  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/paired_preflight_manifest.json
+1b2c2faebab65950b2332a0353a63dc92780a40963082634c77f7e4fac4f2c47  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/visdrone-audit-control-pretrain.json
+19426ce6ac8b31041548442ed0f3f4b566b704813c1ce9e5d3a623a19dc146ef  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/visdrone-audit-glgm-pretrain.json
+185795946b2e7c884e5e8dfd19c3240ceb1d5ecad77dbacfe463280bb85d7af7  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/visdrone-audit-pre-eval.json
+6ae0322e2fed049c5fdc1876b61d37994e3e44e272549d4c470668f956bf2f36  /home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/visdrone-audit.json

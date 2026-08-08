@@ -1,0 +1,59 @@
+{
+  "annotation_filter": {
+    "train": {
+      "converted_rows": 343204,
+      "ignored_rows": 10345,
+      "invalid_nonpositive_size_rows": 1,
+      "source_rows": 353550
+    },
+    "val": {
+      "converted_rows": 38759,
+      "ignored_rows": 1410,
+      "invalid_nonpositive_size_rows": 0,
+      "source_rows": 40169
+    }
+  },
+  "archives": [
+    {
+      "member_count": 12945,
+      "path": "/home/ubuntu/glgm/datasets/official-zips/VisDrone2019-DET-train.zip",
+      "sha256": "86a77eba93137bfc16e4993860de9245b0675c0dba0d3ab98fb458699e256f84",
+      "size": 1549875511,
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-train.zip"
+    },
+    {
+      "member_count": 1100,
+      "path": "/home/ubuntu/glgm/datasets/official-zips/VisDrone2019-DET-val.zip",
+      "sha256": "abeea063037e5d20398837deb11084e652402a34ddf4f207bdf541a6f2a35ef9",
+      "size": 81638851,
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-val.zip"
+    }
+  ],
+  "counts": {
+    "train": {
+      "images": 6471,
+      "labels": 6471
+    },
+    "val": {
+      "images": 548,
+      "labels": 548
+    }
+  },
+  "created_at_utc": "2026-08-08T12:59:02.787276+00:00",
+  "cross_source": {
+    "reference": "/home/ubuntu/glgm/datasets/VisDrone-pinned",
+    "splits": {
+      "train": {
+        "matched": 548,
+        "reference_missing": false
+      },
+      "val": {
+        "matched": 0,
+        "reference_missing": true
+      }
+    },
+    "total_matched": 548
+  },
+  "data_yaml": "/home/ubuntu/glgm/datasets/VisDrone-official-v2/data.yaml",
+  "schema": "glgm-visdrone-archive-source-v2"
+}

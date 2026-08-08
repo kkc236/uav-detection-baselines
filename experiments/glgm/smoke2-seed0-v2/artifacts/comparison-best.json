@@ -1,0 +1,201 @@
+{
+  "allowed_protocol_differences": [
+    "device"
+  ],
+  "control_report": "/home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/control-best-metrics.json",
+  "created_utc": "2026-08-08T13:13:43.607683+00:00",
+  "glgm_report": "/home/ubuntu/glgm/work/smoke2-seed0-v2/artifacts/glgm-best-metrics.json",
+  "metrics": {
+    "ap50": {
+      "absolute_delta": -0.015647647022531717,
+      "control": 0.04127792411349061,
+      "glgm": 0.025630277090958897,
+      "percentage_point_delta": -1.5647647022531717,
+      "relative_percent": -37.90802798006427
+    },
+    "ap75": {
+      "absolute_delta": -0.009295672040251841,
+      "control": 0.02537242834625436,
+      "glgm": 0.01607675630600252,
+      "percentage_point_delta": -0.9295672040251841,
+      "relative_percent": -36.63690330856379
+    },
+    "f1": {
+      "absolute_delta": -0.01801080101735327,
+      "control": 0.05142169400536913,
+      "glgm": 0.03341089298801586,
+      "percentage_point_delta": -1.801080101735327,
+      "relative_percent": -35.02568588166834
+    },
+    "map50_95": {
+      "absolute_delta": -0.009217271121132412,
+      "control": 0.02444057055509895,
+      "glgm": 0.015223299433966539,
+      "percentage_point_delta": -0.9217271121132412,
+      "relative_percent": -37.712994876093205
+    },
+    "precision": {
+      "absolute_delta": -0.018861850388183554,
+      "control": 0.8530262055879712,
+      "glgm": 0.8341643551997876,
+      "percentage_point_delta": -1.8861850388183554,
+      "relative_percent": -2.211168925951404
+    },
+    "recall": {
+      "absolute_delta": -0.005895649737659825,
+      "control": 0.07062655424398331,
+      "glgm": 0.06473090450632349,
+      "percentage_point_delta": -0.5895649737659825,
+      "relative_percent": -8.347638930950785
+    }
+  },
+  "paired_training_protocol_sha256": "2EC20AA0E47EB4E1F96DD50C60AD22447EBD8B8F149EE0306A4A2E16B22CA36E",
+  "parameter_delta": 6639079,
+  "parameter_delta_percent": 9.861384948565595,
+  "per_class_delta": [
+    {
+      "delta": {
+        "ap50": -0.03304896419954434,
+        "ap75": -0.004976097338679602,
+        "f1": -0.07362278851385026,
+        "map50_95": -0.012884144437985702,
+        "precision": -0.09292874980302332,
+        "recall": -0.055970149253731345
+      },
+      "id": 0,
+      "name": "pedestrian"
+    },
+    {
+      "delta": {
+        "ap50": -6.84931506849315e-05,
+        "ap75": -2.3923444976076556e-05,
+        "f1": 0.0,
+        "map50_95": -3.0655730156891434e-05,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 1,
+      "name": "people"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 2,
+      "name": "bicycle"
+    },
+    {
+      "delta": {
+        "ap50": -0.12211890717282525,
+        "ap75": -0.08754899543624284,
+        "f1": -0.10648522165968247,
+        "map50_95": -0.07864603374388865,
+        "precision": -0.0956897540788122,
+        "recall": -0.002986348122866911
+      },
+      "id": 3,
+      "name": "car"
+    },
+    {
+      "delta": {
+        "ap50": -0.0006099232810354205,
+        "ap75": -5.529953917050688e-05,
+        "f1": 0.0,
+        "map50_95": -0.00023191436884701017,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 4,
+      "name": "van"
+    },
+    {
+      "delta": {
+        "ap50": -7.462686567164179e-05,
+        "ap75": -7.462686567164179e-05,
+        "f1": 0.0,
+        "map50_95": -5.9701492537313435e-05,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 5,
+      "name": "truck"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 6,
+      "name": "tricycle"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 7,
+      "name": "awning-tricycle"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 8,
+      "name": "bus"
+    },
+    {
+      "delta": {
+        "ap50": -0.0005555555555555556,
+        "ap75": -0.0002777777777777778,
+        "f1": 0.0,
+        "map50_95": -0.0003202614379084967,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 9,
+      "name": "motor"
+    }
+  ],
+  "schema": "glgm-paired-comparison-v1",
+  "speed_ms_per_image": {
+    "inference": {
+      "control_ms": 18.48075079926879,
+      "delta_ms": 0.3433140328578155,
+      "glgm_ms": 18.824064832126606
+    },
+    "loss": {
+      "control_ms": 0.0019081423412042927,
+      "delta_ms": 4.7352191060356626e-05,
+      "glgm_ms": 0.0019554945322646494
+    },
+    "postprocess": {
+      "control_ms": 0.1433891605843101,
+      "delta_ms": -0.0003685018287982733,
+      "glgm_ms": 0.14302065875551181
+    },
+    "preprocess": {
+      "control_ms": 0.4467834343006997,
+      "delta_ms": 0.04621145803767379,
+      "glgm_ms": 0.4929948923383735
+    }
+  },
+  "strict_pair": false
+}
