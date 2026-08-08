@@ -1,0 +1,40 @@
+{
+  "schema": "glgm-screen30-interim-v1",
+  "created_utc": "2026-08-08T17:42:00Z",
+  "authority": "/home/ubuntu/glgm/work/screen30-seed0-v5",
+  "arm": "control",
+  "completed_epochs": 20,
+  "formal_result": false,
+  "reason": "interim progress and numerical-stability milestone only",
+  "epoch_20": {
+    "train_giou_loss": 0.80448,
+    "train_cls_loss": 0.45333,
+    "train_l1_loss": 0.08395,
+    "precision": 0.55443,
+    "recall": 0.49588,
+    "map50": 0.47837,
+    "map50_95": 0.28167,
+    "val_giou_loss": 0.67185,
+    "val_cls_loss": 0.49658,
+    "val_l1_loss": 0.06697
+  },
+  "numerical_gate": {
+    "all_twenty_csv_rows_finite": true,
+    "epochs_contiguous_1_through_20": true,
+    "pre_save_full_state_guard_triggered": false,
+    "best_and_last_checkpoints_present_on_server": true,
+    "error_log_hits": 0
+  },
+  "timing": {
+    "elapsed_seconds_through_epoch_20": 9686.81,
+    "mean_seconds_per_control_epoch": 484.3405,
+    "estimated_total_pair_hours_remaining_range": [
+      4.8,
+      6.5
+    ]
+  },
+  "publication": {
+    "contains_model_checkpoint": false,
+    "scientific_comparison_deferred_until_both_arms_complete": true
+  }
+}
