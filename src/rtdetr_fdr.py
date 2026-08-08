@@ -28,6 +28,7 @@ from src.fdr_head import (
 )
 from src.fdr_loss import FDRDetectionLoss
 from src.fdr_protocol import load_fdr_initial_state
+from src.frequency_cm import FrequencyCM
 from src.rtdetr_lpr import FixedPairedProtocolMixin
 from src.rtdetr_vsf_rmr import apply_resume_runtime_overrides
 
@@ -40,6 +41,7 @@ def register_fdr_module() -> None:
     """Expose the repository-owned head to Ultralytics' YAML parser."""
 
     ultralytics_tasks.FDRRTDETRDecoder = FDRRTDETRDecoder
+    ultralytics_tasks.FrequencyCM = FrequencyCM
 
 
 def build_stock_rtdetr_model(*args: Any, **kwargs: Any) -> RTDETRDetectionModel:

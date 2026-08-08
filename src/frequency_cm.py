@@ -46,7 +46,7 @@ class FrequencyCM(nn.Module):
     runs in FP32 while the returned tensor preserves the detector input dtype.
     """
 
-    def __init__(self, channels: int, *, private_seed: int = 20_000) -> None:
+    def __init__(self, channels: int, private_seed: int = 20_000) -> None:
         super().__init__()
         channels = int(channels)
         if channels <= 0:
