@@ -6,7 +6,7 @@
     "sha256": "2590e1f835e0b1d3f53836e4353ea01cbc152dd514631e82aa4174b63224677e"
   },
   "completed_epoch": 5,
-  "published_at": "2026-08-08T13:44:55.766066+00:00",
+  "published_at": "2026-08-08T13:47:33.116513+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-frequencycm-formal-d3655b14-live",
   "run_name": "formal-seed0-fdr-frequencycm-v1"
 }
