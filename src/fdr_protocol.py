@@ -477,7 +477,7 @@ def build_run_identity(
     """Bind one run to immutable source, protocol, arm, stage, and seed identities."""
     if stage not in {"screen", "formal"}:
         raise ValueError(f"unknown FDR stage: {stage}")
-    if variant not in {"control", "fdr"}:
+    if variant not in {"control", "fdr", "fdr_frequencycm"}:
         raise ValueError(f"unknown FDR variant: {variant}")
     if seed != 0:
         raise ValueError("FDR protocol is frozen to seed0")

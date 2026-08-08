@@ -20,6 +20,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 FDR_MODEL_CONFIG = ROOT / "configs" / "rtdetr-l-fdr.yaml"
+FDR_FREQUENCYCM_MODEL_CONFIG = ROOT / "configs" / "rtdetr-l-fdr-frequencycm.yaml"
 sys.path.insert(0, str(ROOT))
 
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
@@ -106,6 +107,7 @@ EVIDENCE_FIELDS = (
     "loss_giou_pre",
     "gradient_norm",
     "fdr_gradient_norm",
+    "frequencycm_gradient_norm",
     "cuda_peak_mib",
 )
 
@@ -114,7 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train one strict seed0 control/FDR RT-DETR-L arm."
     )
-    parser.add_argument("--variant", choices=("control", "fdr"), required=True)
+    parser.add_argument(
+        "--variant",
+        choices=("control", "fdr", "fdr_frequencycm"),
+        required=True,
+    )
     parser.add_argument("--stage", choices=("screen", "formal"), required=True)
     parser.add_argument("--protocol-manifest", type=Path, required=True)
     parser.add_argument("--initial-state", type=Path, required=True)
@@ -366,7 +372,7 @@ def prepare_data_yaml(dataset_root: Path, stage: str, authority_root: Path) -> P
 
 
 def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
-    if args.variant not in {"control", "fdr"}:
+    if args.variant not in {"control", "fdr", "fdr_frequencycm"}:
         raise ValueError(f"unknown FDR variant: {args.variant}")
     if args.stage not in {"screen", "formal"}:
         raise ValueError(f"unknown FDR stage: {args.stage}")
@@ -374,11 +380,11 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
     name = args.name or f"{args.stage}-seed0-{args.variant}-fdr-v1"
     settings = {
         **FROZEN_SETTINGS,
-        "model": (
-            str(FDR_MODEL_CONFIG)
-            if args.variant == "fdr"
-            else FROZEN_SETTINGS["model"]
-        ),
+        "model": {
+            "control": FROZEN_SETTINGS["model"],
+            "fdr": str(FDR_MODEL_CONFIG),
+            "fdr_frequencycm": str(FDR_FREQUENCYCM_MODEL_CONFIG),
+        }[args.variant],
         "data": str(Path(data_yaml).resolve()),
         "epochs": epochs,
         "seed": 0,
@@ -393,12 +399,13 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
 
 def _load_trainer_types():
     from src.rtdetr_fdr import FDRControlTrainer, FDRTrainer
+    from src.rtdetr_fdr_frequencycm import FDRFrequencyCMTrainer
 
-    return FDRControlTrainer, FDRTrainer
+    return FDRControlTrainer, FDRTrainer, FDRFrequencyCMTrainer
 
 
 def create_trainer(variant: str, settings: dict[str, Any], initial_state: Path):
-    control_type, fdr_type = _load_trainer_types()
+    control_type, fdr_type, fdr_frequencycm_type = _load_trainer_types()
     common = {
         "overrides": settings,
         "initial_state_path": Path(initial_state).resolve(),
@@ -407,6 +414,8 @@ def create_trainer(variant: str, settings: dict[str, Any], initial_state: Path):
         return control_type(**common)
     if variant == "fdr":
         return fdr_type(**common, experiment_seed=0)
+    if variant == "fdr_frequencycm":
+        return fdr_frequencycm_type(**common, experiment_seed=0)
     raise ValueError(f"unknown FDR variant: {variant}")
 
 
@@ -503,7 +512,12 @@ def _evidence_record(trainer: Any, context: Mapping[str, Any]) -> dict[str, Any]
         **_fdr_losses(trainer, variant),
         "gradient_norm": _number(norms.get("gradient_norm")),
         "fdr_gradient_norm": (
-            _number(norms.get("fdr_gradient_norm")) if variant == "fdr" else None
+            _number(norms.get("fdr_gradient_norm")) if variant != "control" else None
+        ),
+        "frequencycm_gradient_norm": (
+            _number(norms.get("frequencycm_gradient_norm"))
+            if variant == "fdr_frequencycm"
+            else None
         ),
         "cuda_peak_mib": (
             round(torch.cuda.max_memory_allocated() / 1024**2, 2)

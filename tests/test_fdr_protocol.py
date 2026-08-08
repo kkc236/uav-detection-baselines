@@ -413,6 +413,21 @@ def test_manifest_is_canonical_create_only_and_identity_bound(tmp_path: Path) ->
         write_create_only_manifest(destination, payload)
 
 
+def test_frequencycm_variant_has_a_source_bound_formal_identity() -> None:
+    source = {"git_commit": "f" * 40, "tree_sha256": "A" * 64}
+
+    identity = build_run_identity(
+        source,
+        stage="formal",
+        variant="fdr_frequencycm",
+        seed=0,
+    )
+
+    assert identity["variant"] == "fdr_frequencycm"
+    assert identity["stage"] == "formal"
+    assert identity["run_id"].startswith("fdr_frequencycm-formal-seed0-")
+
+
 @pytest.mark.parametrize(
     "field,replacement",
     [

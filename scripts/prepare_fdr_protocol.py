@@ -62,7 +62,7 @@ def prepare_manifest(
     run_identities = {
         f"{variant}_{stage}": build_run_identity(source, stage=stage, variant=variant, seed=0)
         for stage in ("screen", "formal")
-        for variant in ("control", "fdr")
+        for variant in ("control", "fdr", "fdr_frequencycm")
     }
     manifest = {
         "format_version": 1,

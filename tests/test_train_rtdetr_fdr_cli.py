@@ -50,7 +50,7 @@ def _manifest(module, state: Path) -> dict:
         f"{variant}_{stage}": module.build_run_identity(
             source, stage=stage, variant=variant, seed=0
         )
-        for variant in ("control", "fdr")
+        for variant in ("control", "fdr", "fdr_frequencycm")
         for stage in ("screen", "formal")
     }
     manifest = {
@@ -195,6 +195,28 @@ def test_control_and_fdr_settings_differ_only_by_model_and_name(tmp_path: Path) 
     } == {"model", "name"}
 
 
+def test_frequencycm_formal_settings_change_only_model_and_name_from_fdr(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    data_yaml = tmp_path / "formal.yaml"
+    fdr = module.build_settings(
+        _args(tmp_path, variant="fdr", stage="formal"), data_yaml
+    )
+    method = module.build_settings(
+        _args(tmp_path, variant="fdr_frequencycm", stage="formal"), data_yaml
+    )
+
+    assert Path(method["model"]) == (
+        module.ROOT / "configs" / "rtdetr-l-fdr-frequencycm.yaml"
+    ).resolve()
+    assert method["epochs"] == 100
+    assert method["batch"] == 8
+    assert method["workers"] == 8
+    assert method["optimizer"] == "MuSGD"
+    assert {key for key in fdr if fdr[key] != method[key]} == {"model", "name"}
+
+
 def test_resume_is_the_only_runtime_training_override(tmp_path: Path) -> None:
     module = _load_module()
     checkpoint = tmp_path / "run" / "weights" / "last.pt"
@@ -275,12 +297,21 @@ def test_arm_factory_uses_paired_trainers_and_shared_initial_state(
         def __init__(self, **kwargs):
             calls.append(("fdr", kwargs))
 
-    monkeypatch.setattr(module, "_load_trainer_types", lambda: (Control, FDR))
+    class FrequencyCM:
+        def __init__(self, **kwargs):
+            calls.append(("fdr_frequencycm", kwargs))
+
+    monkeypatch.setattr(
+        module,
+        "_load_trainer_types",
+        lambda: (Control, FDR, FrequencyCM),
+    )
     state = tmp_path / "initial.pt"
     settings = {"epochs": 50}
 
     module.create_trainer("control", settings, state)
     module.create_trainer("fdr", settings, state)
+    module.create_trainer("fdr_frequencycm", settings, state)
 
     assert calls == [
         (
@@ -289,6 +320,14 @@ def test_arm_factory_uses_paired_trainers_and_shared_initial_state(
         ),
         (
             "fdr",
+            {
+                "overrides": settings,
+                "initial_state_path": state.resolve(),
+                "experiment_seed": 0,
+            },
+        ),
+        (
+            "fdr_frequencycm",
             {
                 "overrides": settings,
                 "initial_state_path": state.resolve(),
@@ -394,6 +433,25 @@ def test_control_epoch_has_null_fdr_fields(tmp_path: Path) -> None:
     )
     assert record["loss_fgl"] is None
     assert record["fdr_gradient_norm"] is None
+
+
+def test_frequencycm_epoch_records_fdr_and_module_gradient_norms(tmp_path: Path) -> None:
+    module = _load_module()
+    trainer = _fake_trainer(tmp_path / "frequencycm")
+    trainer.last_gradient_norms["frequencycm_gradient_norm"] = 6.0
+
+    record = module.write_epoch_evidence(
+        trainer,
+        {
+            "variant": "fdr_frequencycm",
+            "stage": "formal",
+            "run_identity": {"run_id": "fdr-frequencycm-formal-seed0"},
+        },
+    )
+
+    assert record["loss_fgl"] == pytest.approx(0.15)
+    assert record["fdr_gradient_norm"] == pytest.approx(5.0)
+    assert record["frequencycm_gradient_norm"] == pytest.approx(6.0)
 
 
 def test_epoch_publication_queue_is_local_idempotent_and_resume_safe(tmp_path: Path) -> None:
