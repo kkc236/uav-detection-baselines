@@ -1,0 +1,62 @@
+{
+  "class_count": 10,
+  "created_utc": "2026-08-08T14:26:35.140100+00:00",
+  "data_yaml": "/home/ubuntu/glgm/datasets/VisDrone-official-v2/data.yaml",
+  "data_yaml_sha256": "9D905E003289AEDCCAEE6309C5020370D036A89016651615B62B455B606D3C29",
+  "dataset_root": "/home/ubuntu/glgm/datasets/VisDrone-official-v2",
+  "names": {
+    "0": "pedestrian",
+    "1": "people",
+    "2": "bicycle",
+    "3": "car",
+    "4": "van",
+    "5": "truck",
+    "6": "tricycle",
+    "7": "awning-tricycle",
+    "8": "bus",
+    "9": "motor"
+  },
+  "schema": "visdrone-yolo-audit-v1",
+  "splits": {
+    "train": {
+      "boxes": 343204,
+      "class_box_counts": {
+        "0": 79337,
+        "1": 27059,
+        "2": 10480,
+        "3": 144866,
+        "4": 24956,
+        "5": 12875,
+        "6": 4812,
+        "7": 3246,
+        "8": 5926,
+        "9": 29647
+      },
+      "empty_labels": 0,
+      "images": 6471,
+      "inventory_hash_includes_content": true,
+      "inventory_sha256": "4B8780A13E86B6FA87EBF8284E4E4188C54B92DB580EAEFE2243340E6091A95B",
+      "labels": 6471
+    },
+    "val": {
+      "boxes": 38759,
+      "class_box_counts": {
+        "0": 8844,
+        "1": 5125,
+        "2": 1287,
+        "3": 14064,
+        "4": 1975,
+        "5": 750,
+        "6": 1045,
+        "7": 532,
+        "8": 251,
+        "9": 4886
+      },
+      "empty_labels": 0,
+      "images": 548,
+      "inventory_hash_includes_content": true,
+      "inventory_sha256": "968C037004E16F86E6BA92AB476311D3B4BE077371FD29C25007490B6ACC4902",
+      "labels": 548
+    }
+  }
+}

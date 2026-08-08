@@ -1,0 +1,17 @@
+df3ed4249911acad8a6772bdf03b42d3bf8014e962a276a9335fd92ae038b1ab  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/comparison-best.json
+a8243cb6ef844d742bba73fc8586fbf505946e2e17809fc2953db8e4cea1e797  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/comparison-last.json
+47855eb28972e1aa97d67a71a5e83f462d50dd8e611e12638475f0b6d7c791f7  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control-best-benchmark.json
+3e39b3368928b740602f9c7cc899b4585fda8821b051c844ba4d63979b04f837  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control-best-metrics.json
+db8cefbfd87de6df7f4c76ff42a916408290da2c37e8ca35447fc51d40a6d96c  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control-last-metrics.json
+23dc57af05f57988c1cb8714811dcfa9b1448799309f77569fe4bd5b9df899a2  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control-train-receipt.json
+c7b836f528425c4b60ad7d433c92552fc3b253a9544cd7c5dfcd4a3a4d0f402a  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control_paired_init.pt
+e36526972f1986b3a8263709c4becff87e2b5608cd4ef33fd648b394263e00d1  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm-best-benchmark.json
+a1bc41a1c22dfc68bd4918b32ece70bfaa43ee5e36558aeb54ad2905b27af0d1  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm-best-metrics.json
+4911cabc827b187d85c95dec2c7b8e70623113959c6205e6404e33f95b8a1934  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm-last-metrics.json
+137c5c63460a06c9f975aaa46cf52934de5865e8f9da5031f9b5a960b2717c18  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm-train-receipt.json
+b23a1067b64c73188acaefea3b08c78705ddacb4f30d13c06f3817ef495b3d3e  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm_paired_init.pt
+1657a7dd64e1951abb941c12f27103f6b1a9e1adf8cadaacc56e3d9d967ecd2b  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/paired_preflight_manifest.json
+99a6f09477ba0b67d5222ad2ea63813acc97234ad44c165c8410ebf512001501  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/visdrone-audit-control-pretrain.json
+3ea1f8d9cf07c01673742e0e2c15e0221dcb49dcc81cb631772f416e28a31ba7  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/visdrone-audit-glgm-pretrain.json
+e8163eab3e72e6980e91c81ed6e3db40fd537cc84ecc030dd163068d3f81561c  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/visdrone-audit-pre-eval.json
+ec73acf22f7341ba6631bac434ed30161b995feb1899ccc1d25b93a27f898c4b  /home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/visdrone-audit.json

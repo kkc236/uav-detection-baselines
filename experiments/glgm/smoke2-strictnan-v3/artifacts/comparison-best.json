@@ -1,0 +1,201 @@
+{
+  "allowed_protocol_differences": [
+    "device"
+  ],
+  "control_report": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/control-best-metrics.json",
+  "created_utc": "2026-08-08T14:48:09.385492+00:00",
+  "glgm_report": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/glgm-best-metrics.json",
+  "metrics": {
+    "ap50": {
+      "absolute_delta": 0.003995424771294394,
+      "control": 0.033375796361238046,
+      "glgm": 0.03737122113253244,
+      "percentage_point_delta": 0.39954247712943936,
+      "relative_percent": 11.97102453541632
+    },
+    "ap75": {
+      "absolute_delta": 0.0023730757655126,
+      "control": 0.020880455705589072,
+      "glgm": 0.023253531471101672,
+      "percentage_point_delta": 0.23730757655126,
+      "relative_percent": 11.36505734823306
+    },
+    "f1": {
+      "absolute_delta": 0.00485809789193134,
+      "control": 0.040521270561600646,
+      "glgm": 0.045379368453531986,
+      "percentage_point_delta": 0.485809789193134,
+      "relative_percent": 11.989006821851833
+    },
+    "map50_95": {
+      "absolute_delta": 0.002263819853239736,
+      "control": 0.0198534810168398,
+      "glgm": 0.022117300870079536,
+      "percentage_point_delta": 0.2263819853239736,
+      "relative_percent": 11.40263438597773
+    },
+    "precision": {
+      "absolute_delta": -0.020204521611504767,
+      "control": 0.8642034092269497,
+      "glgm": 0.843998887615445,
+      "percentage_point_delta": -2.0204521611504767,
+      "relative_percent": -2.33793588358766
+    },
+    "recall": {
+      "absolute_delta": 0.023040649220543254,
+      "control": 0.050623038623204185,
+      "glgm": 0.07366368784374744,
+      "percentage_point_delta": 2.3040649220543252,
+      "relative_percent": 45.514156888207935
+    }
+  },
+  "paired_training_protocol_sha256": "224A91521BE74058381EDC7EE0E6D0D2E9F155F23A7D6F21A447A0A61F2A3E4E",
+  "parameter_delta": 6639079,
+  "parameter_delta_percent": 9.861384948565595,
+  "per_class_delta": [
+    {
+      "delta": {
+        "ap50": 0.028575332950112144,
+        "ap75": 0.0065116843818278855,
+        "f1": 0.13954368058846597,
+        "map50_95": 0.011030301665652944,
+        "precision": -0.07436573709218766,
+        "recall": 0.1014246947082768
+      },
+      "id": 0,
+      "name": "pedestrian"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 1,
+      "name": "people"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 2,
+      "name": "bicycle"
+    },
+    {
+      "delta": {
+        "ap50": 0.010814021581617983,
+        "ap75": 0.016719391614171075,
+        "f1": -0.0909627016691526,
+        "map50_95": 0.011210434202621605,
+        "precision": -0.12767947902286075,
+        "recall": 0.12898179749715577
+      },
+      "id": 3,
+      "name": "car"
+    },
+    {
+      "delta": {
+        "ap50": 0.0005403833772922679,
+        "ap75": 0.00047517185520549944,
+        "f1": 0.0,
+        "map50_95": 0.00038275678176991144,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 4,
+      "name": "van"
+    },
+    {
+      "delta": {
+        "ap50": 2.4509803921568626e-05,
+        "ap75": 2.4509803921568626e-05,
+        "f1": 0.0,
+        "map50_95": 1.4705882352941175e-05,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 5,
+      "name": "truck"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 6,
+      "name": "tricycle"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 7,
+      "name": "awning-tricycle"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 8,
+      "name": "bus"
+    },
+    {
+      "delta": {
+        "ap50": 0.0,
+        "ap75": 0.0,
+        "f1": 0.0,
+        "map50_95": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "id": 9,
+      "name": "motor"
+    }
+  ],
+  "schema": "glgm-paired-comparison-v1",
+  "speed_ms_per_image": {
+    "inference": {
+      "control_ms": 19.713081260976853,
+      "delta_ms": 0.4556657116512888,
+      "glgm_ms": 20.168746972628142
+    },
+    "loss": {
+      "control_ms": 0.0017993394153464134,
+      "delta_ms": 3.2198910632665187e-05,
+      "glgm_ms": 0.0018315383259790785
+    },
+    "postprocess": {
+      "control_ms": 0.4924777791881626,
+      "delta_ms": -0.15460353827547546,
+      "glgm_ms": 0.33787424091268714
+    },
+    "preprocess": {
+      "control_ms": 0.49929349088880326,
+      "delta_ms": -0.04039698904865091,
+      "glgm_ms": 0.45889650184015235
+    }
+  },
+  "strict_pair": false
+}

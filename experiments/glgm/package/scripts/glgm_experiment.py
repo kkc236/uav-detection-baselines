@@ -24,6 +24,11 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CONTROL_CONFIG = PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-control.yaml"
 GLGM_CONFIG = PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-only.yaml"
 METRIC_KEYS = ("precision", "recall", "f1", "ap50", "ap75", "map50_95")
+EXPECTED_ULTRALYTICS_VERSION = "8.4.116"
+EXPECTED_ENGINE_SHA256 = {
+    "trainer.py": "77023DBF526A1B9B6925F1E665FE2C215C913CD65E2C1CF4438301479961D025",
+    "validator.py": "D33464500593F3B2223B9D2FC5FA923526C3004F7060C3836A04B4C21049604D",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +108,7 @@ def import_runtime(repo_dir: Path):
     repo_dir = repo_dir.resolve()
     if not (repo_dir / "ultralytics" / "__init__.py").is_file():
         raise FileNotFoundError(f"not an Ultralytics source checkout: {repo_dir}")
+    verify_engine_source(repo_dir)
     sys.path.insert(0, str(repo_dir))
     import numpy as np
     import torch
@@ -115,6 +121,10 @@ def import_runtime(repo_dir: Path):
     expected = (repo_dir / "ultralytics" / "__init__.py").resolve()
     if imported != expected:
         raise RuntimeError(f"wrong Ultralytics import: expected {expected}, got {imported}")
+    if ultralytics.__version__ != EXPECTED_ULTRALYTICS_VERSION:
+        raise RuntimeError(
+            f"expected Ultralytics {EXPECTED_ULTRALYTICS_VERSION}, got {ultralytics.__version__}"
+        )
     return np, torch, ultralytics, yaml, RTDETR, GLGM
 
 
@@ -124,6 +134,16 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def verify_engine_source(repo_dir: Path) -> None:
+    engine_dir = repo_dir / "ultralytics" / "engine"
+    actual = {name: sha256_file(engine_dir / name) for name in EXPECTED_ENGINE_SHA256}
+    if actual != EXPECTED_ENGINE_SHA256:
+        raise RuntimeError(
+            "Ultralytics engine source is not the audited strict-training version: "
+            f"expected {EXPECTED_ENGINE_SHA256}, got {actual}"
+        )
 
 
 def tensor_fingerprint(torch, state: dict[str, Any], keys: list[str]) -> str:
@@ -181,6 +201,8 @@ def current_source_hashes(repo_dir: Path) -> dict[str, str]:
         "block.py": sha256_file(repo_dir / "ultralytics" / "nn" / "modules" / "block.py"),
         "modules_init.py": sha256_file(repo_dir / "ultralytics" / "nn" / "modules" / "__init__.py"),
         "tasks.py": sha256_file(repo_dir / "ultralytics" / "nn" / "tasks.py"),
+        "trainer.py": sha256_file(repo_dir / "ultralytics" / "engine" / "trainer.py"),
+        "validator.py": sha256_file(repo_dir / "ultralytics" / "engine" / "validator.py"),
         "control_yaml": sha256_file(CONTROL_CONFIG),
         "glgm_yaml": sha256_file(GLGM_CONFIG),
         "experiment_script.py": sha256_file(Path(__file__)),
@@ -568,6 +590,84 @@ def train_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def make_epoch_finite_guard(torch, *, include_training_state: bool = False):
+    """Build a finite-value guard for epoch results and, optionally, all mutable training state."""
+
+    def find_non_finite(name: str, value: Any, failures: list[str]) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                find_non_finite(f"{name}.{key}", item, failures)
+            return
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                find_non_finite(f"{name}.{index}", item, failures)
+            return
+        if torch.is_tensor(value):
+            finite = bool(torch.isfinite(value.detach()).all().item())
+        elif isinstance(value, (int, float)):
+            finite = math.isfinite(float(value))
+        else:
+            return
+        if not finite:
+            failures.append(name)
+
+    def guard(trainer) -> None:
+        failures: list[str] = []
+        for name in ("metrics", "tloss", "loss_items", "loss", "fitness"):
+            find_non_finite(name, getattr(trainer, name, None), failures)
+        if include_training_state:
+            model = getattr(trainer, "model", None)
+            if model is not None:
+                find_non_finite("model", model.state_dict(), failures)
+            ema = getattr(getattr(trainer, "ema", None), "ema", None)
+            if ema is not None:
+                find_non_finite("ema", ema.state_dict(), failures)
+            optimizer = getattr(trainer, "optimizer", None)
+            if optimizer is not None:
+                find_non_finite("optimizer", optimizer.state_dict(), failures)
+            scaler = getattr(trainer, "scaler", None)
+            if scaler is not None:
+                find_non_finite("scaler", scaler.state_dict(), failures)
+        if failures:
+            epoch = int(getattr(trainer, "epoch", -1)) + 1
+            unique = sorted(set(failures))
+            summary = ", ".join(unique[:20])
+            if len(unique) > 20:
+                summary += f", ... ({len(unique)} total)"
+            raise FloatingPointError(
+                f"non-finite values detected at epoch {epoch}: {summary}"
+            )
+
+    return guard
+
+
+def make_strict_nan_recovery_handler(torch):
+    """Replace Ultralytics recovery with a pre-save hard failure for strict paired training."""
+
+    guard = make_epoch_finite_guard(torch, include_training_state=True)
+
+    def reject_recovery(trainer, epoch: int) -> bool:
+        attempts = int(getattr(trainer, "nan_recovery_attempts", 0))
+        if attempts:
+            raise RuntimeError(f"strict paired training observed {attempts} NaN recovery attempt(s)")
+        guard(trainer)
+        trainer._glgm_strict_finite_epoch = int(epoch)
+        return False
+
+    reject_recovery._glgm_strict_nan_policy = True
+    return reject_recovery
+
+
+def install_strict_nan_policy(torch) -> None:
+    from ultralytics.engine.trainer import BaseTrainer
+
+    BaseTrainer._handle_nan_recovery = make_strict_nan_recovery_handler(torch)
+    if not getattr(BaseTrainer._handle_nan_recovery, "_glgm_strict_nan_policy", False):
+        raise RuntimeError("failed to install strict NaN rejection policy")
+
+
 def run_train(args: argparse.Namespace, runtime) -> None:
     np, torch, ultralytics, yaml, RTDETR, GLGM = runtime
     del np, yaml, GLGM
@@ -589,9 +689,15 @@ def run_train(args: argparse.Namespace, runtime) -> None:
     expected_save_dir = (args.runs_dir.resolve() / run_name).resolve()
     if expected_save_dir.exists():
         raise FileExistsError(f"refusing to reuse an existing run directory: {expected_save_dir}")
+    install_strict_nan_policy(torch)
     model = RTDETR(str(init_path))
+    model.add_callback("on_fit_epoch_end", make_epoch_finite_guard(torch))
     protocol = train_kwargs(args)
     model.train(**protocol)
+    if getattr(model.trainer, "_glgm_strict_finite_epoch", None) != int(model.trainer.epoch):
+        raise RuntimeError("strict NaN rejection policy did not run for the final epoch")
+    if int(getattr(model.trainer, "nan_recovery_attempts", 0)) != 0:
+        raise RuntimeError("strict paired training must not perform NaN recovery")
     actual_save_dir = Path(model.trainer.save_dir).resolve()
     if actual_save_dir != expected_save_dir:
         raise RuntimeError(f"unexpected training output directory: {actual_save_dir} != {expected_save_dir}")
@@ -622,6 +728,11 @@ def run_train(args: argparse.Namespace, runtime) -> None:
         },
         "protocol": protocol,
         "protocol_sha256": mapping_fingerprint(protocol),
+        "nan_policy": {
+            "mode": "fail_before_save",
+            "internal_recovery_allowed": False,
+            "full_training_state_checked_each_epoch": True,
+        },
         "training_completion": training_completion,
         "checkpoints": {
             kind: {"kind": kind, "path": str(path.resolve()), "sha256": sha256_file(path)}

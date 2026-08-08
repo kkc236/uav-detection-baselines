@@ -1,0 +1,86 @@
+{
+  "arm": "control",
+  "checkpoints": {
+    "best": {
+      "kind": "best",
+      "path": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/runs/control-seed0-e2/weights/best.pt",
+      "sha256": "43A77E56C1A462F93622CA1E9383B5FD2836A862CD24A3B90D1881C7D6E7A9FD"
+    },
+    "last": {
+      "kind": "last",
+      "path": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/runs/control-seed0-e2/weights/last.pt",
+      "sha256": "8253488EE8FC509C2FE1EA538639AD3D9E75D6777D23CC254F963D9108002047"
+    }
+  },
+  "created_utc": "2026-08-08T14:45:45.528304+00:00",
+  "data_inventory_sha256": {
+    "train": "4B8780A13E86B6FA87EBF8284E4E4188C54B92DB580EAEFE2243340E6091A95B",
+    "val": "968C037004E16F86E6BA92AB476311D3B4BE077371FD29C25007490B6ACC4902"
+  },
+  "data_yaml_sha256": "9D905E003289AEDCCAEE6309C5020370D036A89016651615B62B455B606D3C29",
+  "initial_checkpoint_sha256": "C7B836F528425C4B60AD7D433C92552FC3B253A9544CD7C5DFCD4A3A4D0F402A",
+  "manifest": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/artifacts/paired_preflight_manifest.json",
+  "manifest_sha256": "1657A7DD64E1951ABB941C12F27103F6B1A9E1ADF8CADAACC56E3D9D967ECD2B",
+  "nan_policy": {
+    "full_training_state_checked_each_epoch": true,
+    "internal_recovery_allowed": false,
+    "mode": "fail_before_save"
+  },
+  "protocol": {
+    "amp": true,
+    "batch": 4,
+    "cache": false,
+    "close_mosaic": 10,
+    "cos_lr": false,
+    "data": "/home/ubuntu/glgm/datasets/VisDrone-official-v2/data.yaml",
+    "degrees": 0.0,
+    "deterministic": true,
+    "device": "0",
+    "epochs": 2,
+    "exist_ok": false,
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "fraction": 0.05,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "imgsz": 640,
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "mixup": 0.0,
+    "momentum": 0.937,
+    "mosaic": 1.0,
+    "name": "control-seed0-e2",
+    "nbs": 64,
+    "optimizer": "auto",
+    "patience": 0,
+    "perspective": 0.0,
+    "plots": true,
+    "project": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/runs",
+    "save": true,
+    "save_period": 1,
+    "scale": 0.5,
+    "seed": 0,
+    "shear": 0.0,
+    "translate": 0.1,
+    "val": true,
+    "warmup_bias_lr": 0.0,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "weight_decay": 0.0005,
+    "workers": 4
+  },
+  "protocol_sha256": "6643B8A942E58173EE140A7F87F75DBDCDEA3D341162F95C97D2481B100EB11F",
+  "public_state_sha256": "325E80C7FA9826028169F1D99071C09DA1C900FBABB029CBE43B675C151F6BE3",
+  "run_name": "control-seed0-e2",
+  "save_dir": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/runs/control-seed0-e2",
+  "schema": "glgm-train-receipt-v1",
+  "training_completion": {
+    "all_rows_finite": true,
+    "completed_epochs": 2,
+    "requested_epochs": 2,
+    "results_csv": "/home/ubuntu/glgm/work/smoke2-strictnan-v3/runs/control-seed0-e2/results.csv",
+    "results_csv_sha256": "E7D179C4E93B1DE5E5B1C72B93A64D50ADA3C5790BCFB8CB6DC9835F5D4648B7",
+    "results_row_count": 2
+  }
+}
