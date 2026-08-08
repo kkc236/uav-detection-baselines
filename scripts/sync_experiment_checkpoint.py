@@ -254,6 +254,18 @@ def checkpoint_tree_fingerprint(run_dir: Path) -> tuple[tuple[str, int, int], ..
     )
 
 
+def checkpoint_tree_advanced(
+    before: tuple[tuple[str, int, int], ...],
+    after: tuple[tuple[str, int, int], ...],
+) -> bool:
+    """Return true when publishing overlapped a new or rewritten checkpoint."""
+    previous = {name: (size, modified) for name, size, modified in before}
+    return any(
+        previous.get(name) != (size, modified)
+        for name, size, modified in after
+    )
+
+
 def prune_local_epoch_checkpoints(weights: Path, *, retain: int) -> list[Path]:
     if retain < 1:
         raise ValueError("retain must be at least one")
@@ -372,7 +384,12 @@ def run_continuously(args: argparse.Namespace) -> None:
                         f"Published checkpoint epoch {manifest['completed_epoch']} to {manifest['release_url']}",
                         flush=True,
                     )
-                previous_fingerprint = checkpoint_tree_fingerprint(args.run_dir)
+                current_fingerprint = checkpoint_tree_fingerprint(args.run_dir)
+                previous_fingerprint = (
+                    None
+                    if checkpoint_tree_advanced(fingerprint, current_fingerprint)
+                    else current_fingerprint
+                )
             except Exception as error:
                 write_json_atomic(
                     args.status_file,

@@ -4,6 +4,7 @@ import importlib
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -236,3 +237,53 @@ def test_concurrent_result_writers_preserve_both_experiments(tmp_path: Path, mod
     )
     assert json.loads(first)["completed_epoch"] == 3
     assert json.loads(second)["completed_epoch"] == 7
+
+
+def test_continuous_sync_retries_when_checkpoint_tree_advances_during_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = importlib.import_module("scripts.sync_experiment_checkpoint")
+    before = (("epoch32.pt", 100, 10), ("last.pt", 100, 10))
+    after = (
+        ("epoch32.pt", 100, 10),
+        ("epoch33.pt", 101, 20),
+        ("last.pt", 101, 20),
+    )
+    fingerprints = iter((before, after, after, after))
+    published_epochs = iter((33, 34))
+    calls: list[int] = []
+
+    monkeypatch.setattr(
+        sync,
+        "checkpoint_tree_fingerprint",
+        lambda _run_dir: next(fingerprints),
+    )
+
+    def fake_sync_once(_args):
+        completed_epoch = next(published_epochs)
+        calls.append(completed_epoch)
+        return {
+            "completed_epoch": completed_epoch,
+            "release_url": "https://example.invalid/release",
+        }
+
+    monkeypatch.setattr(sync, "sync_once", fake_sync_once)
+
+    class StopLoop(RuntimeError):
+        pass
+
+    sleeps = 0
+
+    def stop_after_second_iteration(_interval):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise StopLoop
+
+    monkeypatch.setattr(sync.time, "sleep", stop_after_second_iteration)
+    args = SimpleNamespace(run_dir=tmp_path, interval=30, status_file=tmp_path / "status.json")
+
+    with pytest.raises(StopLoop):
+        sync.run_continuously(args)
+
+    assert calls == [33, 34]
