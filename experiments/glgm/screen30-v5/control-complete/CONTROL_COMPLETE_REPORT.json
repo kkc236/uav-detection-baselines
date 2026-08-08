@@ -1,0 +1,57 @@
+{
+  "schema": "glgm-screen30-control-complete-v1",
+  "created_utc": "2026-08-08T18:57:00Z",
+  "authority": "/home/ubuntu/glgm/work/screen30-seed0-v5",
+  "arm": "control",
+  "completed_epochs": 30,
+  "formal_result": false,
+  "reason": "control-arm completion milestone; paired scientific comparison awaits GLGM and independent evaluation",
+  "epoch_30_training_time_metrics": {
+    "precision": 0.59465,
+    "recall": 0.50169,
+    "f1": 0.5442289044,
+    "map50": 0.5026,
+    "map50_95": 0.29953,
+    "train_giou_loss": 0.6417,
+    "train_cls_loss": 0.45514,
+    "train_l1_loss": 0.05262,
+    "val_giou_loss": 0.64635,
+    "val_cls_loss": 0.49875,
+    "val_l1_loss": 0.06262
+  },
+  "best_training_time_metrics": {
+    "epoch": 29,
+    "map50": 0.50278,
+    "map50_95": 0.29979
+  },
+  "completion_gate": {
+    "results_rows": 30,
+    "epochs_contiguous_1_through_30": true,
+    "all_csv_values_finite": true,
+    "pre_save_full_state_guard_triggered": false,
+    "error_log_hits": 0,
+    "control_train_receipt_present": true,
+    "best_and_last_checkpoint_hashes_recorded_in_receipt": true,
+    "glgm_pretrain_dataset_audit_passed": true
+  },
+  "phase_transition": {
+    "control_finished": true,
+    "glgm_started": true,
+    "same_physical_device": "0",
+    "strict_pair": true,
+    "parallel": false
+  },
+  "timing": {
+    "control_elapsed_seconds": 14412.9,
+    "mean_seconds_per_control_epoch": 480.43,
+    "estimated_glgm_plus_evaluation_hours_remaining_range": [
+      4.0,
+      5.5
+    ]
+  },
+  "publication": {
+    "contains_model_checkpoint": false,
+    "checkpoint_paths_and_hashes_are_metadata_only": true,
+    "scientific_comparison_deferred_until_both_arms_complete": true
+  }
+}
