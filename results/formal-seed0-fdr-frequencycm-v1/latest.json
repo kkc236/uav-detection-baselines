@@ -1,12 +1,12 @@
 {
   "checkpoint": {
-    "asset_id": 506421761,
-    "asset_name": "fdr-frequencycm-formal-d3655b14-epoch-0005.pt",
-    "bytes": 215028712,
-    "sha256": "2590e1f835e0b1d3f53836e4353ea01cbc152dd514631e82aa4174b63224677e"
+    "asset_id": 506427994,
+    "asset_name": "fdr-frequencycm-formal-d3655b14-epoch-0006.pt",
+    "bytes": 215028904,
+    "sha256": "53bb56ffc5323d38ac9cd68f3b6cf4b7bd8a858787b2cd8e869783b95e5cef0a"
   },
-  "completed_epoch": 5,
-  "published_at": "2026-08-08T13:47:33.116513+00:00",
+  "completed_epoch": 6,
+  "published_at": "2026-08-08T13:52:09.743101+00:00",
   "release_url": "https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-frequencycm-formal-d3655b14-live",
   "run_name": "formal-seed0-fdr-frequencycm-v1"
 }
