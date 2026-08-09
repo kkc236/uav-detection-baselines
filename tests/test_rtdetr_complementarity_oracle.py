@@ -37,6 +37,16 @@ def test_candidate_iou_matrix_uses_normalized_cxcywh() -> None:
     assert torch.allclose(actual, torch.tensor([[0.25, 0.0], [0.0, 0.0]], dtype=torch.float64))
 
 
+def test_candidate_iou_allows_finite_out_of_frame_decoder_boxes() -> None:
+    actual = candidate_iou_matrix(
+        torch.tensor([[-0.01, 0.5, 0.2, 0.2]]),
+        torch.tensor([[0.05, 0.5, 0.1, 0.1]]),
+    )
+
+    assert actual.shape == (1, 1)
+    assert 0.0 < actual.item() < 1.0
+
+
 def test_assignment_is_same_class_one_to_one_and_maximizes_iou() -> None:
     predictions = torch.tensor(
         [
@@ -140,7 +150,7 @@ def test_assignment_returns_empty_tensors_for_empty_inputs(
         (torch.zeros((1, 5)), torch.empty((0, 4)), ValueError, r"boxes.*\[N, 4\]"),
         (torch.zeros((1, 4), dtype=torch.long), torch.empty((0, 4)), TypeError, "floating"),
         (torch.tensor([[float("nan"), 0.0, 0.0, 0.0]]), torch.empty((0, 4)), ValueError, "finite"),
-        (torch.tensor([[1.1, 0.5, 0.2, 0.2]]), torch.empty((0, 4)), ValueError, "normalized"),
+        (torch.tensor([[0.5, 0.5, -0.2, 0.2]]), torch.empty((0, 4)), ValueError, "non-negative width"),
         (torch.empty((0, 4)), torch.tensor([[0.5, 0.5, -0.1, 0.2]]), ValueError, "normalized"),
     ],
 )
@@ -517,6 +527,18 @@ def test_paired_cache_accepts_empty_records(tmp_path: Path) -> None:
     assert load_paired_cache(root, _valid_authority()) == ()
 
 
+def test_paired_cache_preserves_out_of_frame_decoder_coordinates(
+    tmp_path: Path,
+) -> None:
+    record = _synthetic_record()
+    record["fdr_boxes"][0, 0] = -0.004
+
+    write_paired_cache(tmp_path / "cache", [record], _valid_authority())
+    loaded = load_paired_cache(tmp_path / "cache", _valid_authority())
+
+    assert loaded[0]["fdr_boxes"][0, 0].item() == pytest.approx(-0.004)
+
+
 def test_paired_cache_rejects_corrupted_payload_before_deserialization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -624,7 +646,11 @@ def test_paired_cache_rejects_duplicate_image_ids_and_existing_empty_root(
         ("fdr_boxes", torch.zeros((300, 4), dtype=torch.float64), "dtype"),
         ("fdr_boxes", torch.zeros((300, 4), requires_grad=True), "detached"),
         ("fdr_boxes", torch.zeros((4, 300)).T, "contiguous"),
-        ("frequencycm_boxes", torch.full((300, 4), 1.1), "normalized"),
+        (
+            "frequencycm_boxes",
+            torch.tensor([[0.5, 0.5, -0.1, 0.1]]).repeat(300, 1),
+            "non-negative width",
+        ),
         ("fdr_logits", torch.full((300, 10), float("nan")), "finite"),
         ("frequencycm_logits", torch.zeros((300, 9)), "production tensor shape"),
         ("target_boxes", torch.zeros((1, 4), dtype=torch.float64), "dtype"),

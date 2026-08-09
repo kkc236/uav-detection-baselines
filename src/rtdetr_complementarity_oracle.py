@@ -90,6 +90,11 @@ def _require_normalized(value: torch.Tensor, name: str) -> None:
         raise ValueError(f"{name} must be normalized to [0, 1]")
 
 
+def _require_candidate_geometry(value: torch.Tensor, name: str) -> None:
+    if value.numel() and not bool((value[:, 2:] >= 0).all()):
+        raise ValueError(f"{name} must have non-negative width and height")
+
+
 def _require_classes(value: object, name: str) -> torch.Tensor:
     if not isinstance(value, torch.Tensor):
         raise TypeError(f"{name} must be a tensor")
@@ -118,7 +123,7 @@ def candidate_iou_matrix(boxes: torch.Tensor, targets: torch.Tensor) -> torch.Te
         raise ValueError("boxes and targets must share a device")
     _require_finite(boxes, "boxes")
     _require_finite(targets, "targets")
-    _require_normalized(boxes, "boxes")
+    _require_candidate_geometry(boxes, "boxes")
     _require_normalized(targets, "targets")
 
     compute_dtype = torch.promote_types(boxes.dtype, targets.dtype)
@@ -507,7 +512,7 @@ def build_matched_quality_arm(
         raise ValueError("boxes and probabilities must share a device")
     _require_finite(boxes, "boxes")
     _require_finite(probabilities, "probabilities")
-    _require_normalized(boxes, "boxes")
+    _require_candidate_geometry(boxes, "boxes")
     if not bool(((probabilities >= 0) & (probabilities <= 1)).all()):
         raise ValueError("probabilities must be in [0, 1]")
 
@@ -737,12 +742,15 @@ def _validate_paired_record(record: object) -> dict[str, Any]:
     for name, boxes in (
         ("fdr_boxes", fdr_boxes),
         ("frequencycm_boxes", frequencycm_boxes),
-        ("target_boxes", target_boxes),
     ):
-        if not bool(((boxes >= 0) & (boxes <= 1)).all()):
+        if boxes.numel() and not bool((boxes[:, 2:] >= 0).all()):
             raise ComplementarityOracleCacheViolation(
-                f"{name} must be normalized to [0, 1]"
+                f"{name} must have non-negative width and height"
             )
+    if not bool(((target_boxes >= 0) & (target_boxes <= 1)).all()):
+        raise ComplementarityOracleCacheViolation(
+            "target_boxes must be normalized to [0, 1]"
+        )
     if target_classes.numel() and not bool(
         ((target_classes >= 0) & (target_classes < NUM_CLASSES)).all()
     ):
