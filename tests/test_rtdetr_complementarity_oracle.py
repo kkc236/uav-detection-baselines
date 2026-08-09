@@ -393,6 +393,33 @@ def test_duplicated_detector_has_exactly_neutral_oracle_candidates() -> None:
     assert duplicated[1, 4].item() == 0.0
 
 
+def test_duplicated_detector_cannot_reuse_one_box_for_two_same_class_targets() -> None:
+    boxes = torch.tensor([[0.50, 0.50, 0.20, 0.20]])
+    probabilities = torch.tensor([[0.9, 0.1]])
+    targets = torch.tensor(
+        [[0.50, 0.50, 0.20, 0.20], [0.54, 0.50, 0.20, 0.20]]
+    )
+    target_classes = torch.tensor([0, 0])
+    original = build_matched_quality_arm(
+        boxes,
+        probabilities,
+        torch.tensor([0]),
+        targets,
+        target_classes,
+        max_det=2,
+    )
+    duplicated = build_matched_quality_arm(
+        torch.cat((boxes, boxes)),
+        torch.cat((probabilities, probabilities)),
+        torch.tensor([0, 1]),
+        targets,
+        target_classes,
+        max_det=2,
+    )
+
+    assert torch.equal(duplicated, original)
+
+
 def test_matched_quality_arm_handles_empty_candidates_and_targets() -> None:
     empty = build_matched_quality_arm(
         boxes=torch.empty((0, 4)),

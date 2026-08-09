@@ -542,6 +542,25 @@ def build_matched_quality_arm(
     if type(max_det) is not int or max_det <= 0:
         raise ValueError("max_det must be a positive integer")
 
+    # A duplicated-detector control must not create extra matching capacity.
+    # Collapse bit-identical query geometry before class expansion, preserving
+    # the first source/query rank.  Confidence is intentionally excluded from
+    # identity because this non-deployable arm ranks only by matched IoU.
+    seen_boxes: set[bytes] = set()
+    unique_indices: list[int] = []
+    for index, row in enumerate(boxes.detach().cpu().contiguous()):
+        identity = row.contiguous().numpy().tobytes(order="C")
+        if identity not in seen_boxes:
+            seen_boxes.add(identity)
+            unique_indices.append(index)
+    if len(unique_indices) != boxes.shape[0]:
+        selected_unique = torch.tensor(
+            unique_indices, dtype=torch.long, device=boxes.device
+        )
+        boxes = boxes[selected_unique]
+        probabilities = probabilities[selected_unique]
+        source_ranks = source_ranks[selected_unique]
+
     query_count = boxes.shape[0]
     candidate_count = query_count * num_classes
     if candidate_count == 0:
