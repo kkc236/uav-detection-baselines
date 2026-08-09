@@ -91,7 +91,8 @@ def test_incomplete_cache_resumes_only_verified_completed_shards(tmp_path: Path)
     first_ids = ids_for("train", 2)
     writer = PFCRCacheWriter(root, authority(), shard_size=2)
     writer.append_many([record(name) for name in first_ids])
-    assert writer.flush() == 1
+    assert writer.flush() == 0  # full shards are persisted immediately for crash recovery
+    assert len(list((root / "shards").glob("train-*"))) == 1
 
     resumed = PFCRCacheWriter(root, authority(), shard_size=2)
     assert resumed.completed_image_ids == frozenset(first_ids)

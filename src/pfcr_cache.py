@@ -229,7 +229,15 @@ class PFCRCacheWriter:
             if image_id in self._seen:
                 raise PFCRCacheViolation(f"duplicate image ID: {image_id}")
             self._seen.add(image_id)
-            self._buffers[pfcr_split(image_id)].append(checked)
+            split = pfcr_split(image_id)
+            buffer = self._buffers[split]
+            buffer.append(checked)
+            if len(buffer) == self.shard_size:
+                self._shards.append(self._write_shard(split, buffer.copy()))
+                buffer.clear()
+                self._shards.sort(
+                    key=lambda item: (item["split"], item["start_index"])
+                )
 
     def _next_start(self, split: str) -> int:
         return sum(int(item["count"]) for item in self._shards if item["split"] == split)
