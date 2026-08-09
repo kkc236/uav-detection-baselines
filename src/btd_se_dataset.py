@@ -17,7 +17,13 @@ def ignore_label_path(image_file: str | Path) -> Path:
 
 def load_ignore_boxes(path: str | Path) -> np.ndarray:
     label_path = Path(path)
-    if not label_path.exists() or not label_path.read_text(encoding="ascii").strip():
+    if not label_path.parent.is_dir():
+        raise FileNotFoundError(
+            f"required ignore-label directory is missing: {label_path.parent}"
+        )
+    if not label_path.is_file():
+        raise FileNotFoundError(f"required ignore-label sidecar is missing: {label_path}")
+    if not label_path.read_text(encoding="ascii").strip():
         return np.empty((0, 4), dtype=np.float32)
     boxes = np.loadtxt(label_path, dtype=np.float32, ndmin=2)
     if boxes.shape[1] != 4:

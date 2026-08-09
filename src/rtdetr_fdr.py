@@ -98,6 +98,8 @@ def _normalise_legacy_fdr_cfg(
 def _cfg_with_private_seed(
     cfg: str | Path | dict,
     private_seed: int | None,
+    *,
+    decoder_name: str = "FDRRTDETRDecoder",
 ) -> str | Path | dict:
     """Return an FDR YAML payload with an optional deterministic seed override."""
 
@@ -105,7 +107,7 @@ def _cfg_with_private_seed(
         return cfg
     payload = deepcopy(cfg) if isinstance(cfg, dict) else yaml_model_load(cfg)
     final_layer = payload.get("head", [None])[-1]
-    if len(final_layer) != 4 or final_layer[2] != "FDRRTDETRDecoder":
+    if len(final_layer) != 4 or final_layer[2] != decoder_name:
         raise TypeError("FDR model YAML must end with FDRRTDETRDecoder")
     arguments = final_layer[3]
     if len(arguments) != 3 or not isinstance(arguments[2], dict):
@@ -180,6 +182,11 @@ def split_fdr_evidence(
 class FDRRTDETRDetectionModel(RTDETRDetectionModel):
     """Ultralytics RT-DETR-L with only its decoder box path replaced."""
 
+    # Subclasses may pin a YAML-visible FDR subtype. ``None`` deliberately
+    # resolves the module global at construction time so tests and audited
+    # runtime probes can replace the baseline head without stale references.
+    yaml_decoder_type = None
+
     def __init__(
         self,
         cfg: str | Path | dict = FDR_MODEL_CFG,
@@ -191,9 +198,14 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
     ) -> None:
         with _MODEL_PARSE_LOCK:
             register_fdr_module()
-            cfg = _cfg_with_private_seed(cfg, private_seed)
+            decoder_type = self.yaml_decoder_type or FDRRTDETRDecoder
+            cfg = _cfg_with_private_seed(
+                cfg,
+                private_seed,
+                decoder_name=decoder_type.__name__,
+            )
             stock_decoder_type = ultralytics_tasks.RTDETRDecoder
-            ultralytics_tasks.RTDETRDecoder = FDRRTDETRDecoder
+            ultralytics_tasks.RTDETRDecoder = decoder_type
             try:
                 super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
             finally:

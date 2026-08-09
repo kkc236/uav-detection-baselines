@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from src.btd_se_dataset import append_ignored_boxes, ignore_label_path
+from src.btd_se_dataset import append_ignored_boxes, ignore_label_path, load_ignore_boxes
 
 
 def test_ignore_label_path_mirrors_images_split(tmp_path: Path):
@@ -38,3 +39,29 @@ def test_append_ignored_boxes_uses_negative_class_for_shared_geometric_transform
             dtype=np.float32,
         ),
     )
+
+
+def test_load_ignore_boxes_fails_when_sidecar_directory_is_missing(tmp_path: Path):
+    sidecar = tmp_path / "labels_ignore" / "train" / "000001.txt"
+
+    with pytest.raises(FileNotFoundError, match="directory is missing"):
+        load_ignore_boxes(sidecar)
+
+
+def test_load_ignore_boxes_fails_when_per_image_sidecar_is_missing(tmp_path: Path):
+    directory = tmp_path / "labels_ignore" / "train"
+    directory.mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="sidecar is missing"):
+        load_ignore_boxes(directory / "000001.txt")
+
+
+def test_load_ignore_boxes_accepts_an_existing_empty_sidecar(tmp_path: Path):
+    sidecar = tmp_path / "labels_ignore" / "train" / "000001.txt"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("", encoding="ascii")
+
+    boxes = load_ignore_boxes(sidecar)
+
+    assert boxes.shape == (0, 4)
+    assert boxes.dtype == np.float32

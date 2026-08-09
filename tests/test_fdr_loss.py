@@ -279,6 +279,13 @@ def test_fgl_and_pre_losses_reuse_stock_normal_and_fixed_dn_assignments() -> Non
     assert matcher.calls == layers
     assert criterion.stock_match_calls == layers
     assert criterion.fgl_extra_match_calls == 0
+    assert criterion.last_normal_decoder_assignment is not None
+    for actual, expected in zip(
+        criterion.last_normal_decoder_assignment,
+        matches,
+    ):
+        assert torch.equal(actual[0], expected[0])
+        assert torch.equal(actual[1], expected[1])
     assert {
         "loss_fgl",
         "loss_fgl_aux",

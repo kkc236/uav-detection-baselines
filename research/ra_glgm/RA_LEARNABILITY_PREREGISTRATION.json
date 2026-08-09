@@ -1,0 +1,29 @@
+{
+  "authority": "exact RA protocol manifest source, dataset authority, and physical GPU UUID",
+  "checkpoint_sha256": "C2F638744508ADFE7B6C4A1EF3E08C503273F628062E4650AD59FFFF4C6588C2",
+  "gate": {
+    "batches_with_targets_fraction_min": 0.95,
+    "dev_images": 129,
+    "dev_loss_relative_reduction_min": 0.05,
+    "difficulty_std_min": 0.05,
+    "epochs": 3,
+    "positive_pixel_fraction_max": 0.4,
+    "positive_pixel_fraction_min": 0.0005,
+    "target_mean_max": 0.2,
+    "target_mean_min": 0.0001,
+    "train_images": 518,
+    "train_loss_relative_reduction_min": 0.1,
+    "valid_fraction_min": 0.5
+  },
+  "optimizer": {
+    "gradient_clip_norm": 5.0,
+    "lr": 0.001,
+    "name": "AdamW",
+    "weight_decay": 0.0001
+  },
+  "probe_batch": 8,
+  "probe_seed": 73091,
+  "screen_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",
+  "scope": "support-target learnability only; not detector accuracy evidence",
+  "trainable": "model.28.ra_glgm support path only; alpha and output_projection excluded"
+}

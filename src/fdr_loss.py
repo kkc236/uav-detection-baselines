@@ -93,6 +93,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         self.fgl_extra_match_calls = 0
         self._normal_assignment_queue: list[MatchIndices] | None = None
         self._recorded_assignments: dict[str, list[MatchIndices]] = {}
+        self.last_normal_decoder_assignment: MatchIndices | None = None
 
     def _get_loss(
         self,
@@ -297,6 +298,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         self.stock_match_calls = 0
         self.fgl_extra_match_calls = 0
         self._recorded_assignments = {}
+        self.last_normal_decoder_assignment = None
         try:
             losses = super().forward(
                 preds,
@@ -328,6 +330,9 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             # FDR corners and preliminary boxes belong to decoder layers only.
             decoder_bboxes = pred_bboxes[1:]
             decoder_assignments = normal_assignments[1:]
+            self.last_normal_decoder_assignment = _clone_matches(
+                decoder_assignments[-1]
+            )
         if corner_logits is not None:
             if pre_boxes is None:
                 raise ValueError("pre_boxes are required when corner_logits are supplied")

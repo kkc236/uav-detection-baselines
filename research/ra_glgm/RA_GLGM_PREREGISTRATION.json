@@ -1,0 +1,223 @@
+{
+  "advancement": {
+    "best_checkpoint": "supplemental only",
+    "formal_initialization": "fresh paired scratch artifact; never Screen checkpoint",
+    "formal_requires_screen_gate": true,
+    "primary_formal_evidence": [
+      "epoch100",
+      "tail3_mean"
+    ]
+  },
+  "augmentation": {
+    "close_mosaic": 10,
+    "copy_paste": 0.0,
+    "cutmix": 0.0,
+    "degrees": 0.0,
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "mixup": 0.0,
+    "mosaic": 1.0,
+    "perspective": 0.0,
+    "scale": 0.5,
+    "shear": 0.0,
+    "translate": 0.1
+  },
+  "baseline": "Ultralytics RT-DETR-L + FDR",
+  "dataset": {
+    "classes": 10,
+    "ignore_sidecar": {
+      "boxes": {
+        "train": 10345,
+        "val": 1410
+      },
+      "files": {
+        "train": 6471,
+        "val": 548
+      },
+      "source_rule": "VisDrone source confidence/score field equals zero"
+    },
+    "name": "VisDrone",
+    "screen_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",
+    "screen_train_images": 647,
+    "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "train_images": 6471,
+    "val_images": 548
+  },
+  "design": "ra-glgm-on-fdr-v1",
+  "device": "0",
+  "evaluation": {
+    "conf": 0.001,
+    "formal_evaluated_epochs": [
+      98,
+      99,
+      100
+    ],
+    "half": false,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "screen_evaluated_epochs": [
+      28,
+      29,
+      30
+    ],
+    "small": "normalized box area at 640 in [16^2,32^2) pixels",
+    "tiny": "normalized box area at 640 below 16^2 pixels"
+  },
+  "method": "Ultralytics RT-DETR-L + FDR + RA-GLGM(P3-only)",
+  "module": {
+    "alpha": {
+      "initialization": "zeros",
+      "shape": "[1,256,1,1]"
+    },
+    "auxiliary_focal": {
+      "alpha": 0.25,
+      "gamma": 2.0,
+      "objective": "soft binary focal BCE",
+      "reduction": "valid-pixel mean",
+      "weight": 0.05
+    },
+    "gaussian_target": {
+      "overlap_reduction": "pixelwise maximum",
+      "sigma": "max(1,box_size_on_P3/8)",
+      "truncate_sigma": 3
+    },
+    "global_expert": {
+      "dilated_kernel_dilation": 3,
+      "operators": [
+        "depthwise 7x7 Conv-BN-SiLU",
+        "depthwise dilated 3x3 Conv-BN-SiLU"
+      ],
+      "pool_projection": {
+        "batch_norm": false,
+        "bias": true,
+        "channels": "192->192",
+        "operator": "1x1 Conv"
+      }
+    },
+    "hidden_channels": 192,
+    "identity_initialization": true,
+    "ignore_boxes": {
+      "auxiliary_negative_supervision": "masked",
+      "class_id": -1,
+      "detection": "excluded",
+      "overlapping_positive_gaussian_pixels": "valid",
+      "target_generation": "excluded"
+    },
+    "input": {
+      "private_branch_input": "x.detach()",
+      "shape": "[B,256,H,W]",
+      "source": "FDR decoder P3 only"
+    },
+    "local_expert": {
+      "bias": false,
+      "operators": [
+        "3x3 Conv-BN-SiLU",
+        "3x3 Conv-BN-SiLU"
+      ],
+      "residual_source": "reduced"
+    },
+    "output_equation": "X + 0.5*tanh(alpha)*O*tanh(Wo(U))",
+    "output_projection": {
+      "bias": false,
+      "channels": "192->256",
+      "operator": "1x1 Conv"
+    },
+    "parameter_budget_ratio": 0.1,
+    "peak_vram_mib_limit": 22528,
+    "private_parameters": 812817,
+    "reduction": {
+      "bias": false,
+      "channels": "256->192",
+      "operator": "1x1 Conv-BN-SiLU"
+    },
+    "residual_difficulty": {
+      "assignment": "reuse existing Hungarian assignment; no second matcher",
+      "excluded_predictions": [
+        "encoder Query",
+        "denoising Query"
+      ],
+      "matched_equation": "clamp(0.7*(1-p)+0.3*(1-IoU),0.25,1.0)",
+      "prediction_source": "final ordinary decoder Query only",
+      "probability": "sigmoid(final target-class logit)",
+      "target_generation": "FP32 detached",
+      "unmatched_gt": 1.0
+    },
+    "router": {
+      "bias": true,
+      "channels": "192->16",
+      "competition": "per-position grouped two-expert softmax",
+      "groups": 8,
+      "initialization": "zeros",
+      "input": "shared reduced feature",
+      "operator": "1x1 Conv"
+    },
+    "support": {
+      "activation": "sigmoid",
+      "bias": true,
+      "channels": "192->1",
+      "operator": "1x1 Conv"
+    }
+  },
+  "pairing": {
+    "ddp": false,
+    "private_seed": 20000,
+    "scratch": true,
+    "sequential_arms": true,
+    "shared_public_initialization": "byte-identical",
+    "single_physical_gpu": true
+  },
+  "publication": {
+    "checkpoint_scope": "local-only",
+    "publish_pt": false
+  },
+  "screen_gate": {
+    "class_ap_wins_min": 7,
+    "classes": 10,
+    "epoch30_ap50_delta": ">0",
+    "epoch30_ap75_delta": ">=0",
+    "epoch30_ap_small_delta": ">0",
+    "epoch30_ap_tiny_delta": ">0",
+    "epoch30_map_delta_min": 0.005,
+    "epoch30_recall_delta": ">0",
+    "parameter_increase_ratio_max": 0.1,
+    "peak_vram_mib_max": 22528,
+    "tail3_map_delta": ">0"
+  },
+  "seed": 0,
+  "training": {
+    "amp": true,
+    "amp_scale": 128.0,
+    "batch": 8,
+    "cache": false,
+    "cos_lr": false,
+    "deterministic": true,
+    "device": 0,
+    "formal_schedule_epochs": 100,
+    "imgsz": 640,
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "max_det": 300,
+    "momentum": 0.937,
+    "nbs": 64,
+    "nms": false,
+    "optimizer": "MuSGD",
+    "pretrained": false,
+    "queries": 300,
+    "save_period": 1,
+    "screen_cutoff_epoch": 30,
+    "screen_schedule_epochs": 50,
+    "seeds": [
+      0
+    ],
+    "smoke_epochs": 2,
+    "warmup_bias_lr": 0.0,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "weight_decay": 0.0005,
+    "workers": 8
+  }
+}
