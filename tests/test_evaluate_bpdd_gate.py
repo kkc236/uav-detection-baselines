@@ -2,11 +2,32 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.evaluate_bpdd_gate import evaluate_gate
+
+
+def test_cli_can_start_outside_repository_root(tmp_path: Path) -> None:
+    """The supervisor invokes the script by path from an operations directory."""
+
+    script = Path(__file__).parents[1] / "scripts" / "evaluate_bpdd_gate.py"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _manifest(variant: str) -> dict:
