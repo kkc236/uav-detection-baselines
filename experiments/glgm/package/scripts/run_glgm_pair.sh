@@ -24,6 +24,13 @@ PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 : "${GLGM_DEVICE:=$DEVICE}"
 : "${EVAL_DEVICE:=$DEVICE}"
 : "${STRICT_PAIR:=1}"
+: "${GLGM_CONTROL_CONFIG:=$PACKAGE_ROOT/configs/rtdetr-x-glgm-control.yaml}"
+: "${GLGM_METHOD_CONFIG:=$PACKAGE_ROOT/configs/rtdetr-x-glgm-only.yaml}"
+: "${GLGM_METHOD_MODULE:=GLGM}"
+: "${GLGM_PAIRED_HEAD_INDEX:=2}"
+: "${GLGM_PAIRED_MODEL_INDEX:=16}"
+: "${GLGM_PAIRED_SPATIAL_SIZE:=20}"
+: "${GLGM_EXPERIMENT_VARIANT:=glgm-v1-p5}"
 
 if [[ "$PARALLEL" != 0 && "$PARALLEL" != 1 ]]; then
   echo "PARALLEL must be 0 or 1" >&2
@@ -91,6 +98,9 @@ export PYTHONHASHSEED="$SEED"
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export OMP_NUM_THREADS=1
 export YOLO_AUTOINSTALL=false
+export GLGM_CONTROL_CONFIG GLGM_METHOD_CONFIG GLGM_METHOD_MODULE
+export GLGM_PAIRED_HEAD_INDEX GLGM_PAIRED_MODEL_INDEX GLGM_PAIRED_SPATIAL_SIZE
+export GLGM_EXPERIMENT_VARIANT
 
 "$PYTHON" "$SCRIPT_DIR/audit_visdrone.py" \
   --data "$DATA_YAML" \
@@ -257,6 +267,9 @@ find "$ARTIFACT_DIR" -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 \
   | xargs -0 sha256sum \
   > "$ARTIFACT_DIR/SHA256SUMS.txt"
 sha256sum -c "$ARTIFACT_DIR/SHA256SUMS.txt" > "$LOG_DIR/artifact-sha256-check.log"
-printf 'mode\t%s\nutc\t%s\n' "$([[ "$STRICT_PAIR" == 1 ]] && printf strict || printf exploratory)" "$(date -u +%FT%TZ)" > "$COMPLETION_TMP"
+printf 'mode\t%s\nvariant\t%s\nutc\t%s\n' \
+  "$([[ "$STRICT_PAIR" == 1 ]] && printf strict || printf exploratory)" \
+  "$GLGM_EXPERIMENT_VARIANT" \
+  "$(date -u +%FT%TZ)" > "$COMPLETION_TMP"
 echo "GLGM paired experiment completed: $WORK_ROOT"
 FINALIZE_READY=1

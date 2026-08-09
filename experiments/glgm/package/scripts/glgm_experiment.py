@@ -21,8 +21,30 @@ from typing import Any
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-CONTROL_CONFIG = PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-control.yaml"
-GLGM_CONFIG = PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-only.yaml"
+CONTROL_CONFIG = (
+    Path(
+        os.environ.get(
+            "GLGM_CONTROL_CONFIG",
+            PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-control.yaml",
+        )
+    )
+    .expanduser()
+    .resolve()
+)
+GLGM_CONFIG = (
+    Path(
+        os.environ.get(
+            "GLGM_METHOD_CONFIG", PACKAGE_ROOT / "configs" / "rtdetr-x-glgm-only.yaml"
+        )
+    )
+    .expanduser()
+    .resolve()
+)
+METHOD_MODULE_NAME = os.environ.get("GLGM_METHOD_MODULE", "GLGM")
+PAIRED_HEAD_INDEX = int(os.environ.get("GLGM_PAIRED_HEAD_INDEX", "2"))
+PAIRED_MODEL_INDEX = int(os.environ.get("GLGM_PAIRED_MODEL_INDEX", "16"))
+PAIRED_SPATIAL_SIZE = int(os.environ.get("GLGM_PAIRED_SPATIAL_SIZE", "20"))
+EXPERIMENT_VARIANT = os.environ.get("GLGM_EXPERIMENT_VARIANT", "glgm-v1-p5")
 METRIC_KEYS = ("precision", "recall", "f1", "ap50", "ap75", "map50_95")
 EXPECTED_ULTRALYTICS_VERSION = "8.4.116"
 EXPECTED_ENGINE_SHA256 = {
@@ -33,10 +55,18 @@ EXPECTED_ENGINE_SHA256 = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-dir", type=Path, required=True, help="Ultralytics source checkout containing GLGM.")
+    parser.add_argument(
+        "--repo-dir",
+        type=Path,
+        required=True,
+        help="Ultralytics source checkout containing GLGM.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    preflight = subparsers.add_parser("preflight", help="Verify code/config contracts and build paired initial states.")
+    preflight = subparsers.add_parser(
+        "preflight",
+        help="Verify code/config contracts and build paired initial states.",
+    )
     preflight.add_argument("--artifact-dir", type=Path, required=True)
     preflight.add_argument("--public-seed", type=int, default=0)
     preflight.add_argument("--private-seed", type=int, default=10000)
@@ -48,7 +78,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional stock RT-DETR-X checkpoint. Compatible public tensors are remapped into both arms.",
     )
 
-    train = subparsers.add_parser("train", help="Train one arm from its paired initial state or resume checkpoint.")
+    train = subparsers.add_parser(
+        "train",
+        help="Train one arm from its paired initial state or resume checkpoint.",
+    )
     train.add_argument("--arm", choices=("control", "glgm"), required=True)
     train.add_argument("--artifact-dir", type=Path, required=True)
     train.add_argument("--data", type=Path, required=True)
@@ -64,7 +97,9 @@ def parse_args() -> argparse.Namespace:
     train.add_argument("--save-period", type=int, default=5)
     train.add_argument("--name")
 
-    evaluate = subparsers.add_parser("eval", help="Run one independent validation and write canonical JSON.")
+    evaluate = subparsers.add_parser(
+        "eval", help="Run one independent validation and write canonical JSON."
+    )
     evaluate.add_argument("--arm", choices=("control", "glgm"), required=True)
     evaluate.add_argument("--manifest", type=Path, required=True)
     evaluate.add_argument("--train-receipt", type=Path, required=True)
@@ -79,7 +114,9 @@ def parse_args() -> argparse.Namespace:
     evaluate.add_argument("--workers", type=int, default=4)
     evaluate.add_argument("--device", default="0")
 
-    compare = subparsers.add_parser("compare", help="Compare canonical control and GLGM metric JSON files.")
+    compare = subparsers.add_parser(
+        "compare", help="Compare canonical control and GLGM metric JSON files."
+    )
     compare.add_argument("--control", type=Path, required=True)
     compare.add_argument("--glgm", type=Path, required=True)
     compare.add_argument("--output", type=Path, required=True)
@@ -89,7 +126,9 @@ def parse_args() -> argparse.Namespace:
         help="Allow the training-device field to differ and mark the comparison non-strict.",
     )
 
-    benchmark = subparsers.add_parser("benchmark", help="Measure synchronized batch-1 model latency on CUDA.")
+    benchmark = subparsers.add_parser(
+        "benchmark", help="Measure synchronized batch-1 model latency on CUDA."
+    )
     benchmark.add_argument("--arm", choices=("control", "glgm"), required=True)
     benchmark.add_argument("--manifest", type=Path, required=True)
     benchmark.add_argument("--train-receipt", type=Path, required=True)
@@ -115,17 +154,25 @@ def import_runtime(repo_dir: Path):
     import ultralytics
     import yaml
     from ultralytics import RTDETR
-    from ultralytics.nn.modules.block import GLGM
+    from ultralytics.nn import modules as nn_modules
+
+    method_module = getattr(nn_modules, METHOD_MODULE_NAME, None)
+    if method_module is None:
+        raise RuntimeError(
+            f"method module is not exported by ultralytics.nn.modules: {METHOD_MODULE_NAME}"
+        )
 
     imported = Path(ultralytics.__file__).resolve()
     expected = (repo_dir / "ultralytics" / "__init__.py").resolve()
     if imported != expected:
-        raise RuntimeError(f"wrong Ultralytics import: expected {expected}, got {imported}")
+        raise RuntimeError(
+            f"wrong Ultralytics import: expected {expected}, got {imported}"
+        )
     if ultralytics.__version__ != EXPECTED_ULTRALYTICS_VERSION:
         raise RuntimeError(
             f"expected Ultralytics {EXPECTED_ULTRALYTICS_VERSION}, got {ultralytics.__version__}"
         )
-    return np, torch, ultralytics, yaml, RTDETR, GLGM
+    return np, torch, ultralytics, yaml, RTDETR, method_module
 
 
 def sha256_file(path: Path) -> str:
@@ -164,13 +211,22 @@ def tensor_fingerprint(torch, state: dict[str, Any], keys: list[str]) -> str:
 def canonical_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
+        json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False
+        )
+        + "\n",
         encoding="utf-8",
     )
 
 
 def mapping_fingerprint(payload: dict[str, Any]) -> str:
-    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest().upper()
 
 
@@ -181,36 +237,65 @@ def ensure_finite(value: float, name: str) -> float:
     return value
 
 
-def check_config_pair(yaml) -> None:
+def check_config_pair(yaml) -> tuple[dict[str, Any], dict[str, Any]]:
     control = yaml.safe_load(CONTROL_CONFIG.read_text(encoding="utf-8"))
     method = yaml.safe_load(GLGM_CONFIG.read_text(encoding="utf-8"))
     if control["nc"] != 10 or method["nc"] != 10:
         raise ValueError("paired VisDrone configs must use nc=10")
-    if control["head"][2][2] != "nn.Identity" or method["head"][2][2] != "GLGM":
-        raise ValueError("the only paired layer must be Identity versus GLGM at head index 2")
+    if not 0 <= PAIRED_HEAD_INDEX < len(control["head"]) or PAIRED_HEAD_INDEX >= len(
+        method["head"]
+    ):
+        raise ValueError(f"paired head index is out of range: {PAIRED_HEAD_INDEX}")
+    if (
+        control["head"][PAIRED_HEAD_INDEX][2] != "nn.Identity"
+        or method["head"][PAIRED_HEAD_INDEX][2] != METHOD_MODULE_NAME
+    ):
+        raise ValueError(
+            "the declared paired layer must be Identity versus "
+            f"{METHOD_MODULE_NAME} at head index {PAIRED_HEAD_INDEX}"
+        )
     normalized_control = copy.deepcopy(control)
     normalized_method = copy.deepcopy(method)
-    normalized_control["head"][2] = ["PAIRED", 1, "PAIRED", [384]]
-    normalized_method["head"][2] = ["PAIRED", 1, "PAIRED", [384]]
+    normalized_control["head"][PAIRED_HEAD_INDEX] = ["PAIRED", 1, "PAIRED", []]
+    normalized_method["head"][PAIRED_HEAD_INDEX] = ["PAIRED", 1, "PAIRED", []]
     if normalized_control != normalized_method:
-        raise ValueError("control and GLGM configs differ outside the declared paired layer")
+        raise ValueError(
+            "control and GLGM configs differ outside the declared paired layer"
+        )
+    if PAIRED_MODEL_INDEX != 14 + PAIRED_HEAD_INDEX:
+        raise ValueError(
+            f"paired model/head index mismatch: model={PAIRED_MODEL_INDEX}, head={PAIRED_HEAD_INDEX}"
+        )
+    return control, method
 
 
 def current_source_hashes(repo_dir: Path) -> dict[str, str]:
-    return {
-        "block.py": sha256_file(repo_dir / "ultralytics" / "nn" / "modules" / "block.py"),
-        "modules_init.py": sha256_file(repo_dir / "ultralytics" / "nn" / "modules" / "__init__.py"),
+    hashes = {
+        "block.py": sha256_file(
+            repo_dir / "ultralytics" / "nn" / "modules" / "block.py"
+        ),
+        "modules_init.py": sha256_file(
+            repo_dir / "ultralytics" / "nn" / "modules" / "__init__.py"
+        ),
         "tasks.py": sha256_file(repo_dir / "ultralytics" / "nn" / "tasks.py"),
         "trainer.py": sha256_file(repo_dir / "ultralytics" / "engine" / "trainer.py"),
-        "validator.py": sha256_file(repo_dir / "ultralytics" / "engine" / "validator.py"),
+        "validator.py": sha256_file(
+            repo_dir / "ultralytics" / "engine" / "validator.py"
+        ),
         "control_yaml": sha256_file(CONTROL_CONFIG),
         "glgm_yaml": sha256_file(GLGM_CONFIG),
         "experiment_script.py": sha256_file(Path(__file__)),
         "audit_script.py": sha256_file(PACKAGE_ROOT / "scripts" / "audit_visdrone.py"),
-        "prepare_script.py": sha256_file(PACKAGE_ROOT / "scripts" / "prepare_visdrone.py"),
+        "prepare_script.py": sha256_file(
+            PACKAGE_ROOT / "scripts" / "prepare_visdrone.py"
+        ),
         "run_pair.sh": sha256_file(PACKAGE_ROOT / "scripts" / "run_glgm_pair.sh"),
         "repo_tree_sha256": tree_fingerprint(repo_dir),
     }
+    v2_module = repo_dir / "ultralytics" / "nn" / "modules" / "glgm_v2.py"
+    if v2_module.is_file():
+        hashes["glgm_v2.py"] = sha256_file(v2_module)
+    return hashes
 
 
 def tree_fingerprint(repo_dir: Path) -> str:
@@ -240,7 +325,12 @@ def pip_freeze_fingerprint() -> str:
         capture_output=True,
         text=True,
     )
-    normalized = "\n".join(sorted(line.strip() for line in result.stdout.splitlines() if line.strip())) + "\n"
+    normalized = (
+        "\n".join(
+            sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+        )
+        + "\n"
+    )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest().upper()
 
 
@@ -254,7 +344,9 @@ def verify_runtime(manifest: dict[str, Any], torch, ultralytics) -> None:
     }
     expected = {key: manifest.get(key) for key in actual}
     if expected != actual:
-        raise RuntimeError(f"runtime changed after preflight: expected {expected}, got {actual}")
+        raise RuntimeError(
+            f"runtime changed after preflight: expected {expected}, got {actual}"
+        )
 
 
 def load_and_verify_manifest(manifest_path: Path, repo_dir: Path) -> dict[str, Any]:
@@ -262,11 +354,15 @@ def load_and_verify_manifest(manifest_path: Path, repo_dir: Path) -> dict[str, A
         raise FileNotFoundError(f"run preflight first: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if Path(manifest.get("repo_dir", "")).resolve() != repo_dir.resolve():
-        raise RuntimeError(f"repository path differs from preflight: {manifest.get('repo_dir')} != {repo_dir}")
+        raise RuntimeError(
+            f"repository path differs from preflight: {manifest.get('repo_dir')} != {repo_dir}"
+        )
     expected = manifest.get("source_sha256")
     actual = current_source_hashes(repo_dir)
     if expected != actual:
-        raise RuntimeError(f"source/config hash mismatch after preflight: expected {expected}, got {actual}")
+        raise RuntimeError(
+            f"source/config hash mismatch after preflight: expected {expected}, got {actual}"
+        )
     return manifest
 
 
@@ -289,8 +385,12 @@ def verify_train_receipt(
     if receipt.get("schema") != "glgm-train-receipt-v1" or receipt.get("arm") != arm:
         raise RuntimeError(f"invalid train receipt identity: {receipt_path}")
     protocol = receipt.get("protocol")
-    if not isinstance(protocol, dict) or receipt.get("protocol_sha256") != mapping_fingerprint(protocol):
-        raise RuntimeError(f"training protocol hash mismatch in receipt: {receipt_path}")
+    if not isinstance(protocol, dict) or receipt.get(
+        "protocol_sha256"
+    ) != mapping_fingerprint(protocol):
+        raise RuntimeError(
+            f"training protocol hash mismatch in receipt: {receipt_path}"
+        )
     completion = receipt.get("training_completion", {})
     results_path = Path(completion.get("results_csv", ""))
     if (
@@ -303,32 +403,46 @@ def verify_train_receipt(
         raise RuntimeError(f"training completion evidence is invalid: {receipt_path}")
     item = receipt.get("checkpoints", {}).get(checkpoint_kind, {})
     if item.get("kind") != checkpoint_kind:
-        raise RuntimeError(f"checkpoint role is missing from train receipt: {checkpoint_kind}")
+        raise RuntimeError(
+            f"checkpoint role is missing from train receipt: {checkpoint_kind}"
+        )
     if Path(item.get("path", "")).resolve() != weights_path.resolve():
-        raise RuntimeError(f"checkpoint path does not match its receipt role: {weights_path}")
+        raise RuntimeError(
+            f"checkpoint path does not match its receipt role: {weights_path}"
+        )
     if sha256_file(weights_path) != item.get("sha256"):
-        raise RuntimeError(f"checkpoint hash does not match its receipt role: {weights_path}")
+        raise RuntimeError(
+            f"checkpoint hash does not match its receipt role: {weights_path}"
+        )
     return receipt
 
 
-def validate_training_results(results_path: Path, expected_epochs: int) -> dict[str, Any]:
+def validate_training_results(
+    results_path: Path, expected_epochs: int
+) -> dict[str, Any]:
     if not results_path.is_file():
         raise FileNotFoundError(f"missing training results: {results_path}")
     with results_path.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
         rows = list(reader)
     if len(rows) != expected_epochs:
-        raise RuntimeError(f"training produced {len(rows)} result rows, expected {expected_epochs}: {results_path}")
+        raise RuntimeError(
+            f"training produced {len(rows)} result rows, expected {expected_epochs}: {results_path}"
+        )
     if not reader.fieldnames:
         raise RuntimeError(f"training results have no columns: {results_path}")
     for row_index, row in enumerate(rows, start=1):
         for field in reader.fieldnames:
             raw = row.get(field)
             if raw is None or not raw.strip():
-                raise RuntimeError(f"empty training result at row {row_index}, field {field!r}")
+                raise RuntimeError(
+                    f"empty training result at row {row_index}, field {field!r}"
+                )
             value = float(raw)
             if not math.isfinite(value):
-                raise RuntimeError(f"non-finite training result at row {row_index}, field {field!r}: {raw}")
+                raise RuntimeError(
+                    f"non-finite training result at row {row_index}, field {field!r}: {raw}"
+                )
     return {
         "requested_epochs": expected_epochs,
         "completed_epochs": len(rows),
@@ -361,12 +475,14 @@ def target_to_stock_key(name: str) -> str:
     if not match:
         return name
     index = int(match.group(1))
-    if index >= 17:
+    if index > PAIRED_MODEL_INDEX:
         index -= 1
     return f"model.{index}.{match.group(2)}"
 
 
-def make_checkpoint(torch, wrapper, model_yaml: Path, arm: str, source_hash: str) -> dict[str, Any]:
+def make_checkpoint(
+    torch, wrapper, model_yaml: Path, arm: str, source_hash: str
+) -> dict[str, Any]:
     model = copy.deepcopy(wrapper.model).float().cpu()
     model.args = dict(getattr(model, "args", {}) or {})
     model.args.update({"task": "detect", "model": str(model_yaml), "nc": 10})
@@ -377,7 +493,12 @@ def make_checkpoint(torch, wrapper, model_yaml: Path, arm: str, source_hash: str
         "ema": None,
         "optimizer": None,
         "scaler": None,
-        "train_args": {"task": "detect", "model": str(model_yaml), "data": None, "imgsz": 640},
+        "train_args": {
+            "task": "detect",
+            "model": str(model_yaml),
+            "data": None,
+            "imgsz": 640,
+        },
         "date": datetime.now(timezone.utc).isoformat(),
         "paired_arm": arm,
         "paired_public_sha256": source_hash,
@@ -395,9 +516,9 @@ def all_tensors_finite(torch, value: Any) -> bool:
 
 
 def run_preflight(args: argparse.Namespace, runtime) -> None:
-    np, torch, ultralytics, yaml, RTDETR, GLGM = runtime
+    np, torch, ultralytics, yaml, RTDETR, MethodModule = runtime
     del np
-    check_config_pair(yaml)
+    _, method_config = check_config_pair(yaml)
     artifact_dir = args.artifact_dir.resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -412,10 +533,15 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
     common_keys = sorted(set(control_state) & set(method_state))
     if set(control_state) != set(common_keys):
         raise RuntimeError("control contains a tensor absent from the GLGM arm")
-    if any(control_state[name].shape != method_state[name].shape for name in common_keys):
+    if any(
+        control_state[name].shape != method_state[name].shape for name in common_keys
+    ):
         raise RuntimeError("a common tensor has different shape across paired arms")
     private_keys = sorted(set(method_state) - set(control_state))
-    if not private_keys or not all(name.startswith("model.16.") for name in private_keys):
+    private_prefix = f"model.{PAIRED_MODEL_INDEX}."
+    if not private_keys or not all(
+        name.startswith(private_prefix) for name in private_keys
+    ):
         raise RuntimeError(f"undeclared GLGM private tensor: {private_keys[:5]}")
 
     initialization: dict[str, Any] = {"mode": "scratch"}
@@ -430,7 +556,10 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
         public_parameters = sum(control_state[name].numel() for name in common_keys)
         for name in common_keys:
             source_name = target_to_stock_key(name)
-            if source_name in source_state and source_state[source_name].shape == control_state[name].shape:
+            if (
+                source_name in source_state
+                and source_state[source_name].shape == control_state[name].shape
+            ):
                 control_state[name] = source_state[source_name].detach().clone()
                 loaded_keys.append(name)
                 loaded_parameters += control_state[name].numel()
@@ -452,7 +581,9 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
         }
         del source, source_state
 
-    paired_state = {name: value.detach().clone() for name, value in method_state.items()}
+    paired_state = {
+        name: value.detach().clone() for name, value in method_state.items()
+    }
     for name in common_keys:
         paired_state[name] = control_state[name].detach().clone()
     method.model.load_state_dict(paired_state, strict=True)
@@ -466,8 +597,13 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
 
     control_init = artifact_dir / "control_paired_init.pt"
     glgm_init = artifact_dir / "glgm_paired_init.pt"
-    torch.save(make_checkpoint(torch, control, CONTROL_CONFIG, "control", public_hash), control_init)
-    torch.save(make_checkpoint(torch, method, GLGM_CONFIG, "glgm", public_hash), glgm_init)
+    torch.save(
+        make_checkpoint(torch, control, CONTROL_CONFIG, "control", public_hash),
+        control_init,
+    )
+    torch.save(
+        make_checkpoint(torch, method, GLGM_CONFIG, "glgm", public_hash), glgm_init
+    )
 
     reloaded_control = RTDETR(str(control_init)).model.state_dict()
     if set(reloaded_control) != set(common_keys):
@@ -484,18 +620,28 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
         raise RuntimeError("reloaded GLGM checkpoint private hash mismatch")
     del reloaded_method
 
-    module = GLGM(384, 384)
-    module_input = torch.randn(2, 384, 20, 20, requires_grad=True)
+    declared_module_args = method_config["head"][PAIRED_HEAD_INDEX][3]
+    module = MethodModule(384, *declared_module_args)
+    module_input = torch.randn(
+        2, 384, PAIRED_SPATIAL_SIZE, PAIRED_SPATIAL_SIZE, requires_grad=True
+    )
     module_output = module(module_input)
     module_output.float().mean().backward()
-    if module_output.shape != module_input.shape or not all_tensors_finite(torch, module_output):
+    if module_output.shape != module_input.shape or not all_tensors_finite(
+        torch, module_output
+    ):
         raise RuntimeError("GLGM module-only forward contract failed")
-    if not all(parameter.grad is not None and torch.isfinite(parameter.grad).all() for parameter in module.parameters()):
+    if not all(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for parameter in module.parameters()
+    ):
         raise RuntimeError("GLGM module-only backward contract failed")
 
     full_forward = None
     if args.full_forward:
-        device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
+        device = torch.device(
+            f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+        )
         method.model.eval().to(device)
         sample = torch.zeros(1, 3, 640, 640, device=device)
         with torch.inference_mode():
@@ -504,7 +650,9 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
             raise RuntimeError("non-finite full-model output")
         full_forward = {
             "device": str(device),
-            "peak_vram_bytes": int(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else 0,
+            "peak_vram_bytes": int(torch.cuda.max_memory_allocated(device))
+            if device.type == "cuda"
+            else 0,
         }
         method.model.cpu()
 
@@ -520,9 +668,17 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
         "ultralytics": ultralytics.__version__,
         "pip_freeze_sha256": pip_freeze_fingerprint(),
         "cuda_available": bool(torch.cuda.is_available()),
-        "gpus": [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())],
+        "gpus": [
+            torch.cuda.get_device_name(index)
+            for index in range(torch.cuda.device_count())
+        ],
         "public_seed": args.public_seed,
         "private_seed": args.private_seed,
+        "experiment_variant": EXPERIMENT_VARIANT,
+        "method_module": METHOD_MODULE_NAME,
+        "paired_head_index": PAIRED_HEAD_INDEX,
+        "paired_model_index": PAIRED_MODEL_INDEX,
+        "paired_spatial_size": PAIRED_SPATIAL_SIZE,
         "initialization": initialization,
         "common_tensor_count": len(common_keys),
         "private_tensor_count": len(private_keys),
@@ -531,8 +687,13 @@ def run_preflight(args: argparse.Namespace, runtime) -> None:
         "control_parameters": control_params,
         "glgm_parameters": method_params,
         "parameter_delta": method_params - control_params,
-        "parameter_delta_percent": 100.0 * (method_params - control_params) / control_params,
-        "control_init": {"path": str(control_init), "sha256": sha256_file(control_init)},
+        "parameter_delta_percent": 100.0
+        * (method_params - control_params)
+        / control_params,
+        "control_init": {
+            "path": str(control_init),
+            "sha256": sha256_file(control_init),
+        },
         "glgm_init": {"path": str(glgm_init), "sha256": sha256_file(glgm_init)},
         "source_sha256": current_source_hashes(args.repo_dir),
         "checkpoint_reload_verified": True,
@@ -651,7 +812,9 @@ def make_strict_nan_recovery_handler(torch):
     def reject_recovery(trainer, epoch: int) -> bool:
         attempts = int(getattr(trainer, "nan_recovery_attempts", 0))
         if attempts:
-            raise RuntimeError(f"strict paired training observed {attempts} NaN recovery attempt(s)")
+            raise RuntimeError(
+                f"strict paired training observed {attempts} NaN recovery attempt(s)"
+            )
         guard(trainer)
         trainer._glgm_strict_finite_epoch = int(epoch)
         return False
@@ -676,7 +839,9 @@ def run_train(args: argparse.Namespace, runtime) -> None:
     verify_runtime(manifest, torch, ultralytics)
     if not args.data.is_file():
         raise FileNotFoundError(args.data)
-    audit = verify_data_audit(args.artifact_dir / "visdrone-audit.json", args.data.resolve())
+    audit = verify_data_audit(
+        args.artifact_dir / "visdrone-audit.json", args.data.resolve()
+    )
     if args.resume:
         raise RuntimeError(
             "strict paired mode does not permit single-arm resume; restart both arms from paired initialization"
@@ -688,23 +853,35 @@ def run_train(args: argparse.Namespace, runtime) -> None:
     run_name = args.name or f"{args.arm}-seed{args.seed}-e{args.epochs}"
     expected_save_dir = (args.runs_dir.resolve() / run_name).resolve()
     if expected_save_dir.exists():
-        raise FileExistsError(f"refusing to reuse an existing run directory: {expected_save_dir}")
+        raise FileExistsError(
+            f"refusing to reuse an existing run directory: {expected_save_dir}"
+        )
     install_strict_nan_policy(torch)
     model = RTDETR(str(init_path))
     model.add_callback("on_fit_epoch_end", make_epoch_finite_guard(torch))
     protocol = train_kwargs(args)
     model.train(**protocol)
-    if getattr(model.trainer, "_glgm_strict_finite_epoch", None) != int(model.trainer.epoch):
-        raise RuntimeError("strict NaN rejection policy did not run for the final epoch")
+    if getattr(model.trainer, "_glgm_strict_finite_epoch", None) != int(
+        model.trainer.epoch
+    ):
+        raise RuntimeError(
+            "strict NaN rejection policy did not run for the final epoch"
+        )
     if int(getattr(model.trainer, "nan_recovery_attempts", 0)) != 0:
         raise RuntimeError("strict paired training must not perform NaN recovery")
     actual_save_dir = Path(model.trainer.save_dir).resolve()
     if actual_save_dir != expected_save_dir:
-        raise RuntimeError(f"unexpected training output directory: {actual_save_dir} != {expected_save_dir}")
+        raise RuntimeError(
+            f"unexpected training output directory: {actual_save_dir} != {expected_save_dir}"
+        )
     completed_epochs = int(model.trainer.epoch) + 1
     if completed_epochs != args.epochs:
-        raise RuntimeError(f"training stopped at epoch {completed_epochs}, expected {args.epochs}")
-    training_completion = validate_training_results(actual_save_dir / "results.csv", args.epochs)
+        raise RuntimeError(
+            f"training stopped at epoch {completed_epochs}, expected {args.epochs}"
+        )
+    training_completion = validate_training_results(
+        actual_save_dir / "results.csv", args.epochs
+    )
     required = {
         "last": actual_save_dir / "weights" / "last.pt",
         "best": actual_save_dir / "weights" / "best.pt",
@@ -724,7 +901,8 @@ def run_train(args: argparse.Namespace, runtime) -> None:
         "initial_checkpoint_sha256": manifest[f"{args.arm}_init"]["sha256"],
         "data_yaml_sha256": audit["data_yaml_sha256"],
         "data_inventory_sha256": {
-            split: audit["splits"][split]["inventory_sha256"] for split in ("train", "val")
+            split: audit["splits"][split]["inventory_sha256"]
+            for split in ("train", "val")
         },
         "protocol": protocol,
         "protocol_sha256": mapping_fingerprint(protocol),
@@ -735,7 +913,11 @@ def run_train(args: argparse.Namespace, runtime) -> None:
         },
         "training_completion": training_completion,
         "checkpoints": {
-            kind: {"kind": kind, "path": str(path.resolve()), "sha256": sha256_file(path)}
+            kind: {
+                "kind": kind,
+                "path": str(path.resolve()),
+                "sha256": sha256_file(path),
+            }
             for kind, path in required.items()
         },
     }
@@ -744,29 +926,45 @@ def run_train(args: argparse.Namespace, runtime) -> None:
 
 
 def run_eval(args: argparse.Namespace, runtime) -> None:
-    np, torch, ultralytics, yaml, RTDETR, GLGM = runtime
-    del GLGM
+    np, torch, ultralytics, yaml, RTDETR, MethodModule = runtime
+    del MethodModule
     manifest = load_and_verify_manifest(args.manifest.resolve(), args.repo_dir)
     verify_runtime(manifest, torch, ultralytics)
     if not args.weights.is_file() or not args.data.is_file():
-        raise FileNotFoundError(f"missing weights or data YAML: {args.weights}, {args.data}")
-    audit = verify_data_audit(args.manifest.resolve().parent / "visdrone-audit.json", args.data.resolve())
+        raise FileNotFoundError(
+            f"missing weights or data YAML: {args.weights}, {args.data}"
+        )
+    audit = verify_data_audit(
+        args.manifest.resolve().parent / "visdrone-audit.json", args.data.resolve()
+    )
     receipt = verify_train_receipt(
-        args.train_receipt.resolve(), args.arm, args.weights.resolve(), args.checkpoint_kind
+        args.train_receipt.resolve(),
+        args.arm,
+        args.weights.resolve(),
+        args.checkpoint_kind,
     )
     if receipt["manifest_sha256"] != sha256_file(args.manifest):
         raise RuntimeError("train receipt belongs to a different preflight manifest")
     model = RTDETR(str(args.weights.resolve()))
-    has_glgm = any(module.__class__.__name__ == "GLGM" for module in model.model.modules())
+    has_glgm = any(
+        module.__class__.__name__ == METHOD_MODULE_NAME
+        for module in model.model.modules()
+    )
     if has_glgm != (args.arm == "glgm"):
-        raise RuntimeError(f"evaluation checkpoint architecture does not match requested arm: {args.arm}")
+        raise RuntimeError(
+            f"evaluation checkpoint architecture does not match requested arm: {args.arm}"
+        )
     parameters = sum(parameter.numel() for parameter in model.model.parameters())
     data_config = yaml.safe_load(args.data.read_text(encoding="utf-8"))
     configured_names = data_config["names"]
 
     def class_name(class_id: int) -> str:
         if isinstance(configured_names, dict):
-            return str(configured_names.get(class_id, configured_names.get(str(class_id), class_id)))
+            return str(
+                configured_names.get(
+                    class_id, configured_names.get(str(class_id), class_id)
+                )
+            )
         return str(configured_names[class_id])
 
     result = model.val(
@@ -784,12 +982,16 @@ def run_eval(args: argparse.Namespace, runtime) -> None:
     )
     box = result.box
     metrics = {
-        "precision": ensure_finite(result.results_dict["metrics/precision(B)"], "precision"),
+        "precision": ensure_finite(
+            result.results_dict["metrics/precision(B)"], "precision"
+        ),
         "recall": ensure_finite(result.results_dict["metrics/recall(B)"], "recall"),
         "f1": ensure_finite(np.nanmean(box.f1), "f1"),
         "ap50": ensure_finite(result.results_dict["metrics/mAP50(B)"], "ap50"),
         "ap75": ensure_finite(np.nanmean(box.all_ap[:, 5]), "ap75"),
-        "map50_95": ensure_finite(result.results_dict["metrics/mAP50-95(B)"], "map50_95"),
+        "map50_95": ensure_finite(
+            result.results_dict["metrics/mAP50-95(B)"], "map50_95"
+        ),
     }
     per_class = []
     class_indexes = [int(index) for index in box.ap_class_index]
@@ -798,12 +1000,18 @@ def run_eval(args: argparse.Namespace, runtime) -> None:
             {
                 "id": class_id,
                 "name": class_name(class_id),
-                "precision": ensure_finite(box.p[row_index], f"class_{class_id}_precision"),
+                "precision": ensure_finite(
+                    box.p[row_index], f"class_{class_id}_precision"
+                ),
                 "recall": ensure_finite(box.r[row_index], f"class_{class_id}_recall"),
                 "f1": ensure_finite(box.f1[row_index], f"class_{class_id}_f1"),
                 "ap50": ensure_finite(box.ap50[row_index], f"class_{class_id}_ap50"),
-                "ap75": ensure_finite(box.all_ap[row_index, 5], f"class_{class_id}_ap75"),
-                "map50_95": ensure_finite(box.ap[row_index], f"class_{class_id}_map50_95"),
+                "ap75": ensure_finite(
+                    box.all_ap[row_index, 5], f"class_{class_id}_ap75"
+                ),
+                "map50_95": ensure_finite(
+                    box.ap[row_index], f"class_{class_id}_map50_95"
+                ),
             }
         )
     payload = {
@@ -820,7 +1028,8 @@ def run_eval(args: argparse.Namespace, runtime) -> None:
         "data": str(args.data.resolve()),
         "data_yaml_sha256": sha256_file(args.data),
         "data_inventory_sha256": {
-            split: audit["splits"][split]["inventory_sha256"] for split in ("train", "val")
+            split: audit["splits"][split]["inventory_sha256"]
+            for split in ("train", "val")
         },
         "seed": receipt["protocol"]["seed"],
         "epochs": receipt["protocol"]["epochs"],
@@ -833,7 +1042,10 @@ def run_eval(args: argparse.Namespace, runtime) -> None:
         "metrics": metrics,
         "per_class": per_class,
         "parameters": parameters,
-        "speed_ms_per_image": {key: ensure_finite(value, f"speed_{key}") for key, value in result.speed.items()},
+        "speed_ms_per_image": {
+            key: ensure_finite(value, f"speed_{key}")
+            for key, value in result.speed.items()
+        },
         "validator_save_dir": str(result.save_dir),
     }
     canonical_json(args.output.resolve(), payload)
@@ -843,9 +1055,15 @@ def run_eval(args: argparse.Namespace, runtime) -> None:
 def run_compare(args: argparse.Namespace) -> None:
     control = json.loads(args.control.read_text(encoding="utf-8"))
     method = json.loads(args.glgm.read_text(encoding="utf-8"))
-    if control.get("schema") != "glgm-independent-evaluation-v1" or control.get("arm") != "control":
+    if (
+        control.get("schema") != "glgm-independent-evaluation-v1"
+        or control.get("arm") != "control"
+    ):
         raise ValueError("invalid control evaluation identity")
-    if method.get("schema") != "glgm-independent-evaluation-v1" or method.get("arm") != "glgm":
+    if (
+        method.get("schema") != "glgm-independent-evaluation-v1"
+        or method.get("arm") != "glgm"
+    ):
         raise ValueError("invalid GLGM evaluation identity")
     for field in (
         "manifest_sha256",
@@ -861,7 +1079,9 @@ def run_compare(args: argparse.Namespace) -> None:
         "max_det",
     ):
         if control[field] != method[field]:
-            raise ValueError(f"evaluation contract mismatch for {field}: {control[field]} != {method[field]}")
+            raise ValueError(
+                f"evaluation contract mismatch for {field}: {control[field]} != {method[field]}"
+            )
     control_protocol = paired_protocol(control["training_protocol"], args.exploratory)
     method_protocol = paired_protocol(method["training_protocol"], args.exploratory)
     if control_protocol != method_protocol:
@@ -877,7 +1097,9 @@ def run_compare(args: argparse.Namespace) -> None:
             "glgm": candidate,
             "absolute_delta": candidate - baseline,
             "percentage_point_delta": 100.0 * (candidate - baseline),
-            "relative_percent": 100.0 * (candidate - baseline) / baseline if baseline else None,
+            "relative_percent": 100.0 * (candidate - baseline) / baseline
+            if baseline
+            else None,
         }
     control_classes = {(row["id"], row["name"]): row for row in control["per_class"]}
     method_classes = {(row["id"], row["name"]): row for row in method["per_class"]}
@@ -890,12 +1112,15 @@ def run_compare(args: argparse.Namespace) -> None:
         deltas = {key: candidate_row[key] - baseline_row[key] for key in METRIC_KEYS}
         per_class.append({"id": identity[0], "name": identity[1], "delta": deltas})
 
-    speed_keys = sorted(set(control["speed_ms_per_image"]) & set(method["speed_ms_per_image"]))
+    speed_keys = sorted(
+        set(control["speed_ms_per_image"]) & set(method["speed_ms_per_image"])
+    )
     speed = {
         key: {
             "control_ms": control["speed_ms_per_image"][key],
             "glgm_ms": method["speed_ms_per_image"][key],
-            "delta_ms": method["speed_ms_per_image"][key] - control["speed_ms_per_image"][key],
+            "delta_ms": method["speed_ms_per_image"][key]
+            - control["speed_ms_per_image"][key],
         }
         for key in speed_keys
     }
@@ -920,8 +1145,8 @@ def run_compare(args: argparse.Namespace) -> None:
 
 
 def run_benchmark(args: argparse.Namespace, runtime) -> None:
-    np, torch, ultralytics, yaml, RTDETR, GLGM = runtime
-    del yaml, GLGM
+    np, torch, ultralytics, yaml, RTDETR, MethodModule = runtime
+    del yaml, MethodModule
     manifest = load_and_verify_manifest(args.manifest.resolve(), args.repo_dir)
     verify_runtime(manifest, torch, ultralytics)
     if not torch.cuda.is_available():
@@ -929,14 +1154,22 @@ def run_benchmark(args: argparse.Namespace, runtime) -> None:
     if not args.weights.is_file():
         raise FileNotFoundError(args.weights)
     receipt = verify_train_receipt(
-        args.train_receipt.resolve(), args.arm, args.weights.resolve(), args.checkpoint_kind
+        args.train_receipt.resolve(),
+        args.arm,
+        args.weights.resolve(),
+        args.checkpoint_kind,
     )
     if receipt["manifest_sha256"] != sha256_file(args.manifest):
         raise RuntimeError("train receipt belongs to a different preflight manifest")
     model = RTDETR(str(args.weights.resolve()))
-    has_glgm = any(module.__class__.__name__ == "GLGM" for module in model.model.modules())
+    has_glgm = any(
+        module.__class__.__name__ == METHOD_MODULE_NAME
+        for module in model.model.modules()
+    )
     if has_glgm != (args.arm == "glgm"):
-        raise RuntimeError(f"benchmark checkpoint architecture does not match requested arm: {args.arm}")
+        raise RuntimeError(
+            f"benchmark checkpoint architecture does not match requested arm: {args.arm}"
+        )
     device = torch.device(f"cuda:{args.device}")
     network = model.model.eval().to(device)
     dtype = torch.float16 if args.half else torch.float32

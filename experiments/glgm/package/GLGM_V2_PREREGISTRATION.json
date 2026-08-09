@@ -1,0 +1,70 @@
+{
+  "schema": "glgm-v2-preregistration-v1",
+  "baseline_v1_private_parameters": 6639079,
+  "variants": [
+    {
+      "id": "v2-lite-equal-p5",
+      "control_config": "configs/rtdetr-x-glgm-control.yaml",
+      "method_config": "configs/rtdetr-x-glgm-lite-equal-p5.yaml",
+      "method_module": "GLGMLite",
+      "paired_head_index": 2,
+      "paired_model_index": 16,
+      "paired_spatial_size": 20
+    },
+    {
+      "id": "v3-lite-gated-p5",
+      "control_config": "configs/rtdetr-x-glgm-control.yaml",
+      "method_config": "configs/rtdetr-x-glgm-lite-gated-p5.yaml",
+      "method_module": "GLGMLite",
+      "paired_head_index": 2,
+      "paired_model_index": 16,
+      "paired_spatial_size": 20
+    },
+    {
+      "id": "v4-lite-gated-p4",
+      "control_config": "configs/rtdetr-x-glgm-control-p4.yaml",
+      "method_config": "configs/rtdetr-x-glgm-lite-gated-p4.yaml",
+      "method_module": "GLGMLite",
+      "paired_head_index": 7,
+      "paired_model_index": 21,
+      "paired_spatial_size": 40
+    },
+    {
+      "id": "v5-lite-gated-p3",
+      "control_config": "configs/rtdetr-x-glgm-control-p3.yaml",
+      "method_config": "configs/rtdetr-x-glgm-lite-gated-p3.yaml",
+      "method_module": "GLGMLite",
+      "paired_head_index": 12,
+      "paired_model_index": 26,
+      "paired_spatial_size": 80
+    }
+  ],
+  "screen10": {
+    "mean_map_delta_pp_epochs_3_10_min": -0.30,
+    "epoch10_map_delta_pp_min": -0.30,
+    "epoch10_recall_delta_pp_min": -0.50
+  },
+  "screen30": {
+    "last_map_delta_pp_min": 0.30,
+    "best_map_delta_pp_min": 0.20,
+    "last_recall_delta_pp_min": 0.20,
+    "last_non_degrading_metrics": ["f1", "ap50", "ap75"],
+    "non_degrading_class_count_min": 7,
+    "key_non_degrading_class_count_min": 3,
+    "key_classes": ["pedestrian", "people", "bicycle", "car"]
+  },
+  "efficiency": {
+    "private_parameter_reduction_from_v1_min_percent": 80.0,
+    "total_parameter_delta_percent_max": 2.0,
+    "mean_latency_delta_percent_max": 3.0,
+    "p95_latency_delta_percent_max": 5.0,
+    "peak_vram_delta_percent_max": 5.0
+  },
+  "formal100": {
+    "seeds": [0, 1, 2, 3],
+    "mean_last_map_delta_pp_min": 0.30,
+    "positive_map_seed_count_min": 4,
+    "mean_recall_delta_pp_min": 0.0,
+    "per_seed_recall_delta_pp_min": -0.20
+  }
+}
