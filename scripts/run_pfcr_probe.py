@@ -421,6 +421,115 @@ def _build_train_loader(
     return loader, validator
 
 
+def run_cuda_preflight(
+    fdr: torch.nn.Module,
+    frequencycm: torch.nn.Module,
+    loader: Any,
+    validator: Any,
+    evidence_path: Path,
+    *,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Prove real-batch stock identity, gate-only gradients, and checkpoint recovery."""
+
+    evidence_path = Path(evidence_path)
+    if os.path.lexists(evidence_path):
+        raise FileExistsError(f"PFCR preflight evidence already exists: {evidence_path}")
+    before = (_model_state_sha256(fdr), _model_state_sha256(frequencycm))
+    raw_batch = next(iter(loader))
+    batch = validator.preprocess(raw_batch)
+    images = batch["img"]
+    if images.shape != (BATCH_SIZE, 3, IMAGE_SIZE, IMAGE_SIZE):
+        raise RuntimeError(f"PFCR preflight image shape mismatch: {tuple(images.shape)}")
+    if images.device != device:
+        raise RuntimeError("PFCR preflight images are on the wrong device")
+    fdr_stock, fdr_boxes, fdr_logits = _extract_decoder_batch(fdr, images)
+    _, cm_boxes, cm_logits = _extract_decoder_batch(frequencycm, images)
+    if not torch.equal(stock_predictions(fdr_boxes[0], fdr_logits[0]), fdr_stock[0]):
+        raise RuntimeError("PFCR preflight FDR stock reconstruction mismatch")
+    target_boxes, target_classes = _batch_targets(batch, 0)
+    target_boxes = target_boxes.to(device)
+    target_classes = target_classes.to(device)
+    with torch.no_grad():
+        features = pfcr_features(
+            fdr_boxes[0], fdr_logits[0], cm_boxes[0], cm_logits[0]
+        )
+        teacher = one_to_one_union_teacher(
+            fdr_boxes[0],
+            fdr_logits[0],
+            cm_boxes[0],
+            cm_logits[0],
+            target_boxes,
+            target_classes,
+        )
+    prepared = {
+        "features": features.detach().clone(),
+        "fdr_logits": fdr_logits[0].detach().clone(),
+        "frequencycm_logits": cm_logits[0].detach().clone(),
+        "fdr_teacher": teacher.fdr.detach().clone(),
+        "frequencycm_teacher": teacher.frequencycm.detach().clone(),
+    }
+    gate = PFCRGate().to(device)
+    optimizer = build_probe_optimizer(gate)
+    optimizer.zero_grad(set_to_none=True)
+    loss = _batch_training_loss(gate, (prepared,))
+    loss.backward()
+    gradients = [
+        parameter.grad.detach()
+        for parameter in gate.parameters()
+        if parameter.grad is not None
+    ]
+    if not gradients or not all(bool(torch.isfinite(value).all()) for value in gradients):
+        raise RuntimeError("PFCR preflight gate gradients are missing or non-finite")
+    gradient_nonzero = any(bool((value != 0).any()) for value in gradients)
+    if not gradient_nonzero:
+        raise RuntimeError("PFCR preflight gate gradients are all zero")
+    gradient_norm = torch.nn.utils.clip_grad_norm_(gate.parameters(), GRADIENT_NORM_CAP)
+    if not bool(torch.isfinite(gradient_norm)):
+        raise RuntimeError("PFCR preflight gradient norm is non-finite")
+    optimizer.step()
+    if any(parameter.grad is not None for model in (fdr, frequencycm) for parameter in model.parameters()):
+        raise RuntimeError("PFCR preflight leaked gradients into a detector")
+    after = (_model_state_sha256(fdr), _model_state_sha256(frequencycm))
+    if after != before:
+        raise RuntimeError("PFCR preflight changed a detector state")
+
+    probe_input = features.detach().clone()
+    with torch.inference_mode():
+        expected_output = gate(probe_input).detach().cpu()
+    stream = io.BytesIO()
+    torch.save(gate.state_dict(), stream)
+    restored = PFCRGate().to(device)
+    restored.load_state_dict(
+        torch.load(io.BytesIO(stream.getvalue()), map_location=device, weights_only=True)
+    )
+    restored.eval()
+    with torch.inference_mode():
+        actual_output = restored(probe_input).detach().cpu()
+    checkpoint_roundtrip = torch.equal(expected_output, actual_output)
+    if not checkpoint_roundtrip:
+        raise RuntimeError("PFCR preflight checkpoint roundtrip mismatch")
+    report = {
+        "passed": True,
+        "batch": BATCH_SIZE,
+        "image_size": IMAGE_SIZE,
+        "fdr_boxes_shape": list(fdr_boxes.shape),
+        "fdr_logits_shape": list(fdr_logits.shape),
+        "frequencycm_boxes_shape": list(cm_boxes.shape),
+        "frequencycm_logits_shape": list(cm_logits.shape),
+        "feature_shape": list(features.shape),
+        "loss": float(loss.detach().cpu()),
+        "gradient_norm_before_clip": float(gradient_norm.detach().cpu()),
+        "gate_gradient_nonzero": gradient_nonzero,
+        "detector_state_unchanged": True,
+        "fdr_stock_bit_exact": True,
+        "checkpoint_roundtrip": checkpoint_roundtrip,
+    }
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_create_only(evidence_path, report)
+    return report
+
+
 def adjusted_frequencycm_logits(
     gate: PFCRGate, record: Mapping[str, torch.Tensor]
 ) -> torch.Tensor:
@@ -869,6 +978,23 @@ def _run(args: argparse.Namespace) -> int:
         )
         fdr = _load_detector(fdr_checkpoint, device)
         frequencycm = _load_detector(cm_checkpoint, device)
+        preflight_path = (
+            Path("/data/uav/preflight") / f"pfcr-probe-{source_commit[:8]}.json"
+        )
+        if preflight_path.is_file():
+            preflight = json.loads(preflight_path.read_text("utf-8"))
+            if preflight.get("passed") is not True:
+                raise RuntimeError("existing PFCR preflight did not pass")
+        else:
+            preflight = run_cuda_preflight(
+                fdr,
+                frequencycm,
+                loader,
+                validator,
+                preflight_path,
+                device=device,
+            )
+        print(json.dumps({"stage": "preflight", **preflight}), flush=True)
         extract_train_cache(
             fdr,
             frequencycm,

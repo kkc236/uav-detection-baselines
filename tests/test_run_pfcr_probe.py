@@ -318,3 +318,40 @@ def test_adjusted_logits_change_only_frequencycm() -> None:
     assert any(value.grad is not None for value in gate.parameters())
     assert record["fdr_logits"].grad is None
     assert record["frequencycm_logits"].grad is None
+
+
+def test_preflight_proves_gate_only_backward_and_roundtrip(tmp_path: Path) -> None:
+    module = _load_module()
+    batch = {
+        "img": torch.zeros((8, 3, 640, 640)),
+        "batch_idx": torch.arange(8),
+        "bboxes": torch.full((8, 4), .2),
+        "cls": torch.arange(8).view(-1, 1) % 10,
+        "im_file": [f"{index:06d}.jpg" for index in range(8)],
+        "ori_shape": [(540, 960)] * 8,
+        "resized_shape": [(640, 640)] * 8,
+    }
+    fdr, cm = _FakeDetector(1), _FakeDetector(2)
+    report = module.run_cuda_preflight(
+        fdr,
+        cm,
+        [batch],
+        _FakeValidator(),
+        tmp_path / "preflight.json",
+        device=torch.device("cpu"),
+    )
+    assert report["passed"] is True
+    assert report["batch"] == 8
+    assert report["gate_gradient_nonzero"] is True
+    assert report["detector_state_unchanged"] is True
+    assert report["checkpoint_roundtrip"] is True
+    assert (tmp_path / "preflight.json").is_file()
+    with pytest.raises(FileExistsError):
+        module.run_cuda_preflight(
+            fdr,
+            cm,
+            [batch],
+            _FakeValidator(),
+            tmp_path / "preflight.json",
+            device=torch.device("cpu"),
+        )
