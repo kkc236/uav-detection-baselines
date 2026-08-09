@@ -64,6 +64,7 @@ class BPDDDetectionLoss(FDRDetectionLoss):
     ) -> None:
         super().__init__(*args, **kwargs)
         self.bpdd_options = bpdd_options or BPDDOptions()
+        self.bpdd_runtime_enabled = True
         self.last_bpdd_statistics: dict[str, Tensor] = {}
 
     def _matched_bpdd_inputs(
@@ -112,7 +113,11 @@ class BPDDDetectionLoss(FDRDetectionLoss):
 
         losses = super().forward(*args, **kwargs)
         self.last_bpdd_statistics = {}
-        if not self.bpdd_options.enabled or self.bpdd_options.weight == 0:
+        if (
+            not self.bpdd_runtime_enabled
+            or not self.bpdd_options.enabled
+            or self.bpdd_options.weight == 0
+        ):
             return losses
 
         corner_logits = kwargs.get("corner_logits")
