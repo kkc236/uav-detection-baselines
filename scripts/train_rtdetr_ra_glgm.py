@@ -36,6 +36,7 @@ from src.ra_experiment_protocol import (  # noqa: E402
 )
 from src.ra_glgm_protocol import validate_ra_glgm_initial_state  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
+from scripts.evaluate_ra_glgm_gate import validate_screen_gate_report  # noqa: E402
 from src.rtdetr_ra_glgm import (  # noqa: E402
     RA_GLGM_CONTROL_CFG,
     RA_GLGM_MODEL_CFG,
@@ -187,16 +188,17 @@ def validate_initial_state(path: str | Path, manifest: Mapping[str, Any]) -> dic
     return {**dict(record), "path": str(state_path), "sha256": digest}
 
 
-def _screen_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
+def _screen_gate(
+    path: Path | None, output_root: Path
+) -> tuple[dict[str, Any] | None, str | None]:
     if path is None:
         return None, None
-    report = read_json(path.resolve())
-    if (
-        report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
-        or report.get("formal_eligible") is not True
-        or report.get("formal_instruction") != "start_fresh_from_paired_scratch_initial_state"
-    ):
-        raise ValueError("Formal100 requires the immutable passing Screen30 Gate")
+    root = output_root.resolve()
+    report = validate_screen_gate_report(
+        path.resolve(),
+        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1",
+        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1",
+    )
     return report, file_sha256(path)
 
 
@@ -424,7 +426,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     state = validate_initial_state(args.initial_state, manifest)
     validate_learnability_report(args.learnability_report, protocol_manifest=manifest)
     learnability_sha = file_sha256(args.learnability_report)
-    _, gate_sha = _screen_gate(args.screen_gate)
+    _, gate_sha = _screen_gate(args.screen_gate, args.output_root)
     authority_root = args.output_root / "_ra-authority"
     data_yaml = prepare_data(args.dataset_root, args.stage, authority_root, manifest)
     identity = manifest["run_identities"][f"{args.variant}_{args.stage}"]

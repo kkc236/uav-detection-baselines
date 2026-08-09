@@ -79,6 +79,8 @@ def _smoke_decision(variant: str) -> dict:
         "amp_skipped_steps": 0,
         "public_gradient_finite": True,
         "fdr_gradient_finite": True,
+        "public_gradient_nonzero": True,
+        "fdr_gradient_nonzero": True,
         "ra_private_gradient_nonzero": True if variant == "ra_glgm" else None,
     }
 
@@ -94,6 +96,8 @@ def test_smoke_advancement_accepts_only_complete_optimizer_evidence(variant: str
         ("baseline", "amp_skipped_steps", 1),
         ("baseline", "public_gradient_finite", False),
         ("baseline", "fdr_gradient_finite", False),
+        ("baseline", "public_gradient_nonzero", False),
+        ("baseline", "fdr_gradient_nonzero", False),
         ("ra_glgm", "ra_private_gradient_nonzero", False),
         ("ra_glgm", "completed_epoch", 1),
     ),

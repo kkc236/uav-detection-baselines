@@ -28,10 +28,13 @@ from src.ra_experiment_protocol import (  # noqa: E402
     read_jsonl,
     validate_runtime_identity,
 )
+from scripts.validate_ra_resume import validate_optimizer_evidence  # noqa: E402
 
 
 EXPECTED_EPOCHS = 30
 TAIL_EPOCHS = (28, 29, 30)
+FORMAL_EXPECTED_EPOCHS = 100
+FORMAL_TAIL_EPOCHS = (98, 99, 100)
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall")
 DETAILED_METRICS = (*STANDARD_METRICS, "ap_tiny", "ap_small")
 
@@ -50,12 +53,16 @@ def _queue_integrity(
     *,
     run_id: str,
     strict_hashes: bool,
+    expected_epochs: int = EXPECTED_EPOCHS,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
-    if len(rows) != EXPECTED_EPOCHS:
-        errors.append(f"queue has {len(rows)} records, expected {EXPECTED_EPOCHS}")
+    if len(rows) != expected_epochs:
+        errors.append(f"queue has {len(rows)} records, expected {expected_epochs}")
         return False, errors
-    expected_snapshots = {_checkpoint_path(run, epoch).resolve() for epoch in range(1, EXPECTED_EPOCHS + 1)}
+    expected_snapshots = {
+        _checkpoint_path(run, epoch).resolve()
+        for epoch in range(1, expected_epochs + 1)
+    }
     actual_snapshots = {path.resolve() for path in (run / "weights").glob("epoch*.pt")}
     if actual_snapshots != expected_snapshots:
         errors.append("epoch checkpoint set is not exactly one snapshot per completed epoch")
@@ -80,37 +87,86 @@ def _queue_integrity(
 
 
 def _detailed_integrity(
-    rows: Sequence[Mapping[str, Any]], *, evaluator_sha256: str
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    run: Path,
+    identity: Mapping[str, Any],
+    queue: Sequence[Mapping[str, Any]],
+    evaluator_sha256: str,
+    parameter_count: Any,
+    tail_epochs: Sequence[int] = TAIL_EPOCHS,
+    stage: str = "screen",
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
     try:
         epochs = [int(row["completed_epoch"]) for row in rows]
     except (KeyError, TypeError, ValueError):
         return False, ["locked evaluation epochs are invalid"]
-    if epochs != list(TAIL_EPOCHS):
-        errors.append(f"locked evaluation epochs must be exactly {list(TAIL_EPOCHS)}")
+    if epochs != list(tail_epochs):
+        errors.append(f"locked evaluation epochs must be exactly {list(tail_epochs)}")
+    queue_by_epoch = {
+        int(row.get("completed_epoch", -1)): row
+        for row in queue
+        if isinstance(row.get("completed_epoch"), int)
+    }
     for row in rows:
         epoch = row.get("completed_epoch", "?")
+        expected_checkpoint = (
+            _checkpoint_path(run, int(epoch)).resolve()
+            if isinstance(epoch, int) and epoch > 0
+            else None
+        )
+        queued = queue_by_epoch.get(int(epoch)) if isinstance(epoch, int) else None
         if row.get("evaluator_sha256") != evaluator_sha256:
             errors.append(f"locked evaluator authority mismatch at epoch {epoch}")
-        if not all(finite_number(row.get(metric)) for metric in DETAILED_METRICS):
+        if (
+            row.get("variant") != identity.get("variant")
+            or row.get("stage") != stage
+            or row.get("run_id") != identity.get("run_id")
+        ):
+            errors.append(f"locked evaluation run authority mismatch at epoch {epoch}")
+        if (
+            expected_checkpoint is None
+            or queued is None
+            or Path(str(row.get("checkpoint", ""))).resolve() != expected_checkpoint
+            or row.get("checkpoint_sha256") != queued.get("checkpoint_sha256")
+        ):
+            errors.append(f"locked evaluation checkpoint authority mismatch at epoch {epoch}")
+        elif not expected_checkpoint.is_file() or row.get("checkpoint_sha256") != file_sha256(
+            expected_checkpoint
+        ):
+            errors.append(f"locked evaluation checkpoint SHA256 mismatch at epoch {epoch}")
+        if row.get("model_parameters") != parameter_count:
+            errors.append(f"locked evaluation parameter count mismatch at epoch {epoch}")
+        if not all(
+            finite_number(row.get(metric)) and 0.0 <= float(row[metric]) <= 1.0
+            for metric in DETAILED_METRICS
+        ):
             errors.append(f"non-finite or missing detailed metric at epoch {epoch}")
         class_ap = row.get("class_ap")
         if (
             not isinstance(class_ap, list)
             or len(class_ap) != int(RA_EXPERIMENT_PROTOCOL["screen_gate"]["classes"])
-            or not all(finite_number(value) for value in class_ap)
+            or not all(finite_number(value) and 0.0 <= float(value) <= 1.0 for value in class_ap)
         ):
             errors.append(f"class_ap must contain ten finite values at epoch {epoch}")
     return not errors, errors
 
 
-def _load_arm(run_dir: str | Path, variant: str, *, strict_hashes: bool) -> dict[str, Any]:
+def _load_arm(
+    run_dir: str | Path,
+    variant: str,
+    *,
+    strict_hashes: bool,
+    stage: str = "screen",
+    expected_epochs: int = EXPECTED_EPOCHS,
+    tail_epochs: Sequence[int] = TAIL_EPOCHS,
+) -> dict[str, Any]:
     run = Path(run_dir).resolve()
     errors: list[str] = []
     try:
         manifest = read_json(run / "ra-run.json")
-        identity = validate_runtime_identity(manifest, variant=variant, stage="screen")
+        identity = validate_runtime_identity(manifest, variant=variant, stage=stage)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         manifest, identity = {}, {}
         errors.append(f"invalid {variant} runtime manifest: {error}")
@@ -130,22 +186,31 @@ def _load_arm(run_dir: str | Path, variant: str, *, strict_hashes: bool) -> dict
         detailed = []
         errors.append(f"invalid {variant} locked evaluation: {error}")
 
-    evidence_continuous = continuous_epochs(evidence, EXPECTED_EPOCHS)
+    evidence_continuous = continuous_epochs(evidence, expected_epochs)
     if not evidence_continuous:
-        errors.append(f"{variant} epoch evidence is not continuous 1..30")
+        errors.append(
+            f"{variant} epoch evidence is not continuous 1..{expected_epochs}"
+        )
     finite_evidence = all(
         all(finite_number(row.get(metric)) for metric in STANDARD_METRICS)
         and finite_number(row.get("cuda_peak_mib"))
         and row.get("run_id") == identity.get("run_id")
         and row.get("variant") == variant
-        and row.get("stage") == "screen"
+        and row.get("stage") == stage
         for row in evidence
     )
     if not finite_evidence:
         errors.append(f"{variant} epoch evidence contains non-finite or foreign rows")
     evaluator_sha = str(manifest.get("locked_evaluator_sha256", ""))
     detailed_valid, detailed_errors = _detailed_integrity(
-        detailed, evaluator_sha256=evaluator_sha
+        detailed,
+        run=run,
+        identity=identity,
+        queue=queue,
+        evaluator_sha256=evaluator_sha,
+        parameter_count=manifest.get("model_parameters"),
+        tail_epochs=tail_epochs,
+        stage=stage,
     )
     errors.extend(f"{variant} {message}" for message in detailed_errors)
     queue_valid, queue_errors = _queue_integrity(
@@ -153,17 +218,32 @@ def _load_arm(run_dir: str | Path, variant: str, *, strict_hashes: bool) -> dict
         queue,
         run_id=str(identity.get("run_id", "")),
         strict_hashes=strict_hashes,
+        expected_epochs=expected_epochs,
     )
     errors.extend(f"{variant} {message}" for message in queue_errors)
     parameter_count = manifest.get("model_parameters")
     if not isinstance(parameter_count, int) or parameter_count <= 0:
         errors.append(f"{variant} model parameter count is invalid")
+    try:
+        optimizer = validate_optimizer_evidence(
+            run / "optimizer-evidence.jsonl",
+            run_id=str(identity.get("run_id", "")),
+            variant=variant,
+            stage=stage,
+            completed_epochs=expected_epochs,
+        )
+        optimizer_valid = True
+    except ValueError as error:
+        optimizer = None
+        optimizer_valid = False
+        errors.append(f"{variant} optimizer evidence is invalid: {error}")
     checks = {
         "manifest": bool(manifest and identity),
         "continuous_epochs": evidence_continuous,
         "finite_epoch_evidence": finite_evidence,
         "checkpoint_queue_integrity": queue_valid,
         "locked_evaluation": detailed_valid,
+        "optimizer_evidence": optimizer_valid,
         "parameter_count": isinstance(parameter_count, int) and parameter_count > 0,
     }
     return {
@@ -173,6 +253,7 @@ def _load_arm(run_dir: str | Path, variant: str, *, strict_hashes: bool) -> dict
         "evidence": evidence,
         "detailed": detailed,
         "parameter_count": parameter_count,
+        "optimizer": optimizer,
         "checks": checks,
         "errors": errors,
     }
@@ -266,6 +347,9 @@ def evaluate_gate(
             "at_least_7_of_10_classes_improve": class_wins >= 7,
             "parameter_increase_at_most_10_percent": (
                 baseline_parameters == BASELINE_PARAMETERS
+                and method_parameters
+                == BASELINE_PARAMETERS
+                + int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"])
                 and 0 <= parameter_ratio <= MAX_PARAMETER_INCREASE_RATIO
             ),
             "peak_vram_below_22_gib": peak_vram < MAX_PEAK_VRAM_MIB,
@@ -295,6 +379,147 @@ def evaluate_gate(
     }
 
 
+def evaluate_formal_report(
+    baseline_run: str | Path,
+    method_run: str | Path,
+    *,
+    strict_checkpoint_hashes: bool = True,
+) -> dict[str, Any]:
+    """Audit and compare the frozen epoch100 and tail-three Formal100 evidence."""
+
+    baseline = _load_arm(
+        baseline_run,
+        "baseline",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="formal",
+        expected_epochs=FORMAL_EXPECTED_EPOCHS,
+        tail_epochs=FORMAL_TAIL_EPOCHS,
+    )
+    method = _load_arm(
+        method_run,
+        "ra_glgm",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="formal",
+        expected_epochs=FORMAL_EXPECTED_EPOCHS,
+        tail_epochs=FORMAL_TAIL_EPOCHS,
+    )
+    pair_valid = paired_manifests(
+        baseline["manifest"], method["manifest"], stage="formal"
+    )
+    if not pair_valid:
+        baseline["errors"].append("baseline/RA Formal100 manifests are not a strict same-GPU pair")
+    engineering = {
+        "baseline_complete": all(baseline["checks"].values()),
+        "method_complete": all(method["checks"].values()),
+        "strict_pair": pair_valid,
+    }
+    engineering_complete = all(engineering.values())
+    metrics: dict[str, Any] | None = None
+    checks = {
+        "epoch100_map_delta_at_least_0_005": False,
+        "tail3_map_delta_positive": False,
+        "epoch100_recall_delta_positive": False,
+        "epoch100_ap50_delta_positive": False,
+        "epoch100_ap75_non_degrading": False,
+        "epoch100_ap_tiny_delta_positive": False,
+        "epoch100_ap_small_delta_positive": False,
+        "at_least_7_of_10_classes_improve": False,
+        "exact_frozen_parameter_delta": False,
+        "peak_vram_below_22_gib": False,
+    }
+    if engineering_complete:
+        baseline_metrics = _metric_window(baseline["detailed"])
+        method_metrics = _metric_window(method["detailed"])
+        final_delta = {
+            name: method_metrics["final"][name] - baseline_metrics["final"][name]
+            for name in DETAILED_METRICS
+        }
+        tail3_delta = {
+            name: method_metrics["tail3"][name] - baseline_metrics["tail3"][name]
+            for name in DETAILED_METRICS
+        }
+        class_delta = [
+            float(method["detailed"][-1]["class_ap"][index])
+            - float(baseline["detailed"][-1]["class_ap"][index])
+            for index in range(10)
+        ]
+        class_wins = sum(delta > 0 for delta in class_delta)
+        baseline_parameters = int(baseline["parameter_count"])
+        method_parameters = int(method["parameter_count"])
+        peak_vram = max(float(row["cuda_peak_mib"]) for row in method["evidence"])
+        metrics = {
+            "baseline": baseline_metrics,
+            "ra_glgm": method_metrics,
+            "epoch100_delta": final_delta,
+            "tail3_delta": tail3_delta,
+            "class_ap_delta": class_delta,
+            "class_wins": class_wins,
+            "parameters": {
+                "baseline": baseline_parameters,
+                "ra_glgm": method_parameters,
+                "increase": method_parameters - baseline_parameters,
+            },
+            "ra_glgm_peak_vram_mib": peak_vram,
+        }
+        checks = {
+            "epoch100_map_delta_at_least_0_005": final_delta["map"] >= 0.005,
+            "tail3_map_delta_positive": tail3_delta["map"] > 0,
+            "epoch100_recall_delta_positive": final_delta["recall"] > 0,
+            "epoch100_ap50_delta_positive": final_delta["map50"] > 0,
+            "epoch100_ap75_non_degrading": final_delta["map75"] >= 0,
+            "epoch100_ap_tiny_delta_positive": final_delta["ap_tiny"] > 0,
+            "epoch100_ap_small_delta_positive": final_delta["ap_small"] > 0,
+            "at_least_7_of_10_classes_improve": class_wins >= 7,
+            "exact_frozen_parameter_delta": (
+                baseline_parameters == BASELINE_PARAMETERS
+                and method_parameters - baseline_parameters
+                == int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"])
+            ),
+            "peak_vram_below_22_gib": peak_vram < MAX_PEAK_VRAM_MIB,
+        }
+    success = engineering_complete and all(checks.values())
+    return {
+        "format_version": 1,
+        "report_name": "RA-GLGM-Formal100-v1",
+        "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+        "primary_evidence": ["epoch100", "tail3_mean"],
+        "engineering": {
+            "complete": engineering_complete,
+            "checks": engineering,
+            "arm_checks": {
+                "baseline": baseline["checks"],
+                "ra_glgm": method["checks"],
+            },
+            "errors": [*baseline["errors"], *method["errors"]],
+        },
+        "metrics": metrics,
+        "scientific": {"checks": checks, "passed": success},
+        "formal_success": success,
+        "best_checkpoint_policy": "supplemental only; not used for primary conclusion",
+    }
+
+
+def validate_screen_gate_report(
+    path: str | Path,
+    *,
+    baseline_run: str | Path,
+    method_run: str | Path,
+) -> dict[str, Any]:
+    """Recompute Screen30 from its bound artifacts before any Formal100 action."""
+
+    recorded = read_json(path)
+    expected = evaluate_gate(baseline_run, method_run)
+    if recorded != expected:
+        raise ValueError("Screen30 gate report differs from frozen recomputation")
+    if (
+        recorded.get("formal_eligible") is not True
+        or recorded.get("formal_instruction")
+        != "start_fresh_from_paired_scratch_initial_state"
+    ):
+        raise ValueError("Screen30 gate did not authorize Formal100")
+    return recorded
+
+
 def write_create_only_report(output: str | Path, report: Mapping[str, Any]) -> Path:
     destination = Path(output).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -317,17 +542,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-run", type=Path, required=True)
     parser.add_argument("--ra-run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--stage", choices=("screen", "formal"), default="screen")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    report = evaluate_gate(args.baseline_run, args.ra_run)
+    report = (
+        evaluate_gate(args.baseline_run, args.ra_run)
+        if args.stage == "screen"
+        else evaluate_formal_report(args.baseline_run, args.ra_run)
+    )
     write_create_only_report(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     if not report["engineering"]["complete"]:
         raise SystemExit(2)
-    if not report["formal_eligible"]:
+    if args.stage == "screen" and not report["formal_eligible"]:
         raise SystemExit(3)
 
 

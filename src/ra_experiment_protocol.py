@@ -291,7 +291,7 @@ def paired_manifests(
         "gpu_uuid",
         "schedule_epochs",
         "cutoff_epoch",
-        "learnability_report_sha256",
+        "locked_evaluator_sha256",
     )
     shared_identity_fields = ("source_sha256", "protocol_sha256", "stage", "seed", "pair_id")
     return (

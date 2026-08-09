@@ -26,6 +26,7 @@ from src.ra_experiment_protocol import (  # noqa: E402
     read_json,
 )
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
+from scripts.evaluate_ra_glgm_gate import validate_screen_gate_report  # noqa: E402
 
 
 TRAIN_STEPS = (
@@ -103,17 +104,21 @@ def build_evaluator_command(
 
 
 def build_gate_command(
-    *, python: Path, output_root: Path, gate_output: Path
+    *, python: Path, output_root: Path, gate_output: Path, stage: str = "screen"
 ) -> list[str]:
+    if stage not in {"screen", "formal"}:
+        raise ValueError(f"unknown RA comparison stage: {stage}")
     return [
         str(python),
         "scripts/evaluate_ra_glgm_gate.py",
         "--baseline-run",
-        str((output_root / run_name("screen", "baseline")).resolve()),
+        str((output_root / run_name(stage, "baseline")).resolve()),
         "--ra-run",
-        str((output_root / run_name("screen", "ra_glgm")).resolve()),
+        str((output_root / run_name(stage, "ra_glgm")).resolve()),
         "--output",
         str(gate_output.resolve()),
+        "--stage",
+        stage,
     ]
 
 
@@ -305,14 +310,28 @@ def _environment() -> dict[str, str]:
     return environment
 
 
-def _validate_gate_for_formal(path: Path) -> None:
+def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
+    try:
+        validate_screen_gate_report(
+            path,
+            baseline_run=output_root / run_name("screen", "baseline"),
+            method_run=output_root / run_name("screen", "ra_glgm"),
+        )
+    except (OSError, ValueError) as error:
+        raise RuntimeError("Screen30 gate did not authorize Formal100") from error
+
+
+def _validate_formal_report(path: Path) -> dict[str, Any]:
     report = read_json(path)
     if (
         report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
-        or report.get("formal_eligible") is not True
-        or report.get("formal_instruction") != "start_fresh_from_paired_scratch_initial_state"
+        or report.get("report_name") != "RA-GLGM-Formal100-v1"
+        or report.get("primary_evidence") != ["epoch100", "tail3_mean"]
+        or report.get("engineering", {}).get("complete") is not True
+        or not isinstance(report.get("formal_success"), bool)
     ):
-        raise RuntimeError("Screen30 gate did not authorize Formal100")
+        raise RuntimeError("Formal100 report is absent, foreign, or incomplete")
+    return report
 
 
 def validate_smoke_advancement(decision: Mapping[str, Any], *, variant: str) -> None:
@@ -325,6 +344,8 @@ def validate_smoke_advancement(decision: Mapping[str, Any], *, variant: str) -> 
         and decision.get("amp_skipped_steps") == 0
         and decision.get("public_gradient_finite") is True
         and decision.get("fdr_gradient_finite") is True
+        and decision.get("public_gradient_nonzero") is True
+        and decision.get("fdr_gradient_nonzero") is True
     )
     if variant == "ra_glgm":
         valid = valid and decision.get("ra_private_gradient_nonzero") is True
@@ -338,6 +359,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     gate_output = output_root / "RA_GLGM_SCREEN30_GATE.json"
+    formal_output = output_root / "RA_GLGM_FORMAL100_REPORT.json"
     audit = args.audit.resolve()
     status = args.status.resolve()
     lock = args.lock.resolve()
@@ -358,7 +380,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
     try:
         for stage, variant in TRAIN_STEPS:
             if stage == "formal":
-                _validate_gate_for_formal(gate_output)
+                _validate_gate_for_formal(gate_output, output_root)
             run = output_root / run_name(stage, variant)
             resume: Path | None = None
             attempts = 0
@@ -467,17 +489,60 @@ def run_supervisor(args: argparse.Namespace) -> int:
 
             if stage == "screen" and variant == "ra_glgm":
                 result = subprocess.run(
-                    build_gate_command(python=args.python, output_root=output_root, gate_output=gate_output),
+                    build_gate_command(
+                        python=args.python,
+                        output_root=output_root,
+                        gate_output=gate_output,
+                        stage="screen",
+                    ),
                     cwd=ROOT,
                     env=environment,
                     check=False,
                 )
                 append_audit_event(audit, {"event": "screen_gate_exit", "returncode": result.returncode})
                 if result.returncode != 0:
-                    _validate_gate_for_formal(gate_output)  # Raises a precise failed-gate error.
+                    _validate_gate_for_formal(
+                        gate_output, output_root
+                    )  # Raises a precise failed-gate error.
 
-        append_audit_event(audit, {"event": "experiment_complete"})
-        _atomic_json(status, {"time": _utc_now(), "process_state": "complete", "formal_gate": str(gate_output)})
+            if stage == "formal" and variant == "ra_glgm":
+                result = subprocess.run(
+                    build_gate_command(
+                        python=args.python,
+                        output_root=output_root,
+                        gate_output=formal_output,
+                        stage="formal",
+                    ),
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                )
+                append_audit_event(
+                    audit,
+                    {"event": "formal_report_exit", "returncode": result.returncode},
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("Formal100 paired report failed engineering audit")
+                _validate_formal_report(formal_output)
+
+        formal_report = _validate_formal_report(formal_output)
+        append_audit_event(
+            audit,
+            {
+                "event": "experiment_complete",
+                "formal_success": formal_report["formal_success"],
+            },
+        )
+        _atomic_json(
+            status,
+            {
+                "time": _utc_now(),
+                "process_state": "complete",
+                "screen_gate": str(gate_output),
+                "formal_report": str(formal_output),
+                "formal_success": formal_report["formal_success"],
+            },
+        )
         return 0
     finally:
         release_lock(lock)

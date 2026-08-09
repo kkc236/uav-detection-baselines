@@ -55,6 +55,8 @@ def validate_optimizer_evidence(
         raise ValueError("optimizer evidence is empty")
 
     observed_epochs: list[int] = []
+    public_nonzero_epochs: set[int] = set()
+    fdr_nonzero_epochs: set[int] = set()
     ra_nonzero_epochs: set[int] = set()
     for attempt, row in enumerate(rows, 1):
         epoch = row.get("completed_epoch")
@@ -84,6 +86,13 @@ def validate_optimizer_evidence(
                 raise ValueError(
                     f"optimizer {field} is non-finite or invalid at attempt {attempt}"
                 )
+            if float(value) > 0.0:
+                destination = (
+                    public_nonzero_epochs
+                    if field == "gradient_norm"
+                    else fdr_nonzero_epochs
+                )
+                destination.add(int(epoch))
         if variant == "ra_glgm":
             value = row.get("ra_glgm_gradient_norm")
             if not finite_number(value) or float(value) < 0.0:
@@ -98,7 +107,12 @@ def validate_optimizer_evidence(
         raise ValueError("optimizer evidence epoch sequence is not monotonic")
     if set(observed_epochs) != set(range(1, completed_epochs + 1)):
         raise ValueError("optimizer evidence does not cover every completed epoch exactly")
-    if variant == "ra_glgm" and ra_nonzero_epochs != set(range(1, completed_epochs + 1)):
+    expected_epochs = set(range(1, completed_epochs + 1))
+    if public_nonzero_epochs != expected_epochs:
+        raise ValueError("optimizer evidence has no nonzero public gradient in every epoch")
+    if fdr_nonzero_epochs != expected_epochs:
+        raise ValueError("optimizer evidence has no nonzero FDR gradient in every epoch")
+    if variant == "ra_glgm" and ra_nonzero_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero RA private gradient in every epoch")
     return {
         "optimizer_attempts": len(rows),
@@ -107,6 +121,8 @@ def validate_optimizer_evidence(
         "amp_skipped_steps": 0,
         "public_gradient_finite": True,
         "fdr_gradient_finite": True,
+        "public_gradient_nonzero": True,
+        "fdr_gradient_nonzero": True,
         "ra_private_gradient_nonzero": True if variant == "ra_glgm" else None,
     }
 
@@ -114,13 +130,14 @@ def validate_optimizer_evidence(
 def _load_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
     if path is None:
         return None, None
-    gate = read_json(path)
-    if (
-        gate.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
-        or gate.get("formal_eligible") is not True
-        or gate.get("formal_instruction") != "start_fresh_from_paired_scratch_initial_state"
-    ):
-        raise ValueError("Formal100 gate is absent, foreign, or failed")
+    from scripts.evaluate_ra_glgm_gate import validate_screen_gate_report
+
+    root = path.resolve().parent
+    gate = validate_screen_gate_report(
+        path,
+        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1",
+        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1",
+    )
     return gate, file_sha256(path)
 
 

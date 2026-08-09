@@ -142,6 +142,8 @@ def test_resume_selects_only_latest_exact_epoch_checkpoint(tmp_path: Path) -> No
     assert decision["amp_skipped_steps"] == 0
     assert decision["public_gradient_finite"] is True
     assert decision["fdr_gradient_finite"] is True
+    assert decision["public_gradient_nonzero"] is True
+    assert decision["fdr_gradient_nonzero"] is True
 
 
 def test_resume_rejects_queue_hash_drift(tmp_path: Path) -> None:
@@ -335,3 +337,28 @@ def test_method_optimizer_evidence_requires_nonzero_private_gradient(tmp_path: P
         completed_epochs=2,
     )
     assert report["ra_private_gradient_nonzero"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    (
+        ("gradient_norm", "nonzero public gradient"),
+        ("fdr_gradient_norm", "nonzero FDR gradient"),
+    ),
+)
+def test_optimizer_evidence_requires_nonzero_public_and_fdr_gradient_each_epoch(
+    tmp_path: Path, field: str, message: str
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    rows = _read_optimizer(run)
+    rows[1][field] = 0.0
+    _write_optimizer(run, rows)
+
+    with pytest.raises(ValueError, match=message):
+        validate_resume(
+            run,
+            variant="baseline",
+            stage="screen",
+            protocol_manifest=protocol,
+            learnability_report=learnability,
+        )

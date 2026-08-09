@@ -20,12 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.ra_experiment_protocol import (  # noqa: E402
+    BASELINE_PARAMETERS,
+    RA_EXPERIMENT_PROTOCOL,
     RA_EXPERIMENT_PROTOCOL_SHA256,
     file_sha256,
+    ignore_sidecar_signature,
     read_json,
     read_jsonl,
     validate_runtime_identity,
 )
+from src.lpr_protocol import CATEGORY_NAMES, dataset_signature  # noqa: E402
 from src.rtdetr_ra_glgm import register_ra_glgm_decoder  # noqa: E402
 
 
@@ -53,6 +57,10 @@ def _finite(value: Any, name: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"non-finite evaluator metric: {name}={value!r}")
     return result
+
+
+def _normalized_640_area(box_width: float, box_height: float) -> float:
+    return (float(box_width) * 640.0) * (float(box_height) * 640.0)
 
 
 def _parse_epochs(value: str) -> list[int]:
@@ -92,8 +100,8 @@ def _dataset(data_yaml: Path) -> tuple[Path, list[str], list[Path]]:
         names = [str(names_value.get(index, names_value.get(str(index)))) for index in range(10)]
     else:
         names = [str(name) for name in names_value]
-    if len(names) != 10 or any(name in {"None", ""} for name in names):
-        raise ValueError("locked evaluator requires ten ordered VisDrone classes")
+    if names != list(CATEGORY_NAMES):
+        raise ValueError("locked evaluator VisDrone category order differs from authority")
     images = sorted(val.glob("*.jpg"))
     if len(images) != 548:
         raise ValueError(f"locked evaluator requires 548 validation images, got {len(images)}")
@@ -156,7 +164,9 @@ def _coco_ground_truth(images: Sequence[Path], names: Sequence[str]) -> tuple[di
                     "image_id": image_id,
                     "category_id": _coco_category_id(class_id),
                     "bbox": [x_px, y_px, width_px, height_px],
-                    "area": width_px * height_px,
+                    # The frozen tiny/small definition is normalized to the
+                    # 640 training canvas, independent of source image size.
+                    "area": _normalized_640_area(box_width, box_height),
                     "iscrowd": 0,
                 }
             )
@@ -251,6 +261,46 @@ def _checkpoint_queue(run: Path) -> dict[int, Mapping[str, Any]]:
     return result
 
 
+def _ordered_names(value: Mapping[int, str] | Sequence[str]) -> list[str]:
+    if isinstance(value, Mapping):
+        return [str(value.get(index, value.get(str(index)))) for index in range(10)]
+    return [str(name) for name in value]
+
+
+def _validate_checkpoint_model(model: Any, *, variant: str) -> int:
+    """Require the frozen FDR baseline or the one exact P3 RA insertion."""
+
+    names = _ordered_names(model.names)
+    if names != list(CATEGORY_NAMES):
+        raise ValueError("checkpoint VisDrone category order differs from authority")
+    named_ra = [
+        (name, module)
+        for name, module in model.model.named_modules()
+        if module.__class__.__name__ == "RAGLGM"
+    ]
+    if variant == "baseline":
+        if named_ra:
+            raise ValueError("baseline checkpoint contains an RA-GLGM module")
+    else:
+        if len(named_ra) != 1 or named_ra[0][0] != "model.28.ra_glgm":
+            raise ValueError("method checkpoint does not contain the unique frozen P3 RA-GLGM")
+        if getattr(named_ra[0][1], "private_parameter_count", None) != int(
+            RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"]
+        ):
+            raise ValueError("method checkpoint RA-GLGM private parameter count differs")
+    parameters = sum(parameter.numel() for parameter in model.model.parameters())
+    expected = BASELINE_PARAMETERS + (
+        int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"])
+        if variant == "ra_glgm"
+        else 0
+    )
+    if parameters != expected:
+        raise ValueError(
+            f"checkpoint parameter count differs: expected={expected}, actual={parameters}"
+        )
+    return parameters
+
+
 def evaluate(
     *,
     run_dir: str | Path,
@@ -271,8 +321,26 @@ def evaluate(
     manifest = _load_authority(Path(protocol_manifest).resolve(), runtime)
     if identity != manifest["run_identities"].get(f"{variant}_{stage}"):
         raise ValueError("RA run identity differs from protocol authority")
+    expected_epochs = (
+        RA_EXPERIMENT_PROTOCOL["evaluation"]["screen_evaluated_epochs"]
+        if stage == "screen"
+        else RA_EXPERIMENT_PROTOCOL["evaluation"]["formal_evaluated_epochs"]
+        if stage == "formal"
+        else None
+    )
+    if expected_epochs is None or list(epochs) != list(expected_epochs):
+        raise ValueError(f"locked evaluator epochs differ from frozen {stage} authority")
     data_yaml = Path(str(runtime["data"])).resolve()
-    _, names, images = _dataset(data_yaml)
+    dataset_root, names, images = _dataset(data_yaml)
+    dataset_authority = manifest.get("dataset_authority")
+    if not isinstance(dataset_authority, Mapping):
+        raise ValueError("locked evaluator dataset authority is missing")
+    if dataset_root != Path(str(dataset_authority.get("root", ""))).resolve():
+        raise ValueError("locked evaluator dataset root differs from authority")
+    if dataset_signature(dataset_root) != dataset_authority.get("positive"):
+        raise ValueError("locked evaluator positive dataset differs from authority")
+    if ignore_sidecar_signature(dataset_root) != dataset_authority.get("ignore"):
+        raise ValueError("locked evaluator ignore sidecars differ from authority")
     ground_truth, image_ids = _coco_ground_truth(images, names)
     queue = _checkpoint_queue(run)
     rows: list[dict[str, Any]] = []
@@ -280,15 +348,20 @@ def evaluate(
     for epoch in epochs:
         checkpoint = run / "weights" / f"epoch{epoch - 1}.pt"
         queued = queue.get(epoch)
-        if queued is None or Path(str(queued.get("checkpoint", ""))).resolve() != checkpoint:
+        if (
+            queued is None
+            or queued.get("run_id") != identity["run_id"]
+            or queued.get("variant") != variant
+            or queued.get("stage") != stage
+            or queued.get("status") != "pending"
+            or Path(str(queued.get("checkpoint", ""))).resolve() != checkpoint
+        ):
             raise ValueError(f"checkpoint queue authority is missing for epoch {epoch}")
         checkpoint_sha = file_sha256(checkpoint)
         if checkpoint_sha != str(queued.get("checkpoint_sha256", "")).upper():
             raise ValueError(f"checkpoint SHA256 mismatch at epoch {epoch}")
         model = RTDETR(str(checkpoint))
-        has_ra = any(module.__class__.__name__ == "RAGLGM" for module in model.model.modules())
-        if has_ra != (variant == "ra_glgm"):
-            raise ValueError(f"checkpoint architecture differs from arm at epoch {epoch}")
+        model_parameters = _validate_checkpoint_model(model, variant=variant)
         result = model.val(
             data=str(data_yaml),
             split="val",
@@ -331,7 +404,7 @@ def evaluate(
             "map": _finite(result.results_dict["metrics/mAP50-95(B)"], "map"),
             **area,
             "class_ap": class_ap,
-            "model_parameters": sum(parameter.numel() for parameter in model.model.parameters()),
+            "model_parameters": model_parameters,
             "speed_ms_per_image": {
                 name: _finite(value, f"speed_{name}") for name, value in result.speed.items()
             },

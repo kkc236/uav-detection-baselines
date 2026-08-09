@@ -6,6 +6,8 @@ from scripts.evaluate_ra_glgm_checkpoints import (
     COCO_CATEGORY_IDS,
     MAX_DETECTIONS_PER_IMAGE,
     _coco_category_id,
+    _normalized_640_area,
+    _ordered_names,
     _validated_predictions,
 )
 
@@ -38,3 +40,25 @@ def test_area_evaluator_rejects_more_than_max_det() -> None:
     ]
     with pytest.raises(ValueError, match="exceeds max_det"):
         _validated_predictions(predictions, {"sample": 1})
+
+
+def test_category_mapping_must_preserve_exact_visdrone_order() -> None:
+    expected = [
+        "pedestrian",
+        "people",
+        "bicycle",
+        "car",
+        "van",
+        "truck",
+        "tricycle",
+        "awning-tricycle",
+        "bus",
+        "motor",
+    ]
+    assert _ordered_names({index: name for index, name in enumerate(expected)}) == expected
+
+
+def test_tiny_small_area_is_normalized_to_640_not_source_resolution() -> None:
+    # 0.02 x 0.02 is 163.84 square pixels on the frozen 640 canvas,
+    # independently of the source-resolution image dimensions.
+    assert _normalized_640_area(0.02, 0.02) == pytest.approx(163.84)
