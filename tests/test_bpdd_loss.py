@@ -104,6 +104,8 @@ def test_better_future_teacher_backpropagates_only_into_student() -> None:
     assert result.loss.item() > 0
     assert result.statistics["active_edge_ratio"].item() == pytest.approx(1.0)
     assert result.statistics["mean_teacher_improvement"].item() > 0
+    assert torch.isfinite(result.statistics["mixture_beats_final_ratio"])
+    assert torch.isfinite(result.statistics["mean_mixture_advantage_over_final"])
     assert logits.grad is not None
     assert logits.grad[0].abs().sum() > 0
     torch.testing.assert_close(logits.grad[1], torch.zeros_like(logits.grad[1]))
@@ -186,4 +188,3 @@ def test_bpdd_promotes_half_precision_math_and_rejects_wrong_shapes() -> None:
             left,
             options=BPDDOptions(),
         )
-

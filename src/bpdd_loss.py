@@ -242,6 +242,8 @@ def _zero_result(corner_logits: Tensor, matched_queries: int) -> BPDDResult:
             "active_edge_ratio": scalar_zero,
             "mean_reliability": scalar_zero,
             "mean_teacher_improvement": scalar_zero,
+            "mixture_beats_final_ratio": scalar_zero,
+            "mean_mixture_advantage_over_final": scalar_zero,
             "matched_queries": torch.tensor(
                 matched_queries, dtype=torch.long, device=corner_logits.device
             ),
@@ -293,6 +295,8 @@ def bpdd_distribution_loss(
     weighted_terms: list[Tensor] = []
     reliabilities: list[Tensor] = []
     improvements: list[Tensor] = []
+    mixture_advantages: list[Tensor] = []
+    final_error = target_errors[-1].detach()
     for layer, teacher in enumerate(teachers):
         teacher_log = teacher.clamp_min(options.eps).log()
         teacher_error = interpolated_edge_nll(
@@ -312,9 +316,11 @@ def bpdd_distribution_loss(
         weighted_terms.append(reliability * divergence)
         reliabilities.append(reliability)
         improvements.append(improvement)
+        mixture_advantages.append(final_error - teacher_error.detach())
 
     reliability_tensor = torch.stack(reliabilities)
     improvement_tensor = torch.stack(improvements)
+    mixture_advantage_tensor = torch.stack(mixture_advantages)
     term_tensor = torch.stack(weighted_terms)
     eligible_edges = int(term_tensor.numel())
     loss = term_tensor.sum() * options.weight / max(eligible_edges, 1)
@@ -325,6 +331,10 @@ def bpdd_distribution_loss(
             "active_edge_ratio": active.float().mean().detach(),
             "mean_reliability": reliability_tensor.mean().detach(),
             "mean_teacher_improvement": improvement_tensor.clamp_min(0).mean().detach(),
+            "mixture_beats_final_ratio": (
+                mixture_advantage_tensor > 0
+            ).float().mean().detach(),
+            "mean_mixture_advantage_over_final": mixture_advantage_tensor.mean().detach(),
             "matched_queries": torch.tensor(
                 matches, dtype=torch.long, device=corner_logits.device
             ),

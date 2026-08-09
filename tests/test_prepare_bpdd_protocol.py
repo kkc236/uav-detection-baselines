@@ -33,7 +33,17 @@ def test_prepare_manifest_binds_current_source_and_frozen_fdr_state(
         "_file_sha256",
         lambda _path: module.FDR_INITIAL_STATE_SHA256,
     )
-    monkeypatch.setattr(module, "_validate_initial_state", lambda _path: None)
+    fingerprints = {
+        "public": "1" * 64,
+        "fdr_public": "2" * 64,
+        "replaced_control": "3" * 64,
+        "private": "4" * 64,
+        "control": "5" * 64,
+        "fdr": "6" * 64,
+    }
+    monkeypatch.setattr(
+        module, "_validate_initial_state", lambda _path: {"fingerprints": fingerprints}
+    )
 
     manifest = module.prepare_manifest(
         source_commit="a" * 40,
@@ -48,6 +58,7 @@ def test_prepare_manifest_binds_current_source_and_frozen_fdr_state(
         "tree_sha256": "B" * 64,
     }
     assert manifest["initial_state"]["sha256"] == module.FDR_INITIAL_STATE_SHA256
+    assert manifest["initial_state"]["fingerprints"] == fingerprints
     assert set(manifest["run_identities"]) == {
         "fdr_screen",
         "fdr_formal",
@@ -61,4 +72,3 @@ def test_prepare_manifest_binds_current_source_and_frozen_fdr_state(
             initial_state=state,
             output=output,
         )
-

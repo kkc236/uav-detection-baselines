@@ -61,6 +61,8 @@ EVIDENCE_FIELDS = (
     "bpdd_active_edge_ratio",
     "bpdd_mean_reliability",
     "bpdd_mean_teacher_improvement",
+    "bpdd_mixture_beats_final_ratio",
+    "bpdd_mean_mixture_advantage_over_final",
     "gradient_norm",
     "fdr_gradient_norm",
     "gradients_finite",
@@ -335,6 +337,8 @@ def _method_evidence(trainer: Any, variant: str) -> dict[str, Any]:
             "bpdd_active_edge_ratio": None,
             "bpdd_mean_reliability": None,
             "bpdd_mean_teacher_improvement": None,
+            "bpdd_mixture_beats_final_ratio": None,
+            "bpdd_mean_mixture_advantage_over_final": None,
         }
     stats = getattr(model, "last_bpdd_statistics", {})
     return {
@@ -344,6 +348,12 @@ def _method_evidence(trainer: Any, variant: str) -> dict[str, Any]:
         "bpdd_mean_reliability": _number(stats.get("mean_reliability")),
         "bpdd_mean_teacher_improvement": _number(
             stats.get("mean_teacher_improvement")
+        ),
+        "bpdd_mixture_beats_final_ratio": _number(
+            stats.get("mixture_beats_final_ratio")
+        ),
+        "bpdd_mean_mixture_advantage_over_final": _number(
+            stats.get("mean_mixture_advantage_over_final")
         ),
     }
 

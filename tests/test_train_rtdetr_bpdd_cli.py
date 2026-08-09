@@ -298,6 +298,8 @@ def _fake_trainer(run: Path, *, variant: str, epoch: int = 0):
                 "active_edge_ratio": torch.tensor(0.25),
                 "mean_reliability": torch.tensor(0.75),
                 "mean_teacher_improvement": torch.tensor(0.125),
+                "mixture_beats_final_ratio": torch.tensor(0.50),
+                "mean_mixture_advantage_over_final": torch.tensor(0.025),
             }
             if bpdd_enabled
             else {}
@@ -348,6 +350,8 @@ def test_every_epoch_writes_bpdd_activity_and_finite_gradient_evidence(
         "bpdd_active_edge_ratio",
         "bpdd_mean_reliability",
         "bpdd_mean_teacher_improvement",
+        "bpdd_mixture_beats_final_ratio",
+        "bpdd_mean_mixture_advantage_over_final",
         "gradient_norm",
         "fdr_gradient_norm",
         "gradients_finite",
@@ -359,6 +363,8 @@ def test_every_epoch_writes_bpdd_activity_and_finite_gradient_evidence(
         assert record["bpdd_active_edge_ratio"] == pytest.approx(0.25)
         assert record["bpdd_mean_reliability"] == pytest.approx(0.75)
         assert record["bpdd_mean_teacher_improvement"] == pytest.approx(0.125)
+        assert record["bpdd_mixture_beats_final_ratio"] == pytest.approx(0.50)
+        assert record["bpdd_mean_mixture_advantage_over_final"] == pytest.approx(0.025)
         assert record["gradients_finite"] is True
         assert math.isfinite(record["gradient_norm"])
         assert math.isfinite(record["fdr_gradient_norm"])
@@ -394,6 +400,8 @@ def test_fdr_arm_keeps_the_same_bpdd_evidence_schema_with_null_values(
         "bpdd_active_edge_ratio",
         "bpdd_mean_reliability",
         "bpdd_mean_teacher_improvement",
+        "bpdd_mixture_beats_final_ratio",
+        "bpdd_mean_mixture_advantage_over_final",
     ):
         assert field in record
         assert record[field] is None

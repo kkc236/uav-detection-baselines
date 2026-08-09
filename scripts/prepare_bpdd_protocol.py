@@ -42,9 +42,10 @@ def _validate_hex(value: str, *, length: int, name: str) -> str:
     return normalized
 
 
-def _validate_initial_state(path: Path) -> None:
+def _validate_initial_state(path: Path) -> dict:
     artifact = torch.load(path, map_location="cpu", weights_only=False)
     validate_fdr_initial_state(artifact)
+    return artifact
 
 
 def prepare_manifest(
@@ -63,7 +64,10 @@ def prepare_manifest(
             "BPDD initial-state SHA256 mismatch: "
             f"expected={FDR_INITIAL_STATE_SHA256}, actual={state_sha256}"
         )
-    _validate_initial_state(initial_state)
+    artifact = _validate_initial_state(initial_state)
+    fingerprints = artifact.get("fingerprints")
+    if not isinstance(fingerprints, dict):
+        raise ValueError("FDR initial-state fingerprints are missing")
     source = {
         "git_commit": _validate_hex(
             source_commit, length=40, name="source_commit"
@@ -88,6 +92,7 @@ def prepare_manifest(
         "initial_state": {
             "path": str(initial_state),
             "sha256": state_sha256,
+            "fingerprints": dict(fingerprints),
         },
         "run_identities": identities,
     }
