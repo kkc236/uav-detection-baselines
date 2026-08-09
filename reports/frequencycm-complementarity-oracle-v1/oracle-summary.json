@@ -1,0 +1,1360 @@
+{
+  "authority": {
+    "cache": {
+      "manifest_sha256": "6EDE00DABAD7049367B19CE9CA9F0076115DBF6D5BD848C32F13E4ABB9F5BCE2",
+      "path": "/data/uav/cache/frequencycm-complementarity-oracle-v1",
+      "records": 548,
+      "source_commit": "176667F6B2920231D37BB2176BD7BA60B7D9CA7C"
+    },
+    "dataset": {
+      "category_mapping_sha256": "1455A1F5D9FA9988799815B36CF2CE6D5044B5BD7CAD7CC614D6B5E5059EF2A6",
+      "classes": [
+        "pedestrian",
+        "people",
+        "bicycle",
+        "car",
+        "van",
+        "truck",
+        "tricycle",
+        "awning-tricycle",
+        "bus",
+        "motor"
+      ],
+      "file_count": 14038,
+      "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+      "val_images": 548,
+      "val_labels": 548
+    },
+    "environment": {
+      "cuda": "12.1",
+      "driver": "550.142",
+      "gpu": "NVIDIA GeForce RTX 4090",
+      "python": "3.10.12",
+      "reported_memory_mib": 24564,
+      "torch": "2.5.1+cu121",
+      "torchvision": "0.20.1+cu121",
+      "ultralytics": "8.4.90"
+    },
+    "execution_source_commit": "76c0530c816fe286fd762236563a20219484162a",
+    "fdr_checkpoint": {
+      "mechanism_source_commit": "d97e1eb7",
+      "path": "/data/uav/checkpoints/frequencycm-complementarity-oracle-v1/fdr-formal-seed0-fdr-d97e1eb7-epoch-0100.pt",
+      "sha256": "C2F638744508ADFE7B6C4A1EF3E08C503273F628062E4650AD59FFFF4C6588C2"
+    },
+    "frequencycm_checkpoint": {
+      "integration_source_commit": "d3655b14c17a3c8ca14e1888517b6fde4e059766",
+      "path": "/data/uav/checkpoints/frequencycm-complementarity-oracle-v1/fdr-frequencycm-formal-d3655b14-epoch-0100.pt",
+      "sha256": "2BBCD6057FEFED5792F786A18E603F8FECA3EC426A6F68938F5F8ADA1603A141"
+    },
+    "protocol": {
+      "batch": 8,
+      "classes": 10,
+      "confidence": 0.001,
+      "deterministic_algorithms": true,
+      "device": "0",
+      "imgsz": 640,
+      "max_det": 300,
+      "nms": false,
+      "seed": 0,
+      "workers": 8
+    }
+  },
+  "coverage": {
+    "details": {
+      "iou50": {
+        "both": 0,
+        "fdr": 33105,
+        "fdr_only": 17349,
+        "fdr_rate": 0.8541242034108207,
+        "frequencycm": 33014,
+        "frequencycm_only": 17290,
+        "frequencycm_rate": 0.8517763616192369,
+        "neither": 4120,
+        "threshold": 0.5,
+        "total": 38759,
+        "union": 34639,
+        "union_gain": 1534,
+        "union_gain_rate": 0.039577904486699865,
+        "union_rate": 0.8937021078975206
+      },
+      "iou75": {
+        "both": 0,
+        "fdr": 20806,
+        "fdr_only": 11745,
+        "fdr_rate": 0.5368043551175211,
+        "frequencycm": 20782,
+        "frequencycm_only": 11823,
+        "frequencycm_rate": 0.536185144095565,
+        "neither": 15191,
+        "threshold": 0.75,
+        "total": 38759,
+        "union": 23568,
+        "union_gain": 2762,
+        "union_gain_rate": 0.07126086844345829,
+        "union_rate": 0.6080652235609794
+      },
+      "one_to_one": {
+        "by_class": {
+          "0": {
+            "iou50": {
+              "both": 6197,
+              "fdr": 6717,
+              "fdr_only": 520,
+              "fdr_rate": 0.7594979647218453,
+              "frequencycm": 6705,
+              "frequencycm_only": 508,
+              "frequencycm_rate": 0.7581411126187245,
+              "neither": 1619,
+              "threshold": 0.5,
+              "total": 8844,
+              "union": 7248,
+              "union_gain": 531,
+              "union_gain_rate": 0.06004070556309362,
+              "union_rate": 0.819538670284939
+            },
+            "iou75": {
+              "both": 2524,
+              "fdr": 3241,
+              "fdr_only": 717,
+              "fdr_rate": 0.3664631388511986,
+              "frequencycm": 3241,
+              "frequencycm_only": 717,
+              "frequencycm_rate": 0.3664631388511986,
+              "neither": 4886,
+              "threshold": 0.75,
+              "total": 8844,
+              "union": 3960,
+              "union_gain": 719,
+              "union_gain_rate": 0.0812980551786522,
+              "union_rate": 0.44776119402985076
+            }
+          },
+          "1": {
+            "iou50": {
+              "both": 3709,
+              "fdr": 4011,
+              "fdr_only": 302,
+              "fdr_rate": 0.7826341463414634,
+              "frequencycm": 3984,
+              "frequencycm_only": 275,
+              "frequencycm_rate": 0.7773658536585366,
+              "neither": 839,
+              "threshold": 0.5,
+              "total": 5125,
+              "union": 4290,
+              "union_gain": 279,
+              "union_gain_rate": 0.0544390243902439,
+              "union_rate": 0.8370731707317073
+            },
+            "iou75": {
+              "both": 1235,
+              "fdr": 1711,
+              "fdr_only": 476,
+              "fdr_rate": 0.3338536585365854,
+              "frequencycm": 1651,
+              "frequencycm_only": 416,
+              "frequencycm_rate": 0.32214634146341464,
+              "neither": 2998,
+              "threshold": 0.75,
+              "total": 5125,
+              "union": 2129,
+              "union_gain": 418,
+              "union_gain_rate": 0.0815609756097561,
+              "union_rate": 0.41541463414634144
+            }
+          },
+          "2": {
+            "iou50": {
+              "both": 835,
+              "fdr": 902,
+              "fdr_only": 67,
+              "fdr_rate": 0.7008547008547008,
+              "frequencycm": 927,
+              "frequencycm_only": 92,
+              "frequencycm_rate": 0.7202797202797203,
+              "neither": 293,
+              "threshold": 0.5,
+              "total": 1287,
+              "union": 996,
+              "union_gain": 69,
+              "union_gain_rate": 0.053613053613053616,
+              "union_rate": 0.7738927738927739
+            },
+            "iou75": {
+              "both": 295,
+              "fdr": 386,
+              "fdr_only": 91,
+              "fdr_rate": 0.2999222999222999,
+              "frequencycm": 414,
+              "frequencycm_only": 119,
+              "frequencycm_rate": 0.32167832167832167,
+              "neither": 782,
+              "threshold": 0.75,
+              "total": 1287,
+              "union": 505,
+              "union_gain": 91,
+              "union_gain_rate": 0.0707070707070707,
+              "union_rate": 0.3923853923853924
+            }
+          },
+          "3": {
+            "iou50": {
+              "both": 12788,
+              "fdr": 13104,
+              "fdr_only": 316,
+              "fdr_rate": 0.931740614334471,
+              "frequencycm": 13103,
+              "frequencycm_only": 315,
+              "frequencycm_rate": 0.9316695108077361,
+              "neither": 645,
+              "threshold": 0.5,
+              "total": 14064,
+              "union": 13425,
+              "union_gain": 321,
+              "union_gain_rate": 0.022824232081911262,
+              "union_rate": 0.9545648464163823
+            },
+            "iou75": {
+              "both": 9858,
+              "fdr": 10549,
+              "fdr_only": 691,
+              "fdr_rate": 0.7500711035267349,
+              "frequencycm": 10561,
+              "frequencycm_only": 703,
+              "frequencycm_rate": 0.7509243458475541,
+              "neither": 2812,
+              "threshold": 0.75,
+              "total": 14064,
+              "union": 11252,
+              "union_gain": 691,
+              "union_gain_rate": 0.0491325369738339,
+              "union_rate": 0.800056882821388
+            }
+          },
+          "4": {
+            "iou50": {
+              "both": 1782,
+              "fdr": 1841,
+              "fdr_only": 59,
+              "fdr_rate": 0.9321518987341773,
+              "frequencycm": 1826,
+              "frequencycm_only": 44,
+              "frequencycm_rate": 0.9245569620253165,
+              "neither": 90,
+              "threshold": 0.5,
+              "total": 1975,
+              "union": 1887,
+              "union_gain": 46,
+              "union_gain_rate": 0.02329113924050633,
+              "union_rate": 0.9554430379746836
+            },
+            "iou75": {
+              "both": 1294,
+              "fdr": 1401,
+              "fdr_only": 107,
+              "fdr_rate": 0.7093670886075949,
+              "frequencycm": 1407,
+              "frequencycm_only": 113,
+              "frequencycm_rate": 0.7124050632911393,
+              "neither": 461,
+              "threshold": 0.75,
+              "total": 1975,
+              "union": 1515,
+              "union_gain": 108,
+              "union_gain_rate": 0.05468354430379747,
+              "union_rate": 0.7670886075949367
+            }
+          },
+          "5": {
+            "iou50": {
+              "both": 583,
+              "fdr": 629,
+              "fdr_only": 46,
+              "fdr_rate": 0.8386666666666667,
+              "frequencycm": 627,
+              "frequencycm_only": 44,
+              "frequencycm_rate": 0.836,
+              "neither": 77,
+              "threshold": 0.5,
+              "total": 750,
+              "union": 673,
+              "union_gain": 44,
+              "union_gain_rate": 0.058666666666666666,
+              "union_rate": 0.8973333333333333
+            },
+            "iou75": {
+              "both": 351,
+              "fdr": 408,
+              "fdr_only": 57,
+              "fdr_rate": 0.544,
+              "frequencycm": 419,
+              "frequencycm_only": 68,
+              "frequencycm_rate": 0.5586666666666666,
+              "neither": 274,
+              "threshold": 0.75,
+              "total": 750,
+              "union": 476,
+              "union_gain": 57,
+              "union_gain_rate": 0.076,
+              "union_rate": 0.6346666666666667
+            }
+          },
+          "6": {
+            "iou50": {
+              "both": 765,
+              "fdr": 845,
+              "fdr_only": 80,
+              "fdr_rate": 0.8086124401913876,
+              "frequencycm": 831,
+              "frequencycm_only": 66,
+              "frequencycm_rate": 0.7952153110047847,
+              "neither": 134,
+              "threshold": 0.5,
+              "total": 1045,
+              "union": 911,
+              "union_gain": 66,
+              "union_gain_rate": 0.06315789473684211,
+              "union_rate": 0.8717703349282296
+            },
+            "iou75": {
+              "both": 381,
+              "fdr": 467,
+              "fdr_only": 86,
+              "fdr_rate": 0.44688995215311006,
+              "frequencycm": 483,
+              "frequencycm_only": 102,
+              "frequencycm_rate": 0.46220095693779906,
+              "neither": 476,
+              "threshold": 0.75,
+              "total": 1045,
+              "union": 569,
+              "union_gain": 86,
+              "union_gain_rate": 0.08229665071770335,
+              "union_rate": 0.5444976076555024
+            }
+          },
+          "7": {
+            "iou50": {
+              "both": 387,
+              "fdr": 437,
+              "fdr_only": 50,
+              "fdr_rate": 0.8214285714285714,
+              "frequencycm": 419,
+              "frequencycm_only": 32,
+              "frequencycm_rate": 0.7875939849624061,
+              "neither": 63,
+              "threshold": 0.5,
+              "total": 532,
+              "union": 470,
+              "union_gain": 33,
+              "union_gain_rate": 0.06203007518796992,
+              "union_rate": 0.8834586466165414
+            },
+            "iou75": {
+              "both": 185,
+              "fdr": 231,
+              "fdr_only": 46,
+              "fdr_rate": 0.4342105263157895,
+              "frequencycm": 238,
+              "frequencycm_only": 53,
+              "frequencycm_rate": 0.4473684210526316,
+              "neither": 248,
+              "threshold": 0.75,
+              "total": 532,
+              "union": 284,
+              "union_gain": 46,
+              "union_gain_rate": 0.08646616541353383,
+              "union_rate": 0.5338345864661654
+            }
+          },
+          "8": {
+            "iou50": {
+              "both": 194,
+              "fdr": 204,
+              "fdr_only": 10,
+              "fdr_rate": 0.8127490039840638,
+              "frequencycm": 204,
+              "frequencycm_only": 10,
+              "frequencycm_rate": 0.8127490039840638,
+              "neither": 37,
+              "threshold": 0.5,
+              "total": 251,
+              "union": 214,
+              "union_gain": 10,
+              "union_gain_rate": 0.0398406374501992,
+              "union_rate": 0.852589641434263
+            },
+            "iou75": {
+              "both": 146,
+              "fdr": 160,
+              "fdr_only": 14,
+              "fdr_rate": 0.6374501992031872,
+              "frequencycm": 155,
+              "frequencycm_only": 9,
+              "frequencycm_rate": 0.6175298804780877,
+              "neither": 82,
+              "threshold": 0.75,
+              "total": 251,
+              "union": 169,
+              "union_gain": 9,
+              "union_gain_rate": 0.035856573705179286,
+              "union_rate": 0.6733067729083665
+            }
+          },
+          "9": {
+            "iou50": {
+              "both": 4109,
+              "fdr": 4311,
+              "fdr_only": 202,
+              "fdr_rate": 0.8823168235775686,
+              "frequencycm": 4298,
+              "frequencycm_only": 189,
+              "frequencycm_rate": 0.8796561604584527,
+              "neither": 386,
+              "threshold": 0.5,
+              "total": 4886,
+              "union": 4503,
+              "union_gain": 192,
+              "union_gain_rate": 0.03929594760540319,
+              "union_rate": 0.9216127711829718
+            },
+            "iou75": {
+              "both": 1731,
+              "fdr": 2234,
+              "fdr_only": 503,
+              "fdr_rate": 0.4572247237003684,
+              "frequencycm": 2195,
+              "frequencycm_only": 464,
+              "frequencycm_rate": 0.44924273434302087,
+              "neither": 2188,
+              "threshold": 0.75,
+              "total": 4886,
+              "union": 2700,
+              "union_gain": 466,
+              "union_gain_rate": 0.095374539500614,
+              "union_rate": 0.5525992632009824
+            }
+          }
+        },
+        "by_scale": {
+          "large": {
+            "iou50": {
+              "both": 2348,
+              "fdr": 2372,
+              "fdr_only": 24,
+              "fdr_rate": 0.9834162520729685,
+              "frequencycm": 2363,
+              "frequencycm_only": 15,
+              "frequencycm_rate": 0.9796849087893864,
+              "neither": 25,
+              "threshold": 0.5,
+              "total": 2412,
+              "union": 2387,
+              "union_gain": 15,
+              "union_gain_rate": 0.006218905472636816,
+              "union_rate": 0.9896351575456053
+            },
+            "iou75": {
+              "both": 2184,
+              "fdr": 2236,
+              "fdr_only": 52,
+              "fdr_rate": 0.9270315091210614,
+              "frequencycm": 2229,
+              "frequencycm_only": 45,
+              "frequencycm_rate": 0.9241293532338308,
+              "neither": 131,
+              "threshold": 0.75,
+              "total": 2412,
+              "union": 2281,
+              "union_gain": 45,
+              "union_gain_rate": 0.018656716417910446,
+              "union_rate": 0.9456882255389718
+            }
+          },
+          "medium": {
+            "iou50": {
+              "both": 14224,
+              "fdr": 14702,
+              "fdr_only": 478,
+              "fdr_rate": 0.9308008863564419,
+              "frequencycm": 14638,
+              "frequencycm_only": 414,
+              "frequencycm_rate": 0.9267489711934156,
+              "neither": 679,
+              "threshold": 0.5,
+              "total": 15795,
+              "union": 15124,
+              "union_gain": 422,
+              "union_gain_rate": 0.026717315606204495,
+              "union_rate": 0.9575182019626464
+            },
+            "iou75": {
+              "both": 10309,
+              "fdr": 11314,
+              "fdr_only": 1005,
+              "fdr_rate": 0.7163026274137385,
+              "frequencycm": 11297,
+              "frequencycm_only": 988,
+              "frequencycm_rate": 0.7152263374485597,
+              "neither": 3493,
+              "threshold": 0.75,
+              "total": 15795,
+              "union": 12307,
+              "union_gain": 993,
+              "union_gain_rate": 0.06286799620132953,
+              "union_rate": 0.7791706236150681
+            }
+          },
+          "small": {
+            "iou50": {
+              "both": 10745,
+              "fdr": 11418,
+              "fdr_only": 673,
+              "fdr_rate": 0.8447765611127552,
+              "frequencycm": 11428,
+              "frequencycm_only": 683,
+              "frequencycm_rate": 0.8455164249778041,
+              "neither": 1415,
+              "threshold": 0.5,
+              "total": 13516,
+              "union": 12122,
+              "union_gain": 694,
+              "union_gain_rate": 0.05134655223438887,
+              "union_rate": 0.896862977212193
+            },
+            "iou75": {
+              "both": 4623,
+              "fdr": 5870,
+              "fdr_only": 1247,
+              "fdr_rate": 0.43430008878366383,
+              "frequencycm": 5886,
+              "frequencycm_only": 1263,
+              "frequencycm_rate": 0.43548387096774194,
+              "neither": 6383,
+              "threshold": 0.75,
+              "total": 13516,
+              "union": 7134,
+              "union_gain": 1248,
+              "union_gain_rate": 0.0923350103580941,
+              "union_rate": 0.5278188813258361
+            }
+          },
+          "tiny": {
+            "iou50": {
+              "both": 4032,
+              "fdr": 4509,
+              "fdr_only": 477,
+              "fdr_rate": 0.6408470722001137,
+              "frequencycm": 4495,
+              "frequencycm_only": 463,
+              "frequencycm_rate": 0.638857305287095,
+              "neither": 2064,
+              "threshold": 0.5,
+              "total": 7036,
+              "union": 4984,
+              "union_gain": 475,
+              "union_gain_rate": 0.0675099488345651,
+              "union_rate": 0.7083570210346788
+            },
+            "iou75": {
+              "both": 884,
+              "fdr": 1368,
+              "fdr_only": 484,
+              "fdr_rate": 0.19442865264354747,
+              "frequencycm": 1352,
+              "frequencycm_only": 468,
+              "frequencycm_rate": 0.19215463331438318,
+              "neither": 5200,
+              "threshold": 0.75,
+              "total": 7036,
+              "union": 1837,
+              "union_gain": 469,
+              "union_gain_rate": 0.06665719158612848,
+              "union_rate": 0.26108584422967596
+            }
+          }
+        },
+        "overall": {
+          "iou50": {
+            "both": 31349,
+            "fdr": 33001,
+            "fdr_only": 1652,
+            "fdr_rate": 0.8514409556490106,
+            "frequencycm": 32924,
+            "frequencycm_only": 1575,
+            "frequencycm_rate": 0.8494543202869012,
+            "neither": 4183,
+            "threshold": 0.5,
+            "total": 38759,
+            "union": 34617,
+            "union_gain": 1616,
+            "union_gain_rate": 0.04169354214505018,
+            "union_rate": 0.8931344977940607
+          },
+          "iou75": {
+            "both": 18000,
+            "fdr": 20788,
+            "fdr_only": 2788,
+            "fdr_rate": 0.5363399468510539,
+            "frequencycm": 20764,
+            "frequencycm_only": 2764,
+            "frequencycm_rate": 0.5357207358290977,
+            "neither": 15207,
+            "threshold": 0.75,
+            "total": 38759,
+            "union": 23559,
+            "union_gain": 2771,
+            "union_gain_rate": 0.07149307257669187,
+            "union_rate": 0.6078330194277458
+          }
+        }
+      },
+      "raw": {
+        "by_class": {
+          "0": {
+            "iou50": {
+              "both": 6247,
+              "fdr": 6758,
+              "fdr_only": 511,
+              "fdr_rate": 0.7641338760741746,
+              "frequencycm": 6748,
+              "frequencycm_only": 501,
+              "frequencycm_rate": 0.7630031659882406,
+              "neither": 1585,
+              "threshold": 0.5,
+              "total": 8844,
+              "union": 7259,
+              "union_gain": 501,
+              "union_gain_rate": 0.05664857530529172,
+              "union_rate": 0.8207824513794663
+            },
+            "iou75": {
+              "both": 2529,
+              "fdr": 3247,
+              "fdr_only": 718,
+              "fdr_rate": 0.36714156490275895,
+              "frequencycm": 3246,
+              "frequencycm_only": 717,
+              "frequencycm_rate": 0.36702849389416553,
+              "neither": 4880,
+              "threshold": 0.75,
+              "total": 8844,
+              "union": 3964,
+              "union_gain": 717,
+              "union_gain_rate": 0.0810719131614654,
+              "union_rate": 0.44821347806422435
+            }
+          },
+          "1": {
+            "iou50": {
+              "both": 3725,
+              "fdr": 4022,
+              "fdr_only": 297,
+              "fdr_rate": 0.7847804878048781,
+              "frequencycm": 3995,
+              "frequencycm_only": 270,
+              "frequencycm_rate": 0.7795121951219512,
+              "neither": 833,
+              "threshold": 0.5,
+              "total": 5125,
+              "union": 4292,
+              "union_gain": 270,
+              "union_gain_rate": 0.05268292682926829,
+              "union_rate": 0.8374634146341463
+            },
+            "iou75": {
+              "both": 1242,
+              "fdr": 1715,
+              "fdr_only": 473,
+              "fdr_rate": 0.33463414634146343,
+              "frequencycm": 1658,
+              "frequencycm_only": 416,
+              "frequencycm_rate": 0.32351219512195123,
+              "neither": 2994,
+              "threshold": 0.75,
+              "total": 5125,
+              "union": 2131,
+              "union_gain": 416,
+              "union_gain_rate": 0.08117073170731708,
+              "union_rate": 0.41580487804878047
+            }
+          },
+          "2": {
+            "iou50": {
+              "both": 841,
+              "fdr": 907,
+              "fdr_only": 66,
+              "fdr_rate": 0.7047397047397047,
+              "frequencycm": 932,
+              "frequencycm_only": 91,
+              "frequencycm_rate": 0.7241647241647242,
+              "neither": 289,
+              "threshold": 0.5,
+              "total": 1287,
+              "union": 998,
+              "union_gain": 66,
+              "union_gain_rate": 0.05128205128205128,
+              "union_rate": 0.7754467754467754
+            },
+            "iou75": {
+              "both": 295,
+              "fdr": 388,
+              "fdr_only": 93,
+              "fdr_rate": 0.3014763014763015,
+              "frequencycm": 414,
+              "frequencycm_only": 119,
+              "frequencycm_rate": 0.32167832167832167,
+              "neither": 780,
+              "threshold": 0.75,
+              "total": 1287,
+              "union": 507,
+              "union_gain": 93,
+              "union_gain_rate": 0.07226107226107226,
+              "union_rate": 0.3939393939393939
+            }
+          },
+          "3": {
+            "iou50": {
+              "both": 12828,
+              "fdr": 13136,
+              "fdr_only": 308,
+              "fdr_rate": 0.9340159271899886,
+              "frequencycm": 13123,
+              "frequencycm_only": 295,
+              "frequencycm_rate": 0.9330915813424346,
+              "neither": 633,
+              "threshold": 0.5,
+              "total": 14064,
+              "union": 13431,
+              "union_gain": 295,
+              "union_gain_rate": 0.020975540386803184,
+              "union_rate": 0.9549914675767918
+            },
+            "iou75": {
+              "both": 9861,
+              "fdr": 10551,
+              "fdr_only": 690,
+              "fdr_rate": 0.7502133105802048,
+              "frequencycm": 10562,
+              "frequencycm_only": 701,
+              "frequencycm_rate": 0.750995449374289,
+              "neither": 2812,
+              "threshold": 0.75,
+              "total": 14064,
+              "union": 11252,
+              "union_gain": 690,
+              "union_gain_rate": 0.04906143344709898,
+              "union_rate": 0.800056882821388
+            }
+          },
+          "4": {
+            "iou50": {
+              "both": 1783,
+              "fdr": 1842,
+              "fdr_only": 59,
+              "fdr_rate": 0.9326582278481013,
+              "frequencycm": 1828,
+              "frequencycm_only": 45,
+              "frequencycm_rate": 0.9255696202531646,
+              "neither": 88,
+              "threshold": 0.5,
+              "total": 1975,
+              "union": 1887,
+              "union_gain": 45,
+              "union_gain_rate": 0.02278481012658228,
+              "union_rate": 0.9554430379746836
+            },
+            "iou75": {
+              "both": 1295,
+              "fdr": 1402,
+              "fdr_only": 107,
+              "fdr_rate": 0.709873417721519,
+              "frequencycm": 1408,
+              "frequencycm_only": 113,
+              "frequencycm_rate": 0.7129113924050633,
+              "neither": 460,
+              "threshold": 0.75,
+              "total": 1975,
+              "union": 1515,
+              "union_gain": 107,
+              "union_gain_rate": 0.054177215189873416,
+              "union_rate": 0.7670886075949367
+            }
+          },
+          "5": {
+            "iou50": {
+              "both": 583,
+              "fdr": 629,
+              "fdr_only": 46,
+              "fdr_rate": 0.8386666666666667,
+              "frequencycm": 627,
+              "frequencycm_only": 44,
+              "frequencycm_rate": 0.836,
+              "neither": 77,
+              "threshold": 0.5,
+              "total": 750,
+              "union": 673,
+              "union_gain": 44,
+              "union_gain_rate": 0.058666666666666666,
+              "union_rate": 0.8973333333333333
+            },
+            "iou75": {
+              "both": 351,
+              "fdr": 408,
+              "fdr_only": 57,
+              "fdr_rate": 0.544,
+              "frequencycm": 419,
+              "frequencycm_only": 68,
+              "frequencycm_rate": 0.5586666666666666,
+              "neither": 274,
+              "threshold": 0.75,
+              "total": 750,
+              "union": 476,
+              "union_gain": 57,
+              "union_gain_rate": 0.076,
+              "union_rate": 0.6346666666666667
+            }
+          },
+          "6": {
+            "iou50": {
+              "both": 767,
+              "fdr": 845,
+              "fdr_only": 78,
+              "fdr_rate": 0.8086124401913876,
+              "frequencycm": 833,
+              "frequencycm_only": 66,
+              "frequencycm_rate": 0.7971291866028708,
+              "neither": 134,
+              "threshold": 0.5,
+              "total": 1045,
+              "union": 911,
+              "union_gain": 66,
+              "union_gain_rate": 0.06315789473684211,
+              "union_rate": 0.8717703349282296
+            },
+            "iou75": {
+              "both": 381,
+              "fdr": 467,
+              "fdr_only": 86,
+              "fdr_rate": 0.44688995215311006,
+              "frequencycm": 483,
+              "frequencycm_only": 102,
+              "frequencycm_rate": 0.46220095693779906,
+              "neither": 476,
+              "threshold": 0.75,
+              "total": 1045,
+              "union": 569,
+              "union_gain": 86,
+              "union_gain_rate": 0.08229665071770335,
+              "union_rate": 0.5444976076555024
+            }
+          },
+          "7": {
+            "iou50": {
+              "both": 390,
+              "fdr": 440,
+              "fdr_only": 50,
+              "fdr_rate": 0.8270676691729323,
+              "frequencycm": 420,
+              "frequencycm_only": 30,
+              "frequencycm_rate": 0.7894736842105263,
+              "neither": 62,
+              "threshold": 0.5,
+              "total": 532,
+              "union": 470,
+              "union_gain": 30,
+              "union_gain_rate": 0.05639097744360902,
+              "union_rate": 0.8834586466165414
+            },
+            "iou75": {
+              "both": 185,
+              "fdr": 231,
+              "fdr_only": 46,
+              "fdr_rate": 0.4342105263157895,
+              "frequencycm": 238,
+              "frequencycm_only": 53,
+              "frequencycm_rate": 0.4473684210526316,
+              "neither": 248,
+              "threshold": 0.75,
+              "total": 532,
+              "union": 284,
+              "union_gain": 46,
+              "union_gain_rate": 0.08646616541353383,
+              "union_rate": 0.5338345864661654
+            }
+          },
+          "8": {
+            "iou50": {
+              "both": 195,
+              "fdr": 205,
+              "fdr_only": 10,
+              "fdr_rate": 0.8167330677290837,
+              "frequencycm": 204,
+              "frequencycm_only": 9,
+              "frequencycm_rate": 0.8127490039840638,
+              "neither": 37,
+              "threshold": 0.5,
+              "total": 251,
+              "union": 214,
+              "union_gain": 9,
+              "union_gain_rate": 0.035856573705179286,
+              "union_rate": 0.852589641434263
+            },
+            "iou75": {
+              "both": 148,
+              "fdr": 161,
+              "fdr_only": 13,
+              "fdr_rate": 0.6414342629482072,
+              "frequencycm": 156,
+              "frequencycm_only": 8,
+              "frequencycm_rate": 0.6215139442231076,
+              "neither": 82,
+              "threshold": 0.75,
+              "total": 251,
+              "union": 169,
+              "union_gain": 8,
+              "union_gain_rate": 0.03187250996015936,
+              "union_rate": 0.6733067729083665
+            }
+          },
+          "9": {
+            "iou50": {
+              "both": 4121,
+              "fdr": 4321,
+              "fdr_only": 200,
+              "fdr_rate": 0.88436348751535,
+              "frequencycm": 4304,
+              "frequencycm_only": 183,
+              "frequencycm_rate": 0.8808841588211216,
+              "neither": 382,
+              "threshold": 0.5,
+              "total": 4886,
+              "union": 4504,
+              "union_gain": 183,
+              "union_gain_rate": 0.03745395006139992,
+              "union_rate": 0.9218174375767499
+            },
+            "iou75": {
+              "both": 1733,
+              "fdr": 2236,
+              "fdr_only": 503,
+              "fdr_rate": 0.45763405648792466,
+              "frequencycm": 2198,
+              "frequencycm_only": 465,
+              "frequencycm_rate": 0.4498567335243553,
+              "neither": 2185,
+              "threshold": 0.75,
+              "total": 4886,
+              "union": 2701,
+              "union_gain": 465,
+              "union_gain_rate": 0.09516987310683586,
+              "union_rate": 0.5528039295947605
+            }
+          }
+        },
+        "by_scale": {
+          "large": {
+            "iou50": {
+              "both": 2349,
+              "fdr": 2372,
+              "fdr_only": 23,
+              "fdr_rate": 0.9834162520729685,
+              "frequencycm": 2364,
+              "frequencycm_only": 15,
+              "frequencycm_rate": 0.9800995024875622,
+              "neither": 25,
+              "threshold": 0.5,
+              "total": 2412,
+              "union": 2387,
+              "union_gain": 15,
+              "union_gain_rate": 0.006218905472636816,
+              "union_rate": 0.9896351575456053
+            },
+            "iou75": {
+              "both": 2184,
+              "fdr": 2236,
+              "fdr_only": 52,
+              "fdr_rate": 0.9270315091210614,
+              "frequencycm": 2229,
+              "frequencycm_only": 45,
+              "frequencycm_rate": 0.9241293532338308,
+              "neither": 131,
+              "threshold": 0.75,
+              "total": 2412,
+              "union": 2281,
+              "union_gain": 45,
+              "union_gain_rate": 0.018656716417910446,
+              "union_rate": 0.9456882255389718
+            }
+          },
+          "medium": {
+            "iou50": {
+              "both": 14262,
+              "fdr": 14730,
+              "fdr_only": 468,
+              "fdr_rate": 0.932573599240266,
+              "frequencycm": 14663,
+              "frequencycm_only": 401,
+              "frequencycm_rate": 0.9283317505539728,
+              "neither": 664,
+              "threshold": 0.5,
+              "total": 15795,
+              "union": 15131,
+              "union_gain": 401,
+              "union_gain_rate": 0.025387780943336498,
+              "union_rate": 0.9579613801836024
+            },
+            "iou75": {
+              "both": 10316,
+              "fdr": 11321,
+              "fdr_only": 1005,
+              "fdr_rate": 0.7167458056346945,
+              "frequencycm": 11306,
+              "frequencycm_only": 990,
+              "frequencycm_rate": 0.7157961380183603,
+              "neither": 3484,
+              "threshold": 0.75,
+              "total": 15795,
+              "union": 12311,
+              "union_gain": 990,
+              "union_gain_rate": 0.06267806267806268,
+              "union_rate": 0.7794238683127572
+            }
+          },
+          "small": {
+            "iou50": {
+              "both": 10817,
+              "fdr": 11471,
+              "fdr_only": 654,
+              "fdr_rate": 0.8486978395975141,
+              "frequencycm": 11474,
+              "frequencycm_only": 657,
+              "frequencycm_rate": 0.8489197987570287,
+              "neither": 1388,
+              "threshold": 0.5,
+              "total": 13516,
+              "union": 12128,
+              "union_gain": 654,
+              "union_gain_rate": 0.04838709677419355,
+              "union_rate": 0.8973068955312222
+            },
+            "iou75": {
+              "both": 4633,
+              "fdr": 5878,
+              "fdr_only": 1245,
+              "fdr_rate": 0.4348919798757029,
+              "frequencycm": 5893,
+              "frequencycm_only": 1260,
+              "frequencycm_rate": 0.43600177567327614,
+              "neither": 6378,
+              "threshold": 0.75,
+              "total": 13516,
+              "union": 7138,
+              "union_gain": 1245,
+              "union_gain_rate": 0.09211305119857946,
+              "union_rate": 0.5281148268718556
+            }
+          },
+          "tiny": {
+            "iou50": {
+              "both": 4052,
+              "fdr": 4532,
+              "fdr_only": 480,
+              "fdr_rate": 0.6441159749857874,
+              "frequencycm": 4513,
+              "frequencycm_only": 461,
+              "frequencycm_rate": 0.6414155770324048,
+              "neither": 2043,
+              "threshold": 0.5,
+              "total": 7036,
+              "union": 4993,
+              "union_gain": 461,
+              "union_gain_rate": 0.06552018192154634,
+              "union_rate": 0.7096361569073337
+            },
+            "iou75": {
+              "both": 887,
+              "fdr": 1371,
+              "fdr_only": 484,
+              "fdr_rate": 0.19485503126776577,
+              "frequencycm": 1354,
+              "frequencycm_only": 467,
+              "frequencycm_rate": 0.1924388857305287,
+              "neither": 5198,
+              "threshold": 0.75,
+              "total": 7036,
+              "union": 1838,
+              "union_gain": 467,
+              "union_gain_rate": 0.06637293916998295,
+              "union_rate": 0.2612279704377487
+            }
+          }
+        },
+        "overall": {
+          "iou50": {
+            "both": 31480,
+            "fdr": 33105,
+            "fdr_only": 1625,
+            "fdr_rate": 0.8541242034108207,
+            "frequencycm": 33014,
+            "frequencycm_only": 1534,
+            "frequencycm_rate": 0.8517763616192369,
+            "neither": 4120,
+            "threshold": 0.5,
+            "total": 38759,
+            "union": 34639,
+            "union_gain": 1534,
+            "union_gain_rate": 0.039577904486699865,
+            "union_rate": 0.8937021078975206
+          },
+          "iou75": {
+            "both": 18020,
+            "fdr": 20806,
+            "fdr_only": 2786,
+            "fdr_rate": 0.5368043551175211,
+            "frequencycm": 20782,
+            "frequencycm_only": 2762,
+            "frequencycm_rate": 0.536185144095565,
+            "neither": 15191,
+            "threshold": 0.75,
+            "total": 38759,
+            "union": 23568,
+            "union_gain": 2762,
+            "union_gain_rate": 0.07126086844345829,
+            "union_rate": 0.6080652235609794
+          }
+        }
+      }
+    },
+    "tiny_small_fdr_recall50": 0.7749610743479953,
+    "tiny_small_frequencycm_recall50": 0.774766446087972,
+    "tiny_small_recall50_delta": 0.05736667964188402,
+    "tiny_small_total": 20552,
+    "tiny_small_union_recall50": 0.8323277539898793
+  },
+  "decision": {
+    "decision": "green",
+    "finite": true,
+    "observed": {
+      "map_delta": "0.0558781448012044",
+      "tiny_small_recall_delta": "0.05736667964188402"
+    },
+    "thresholds": {
+      "green": {
+        "map_delta": "0.010",
+        "tiny_small_recall_delta": "0.020"
+      },
+      "yellow": {
+        "map_delta": "0.003",
+        "tiny_small_recall_delta": "0.010"
+      }
+    }
+  },
+  "format_version": 1,
+  "interpretation": "non_deployable_design_selection_evidence",
+  "oracle": {
+    "candidate_ap50_delta": 0.04886824396612299,
+    "candidate_ap75_delta": 0.07496197203685395,
+    "candidate_map_delta": 0.0558781448012044
+  },
+  "oracle_arms": {
+    "duplicate_fdr_oracle": {
+      "ap50": 0.8235357462610604,
+      "ap75": 0.4966612895461259,
+      "ap_small": 0.4838530814806126,
+      "ap_tiny": 0.3412974851199717,
+      "map": 0.49523029587171336,
+      "precision": 0.9885776837982656,
+      "recall": 0.8245134791927831
+    },
+    "fdr_oracle": {
+      "ap50": 0.8235357462610604,
+      "ap75": 0.4966612895461259,
+      "ap_small": 0.4838530814806126,
+      "ap_tiny": 0.3412974851199717,
+      "map": 0.49523029587171336,
+      "precision": 0.9885776837982656,
+      "recall": 0.8245134791927831
+    },
+    "frequencycm_oracle": {
+      "ap50": 0.8195229515616769,
+      "ap75": 0.5009721985086655,
+      "ap_small": 0.48429584706097367,
+      "ap_tiny": 0.3369784176821262,
+      "map": 0.49297199762483807,
+      "precision": 0.987779911478573,
+      "recall": 0.8191370389217572
+    },
+    "union_oracle": {
+      "ap50": 0.8724039902271834,
+      "ap75": 0.5759341705455194,
+      "ap_small": 0.5430732255728808,
+      "ap_tiny": 0.39958301518222344,
+      "map": 0.5511084406729178,
+      "precision": 0.9908217819754249,
+      "recall": 0.8733311765448931
+    }
+  },
+  "reproduction": {
+    "duplicate_fdr_neutral": true,
+    "fdr": {
+      "independent_evaluator_reproduction": {
+        "actual": {
+          "ap50": 0.48468375790335755,
+          "ap75": 0.29252552290080275,
+          "ap_small": 0.2899815508690768,
+          "ap_tiny": 0.14479634888637893,
+          "map": 0.289659749097641,
+          "precision": 0.5691126151072722,
+          "recall": 0.49277710639408445
+        },
+        "deltas": {
+          "ap50": 0.0,
+          "ap75": 0.0,
+          "ap_small": 0.0,
+          "ap_tiny": 0.0,
+          "map": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "expected": {
+          "ap50": 0.48468375790335755,
+          "ap75": 0.29252552290080275,
+          "ap_small": 0.2899815508690768,
+          "ap_tiny": 0.14479634888637893,
+          "map": 0.289659749097641,
+          "precision": 0.5691126151072722,
+          "recall": 0.49277710639408445
+        },
+        "passed": true,
+        "tolerance": 1e-12
+      },
+      "passed": true,
+      "training_endpoint_reproduction": {
+        "actual": {
+          "ap50": 0.48468375790335755,
+          "ap75": 0.29252552290080275,
+          "map": 0.289659749097641,
+          "precision": 0.5691126151072722,
+          "recall": 0.49277710639408445
+        },
+        "deltas": {
+          "ap50": -0.00011624209664246044,
+          "ap75": -0.00020426656066130366,
+          "map": -5.0250902359050276e-05,
+          "precision": 0.001332615107272228,
+          "recall": -0.0007228936059155422
+        },
+        "expected": {
+          "ap50": 0.4848,
+          "ap75": 0.29272978946146405,
+          "map": 0.28971,
+          "precision": 0.56778,
+          "recall": 0.4935
+        },
+        "gate_metrics": [
+          "ap50",
+          "ap75",
+          "map"
+        ],
+        "passed": true,
+        "precision_recall_are_diagnostics_only": true,
+        "tolerance": 0.0005
+      }
+    },
+    "frequencycm": {
+      "independent_evaluator_reproduction": {
+        "actual": {
+          "ap50": 0.47958417750977145,
+          "ap75": 0.29031845090890795,
+          "ap_small": 0.28490162249703355,
+          "ap_tiny": 0.14395574915129714,
+          "map": 0.28617480114898347,
+          "precision": 0.5677066100719492,
+          "recall": 0.48872966518590005
+        },
+        "deltas": {
+          "ap50": 0.0,
+          "ap75": 0.0,
+          "ap_small": 0.0,
+          "ap_tiny": 0.0,
+          "map": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "expected": {
+          "ap50": 0.47958417750977145,
+          "ap75": 0.29031845090890795,
+          "ap_small": 0.28490162249703355,
+          "ap_tiny": 0.14395574915129714,
+          "map": 0.28617480114898347,
+          "precision": 0.5677066100719492,
+          "recall": 0.48872966518590005
+        },
+        "passed": true,
+        "tolerance": 1e-12
+      },
+      "passed": true,
+      "training_endpoint_reproduction": {
+        "actual": {
+          "ap50": 0.47958417750977145,
+          "ap75": 0.29031845090890795,
+          "map": 0.28617480114898347,
+          "precision": 0.5677066100719492,
+          "recall": 0.48872966518590005
+        },
+        "deltas": {
+          "ap50": 0.00011417750977144037,
+          "ap75": 0.00023215251483810206,
+          "map": 8.480114898345992e-05,
+          "precision": 0.0006066100719491763,
+          "recall": 0.0005896651859000346
+        },
+        "expected": {
+          "ap50": 0.47947,
+          "ap75": 0.29008629839406985,
+          "map": 0.28609,
+          "precision": 0.5671,
+          "recall": 0.48814
+        },
+        "gate_metrics": [
+          "ap50",
+          "ap75",
+          "map"
+        ],
+        "passed": true,
+        "precision_recall_are_diagnostics_only": true,
+        "tolerance": 0.0005
+      }
+    }
+  },
+  "stock": {
+    "fdr": {
+      "ap50": 0.48468375790335755,
+      "ap75": 0.29252552290080275,
+      "ap_small": 0.2899815508690768,
+      "ap_tiny": 0.14479634888637893,
+      "map": 0.289659749097641,
+      "precision": 0.5691126151072722,
+      "recall": 0.49277710639408445
+    },
+    "frequencycm": {
+      "ap50": 0.47958417750977145,
+      "ap75": 0.29031845090890795,
+      "ap_small": 0.28490162249703355,
+      "ap_tiny": 0.14395574915129714,
+      "map": 0.28617480114898347,
+      "precision": 0.5677066100719492,
+      "recall": 0.48872966518590005
+    },
+    "image_selector": {
+      "ap50": 0.4906213806479719,
+      "ap75": 0.2945759054039737,
+      "ap_small": 0.2923760845313492,
+      "ap_tiny": 0.1496789195677214,
+      "map": 0.29233867103864936,
+      "precision": 0.5629567496608107,
+      "recall": 0.5020598099845577
+    }
+  }
+}
