@@ -1,0 +1,384 @@
+{
+  "schema": "glgm-screen30-final-report-v1",
+  "created_utc": "2026-08-08T23:07:12.907820+00:00",
+  "authority": "/home/ubuntu/glgm/work/screen30-seed0-v5",
+  "experiment_complete": true,
+  "strict_pair": true,
+  "protocol_sha256": "4DA2B09F5EA00B0DD2E378563EE80E156C7BAED5A423F10CE042A204DE017422",
+  "checkpoint_policy": {
+    "primary": "best",
+    "robustness_check": "last",
+    "independent_evaluation": true
+  },
+  "dataset": {
+    "name": "VisDrone",
+    "train_images": 6471,
+    "val_images": 548,
+    "val_boxes": 38759,
+    "train_inventory_sha256": "4B8780A13E86B6FA87EBF8284E4E4188C54B92DB580EAEFE2243340E6091A95B",
+    "val_inventory_sha256": "968C037004E16F86E6BA92AB476311D3B4BE077371FD29C25007490B6ACC4902"
+  },
+  "protocol": {
+    "model": "RT-DETR-X",
+    "epochs": 30,
+    "imgsz": 640,
+    "batch": 4,
+    "seed": 0,
+    "device": "NVIDIA GeForce RTX 4090 GPU 0",
+    "sequential_same_device": true,
+    "control_parameters": 67324002,
+    "glgm_parameters": 73963081,
+    "parameter_delta": 6639079,
+    "parameter_delta_percent": 9.861384948565595,
+    "public_initialization_sha256": "325E80C7FA9826028169F1D99071C09DA1C900FBABB029CBE43B675C151F6BE3",
+    "control_training_seconds": 14412.9,
+    "glgm_training_seconds": 14975.7,
+    "all_sixty_training_rows_finite": true
+  },
+  "best_checkpoint_comparison": {
+    "ap50": {
+      "absolute_delta": -0.0023787458730468725,
+      "control": 0.5030940670292537,
+      "glgm": 0.5007153211562069,
+      "percentage_point_delta": -0.23787458730468725,
+      "relative_percent": -0.47282328076203567
+    },
+    "ap75": {
+      "absolute_delta": 0.000988728529514038,
+      "control": 0.30046764148625016,
+      "glgm": 0.3014563700157642,
+      "percentage_point_delta": 0.0988728529514038,
+      "relative_percent": 0.32906323110979113
+    },
+    "f1": {
+      "absolute_delta": -0.004229477439072427,
+      "control": 0.5414627038131855,
+      "glgm": 0.5372332263741131,
+      "percentage_point_delta": -0.42294774390724266,
+      "relative_percent": -0.7811207326537625
+    },
+    "map50_95": {
+      "absolute_delta": 0.00018380510436477593,
+      "control": 0.2999272626262654,
+      "glgm": 0.3001110677306302,
+      "percentage_point_delta": 0.018380510436477593,
+      "relative_percent": 0.06128322672481179
+    },
+    "precision": {
+      "absolute_delta": -0.004206555140435553,
+      "control": 0.600493199277421,
+      "glgm": 0.5962866441369854,
+      "percentage_point_delta": -0.4206555140435553,
+      "relative_percent": -0.700516699522549
+    },
+    "recall": {
+      "absolute_delta": -0.006394196111958961,
+      "control": 0.5016045773577067,
+      "glgm": 0.49521038124574773,
+      "percentage_point_delta": -0.6394196111958961,
+      "relative_percent": -1.2747483576887497
+    }
+  },
+  "last_checkpoint_comparison": {
+    "ap50": {
+      "absolute_delta": -0.002179718355542537,
+      "control": 0.5028950395117494,
+      "glgm": 0.5007153211562069,
+      "percentage_point_delta": -0.2179718355542537,
+      "relative_percent": -0.4334340536861889
+    },
+    "ap75": {
+      "absolute_delta": 0.00036684571881945294,
+      "control": 0.30108952429694474,
+      "glgm": 0.3014563700157642,
+      "percentage_point_delta": 0.036684571881945294,
+      "relative_percent": 0.1218394162586863
+    },
+    "f1": {
+      "absolute_delta": -0.0017849836649849182,
+      "control": 0.539018210039098,
+      "glgm": 0.5372332263741131,
+      "percentage_point_delta": -0.17849836649849182,
+      "relative_percent": -0.33115461254183665
+    },
+    "map50_95": {
+      "absolute_delta": 0.0002927546368198808,
+      "control": 0.2998183130938103,
+      "glgm": 0.3001110677306302,
+      "percentage_point_delta": 0.02927546368198808,
+      "relative_percent": 0.09764401440290962
+    },
+    "precision": {
+      "absolute_delta": 0.003618369306934821,
+      "control": 0.5926682748300506,
+      "glgm": 0.5962866441369854,
+      "percentage_point_delta": 0.3618369306934821,
+      "relative_percent": 0.6105218484948262
+    },
+    "recall": {
+      "absolute_delta": -0.0076304586103853045,
+      "control": 0.502840839856133,
+      "glgm": 0.49521038124574773,
+      "percentage_point_delta": -0.7630458610385304,
+      "relative_percent": -1.5174699438829278
+    }
+  },
+  "benchmark": {
+    "control": {
+      "arm": "control",
+      "batch": 1,
+      "checkpoint_kind": "best",
+      "created_utc": "2026-08-08T23:06:55.509808+00:00",
+      "dtype": "torch.float16",
+      "fps": 20.98000463754232,
+      "gpu": "NVIDIA GeForce RTX 4090",
+      "imgsz": 640,
+      "iterations": 200,
+      "manifest_sha256": "C717F1F3A0BE4ED719D70BC274FDB5EF5CD5CE4B3DFF63E929A0B79E34D4A6D6",
+      "mean_ms": 47.66443178999907,
+      "p50_ms": 47.55513399868505,
+      "p95_ms": 48.03763279669511,
+      "parameters": 67324002,
+      "peak_allocated_vram_bytes": 231508480,
+      "public_state_sha256": "325E80C7FA9826028169F1D99071C09DA1C900FBABB029CBE43B675C151F6BE3",
+      "schema": "glgm-latency-benchmark-v1",
+      "torch": "2.5.1+cu124",
+      "train_receipt_sha256": "8D00802932F24F089AFAAA42AF76B12DA680102494A482FF2CB57F50791CBF0F",
+      "warmup": 50,
+      "weights": "/home/ubuntu/glgm/work/screen30-seed0-v5/runs/control-seed0-e30/weights/best.pt",
+      "weights_sha256": "790383F8934E6127801A6B85AB5E89F3D69F41845DF5E923D73974BC3F90EDDE"
+    },
+    "glgm": {
+      "arm": "glgm",
+      "batch": 1,
+      "checkpoint_kind": "best",
+      "created_utc": "2026-08-08T23:07:11.982542+00:00",
+      "dtype": "torch.float16",
+      "fps": 20.729241640870057,
+      "gpu": "NVIDIA GeForce RTX 4090",
+      "imgsz": 640,
+      "iterations": 200,
+      "manifest_sha256": "C717F1F3A0BE4ED719D70BC274FDB5EF5CD5CE4B3DFF63E929A0B79E34D4A6D6",
+      "mean_ms": 48.241031549769104,
+      "p50_ms": 48.16334499992081,
+      "p95_ms": 49.07932619971689,
+      "parameters": 73963081,
+      "peak_allocated_vram_bytes": 242866688,
+      "public_state_sha256": "325E80C7FA9826028169F1D99071C09DA1C900FBABB029CBE43B675C151F6BE3",
+      "schema": "glgm-latency-benchmark-v1",
+      "torch": "2.5.1+cu124",
+      "train_receipt_sha256": "EC9CC1EBBCD72E4609A2D6031FC30E5DFC2D182DB58F63A67F5D0BF2F57F6717",
+      "warmup": 50,
+      "weights": "/home/ubuntu/glgm/work/screen30-seed0-v5/runs/glgm-seed0-e30/weights/best.pt",
+      "weights_sha256": "131FD962FF65D8A2A0C9BBEA4548227887CB751985FA48307E48478D588E6611"
+    },
+    "comparison": {
+      "parameters": {
+        "metric": "parameters",
+        "unit": "count",
+        "control": 67324002,
+        "glgm": 73963081,
+        "absolute_delta": 6639079,
+        "relative_percent": 9.861384948565595
+      },
+      "mean_ms": {
+        "metric": "mean_ms",
+        "unit": "ms/image",
+        "control": 47.66443178999907,
+        "glgm": 48.241031549769104,
+        "absolute_delta": 0.5765997597700334,
+        "relative_percent": 1.2097065633981088
+      },
+      "p50_ms": {
+        "metric": "p50_ms",
+        "unit": "ms/image",
+        "control": 47.55513399868505,
+        "glgm": 48.16334499992081,
+        "absolute_delta": 0.6082110012357589,
+        "relative_percent": 1.2789597044402747
+      },
+      "p95_ms": {
+        "metric": "p95_ms",
+        "unit": "ms/image",
+        "control": 48.03763279669511,
+        "glgm": 49.07932619971689,
+        "absolute_delta": 1.0416934030217817,
+        "relative_percent": 2.168494453984519
+      },
+      "fps": {
+        "metric": "fps",
+        "unit": "images/s",
+        "control": 20.98000463754232,
+        "glgm": 20.729241640870057,
+        "absolute_delta": -0.2507629966722611,
+        "relative_percent": -1.1952475750340752
+      },
+      "peak_allocated_vram_bytes": {
+        "metric": "peak_allocated_vram_bytes",
+        "unit": "bytes",
+        "control": 231508480,
+        "glgm": 242866688,
+        "absolute_delta": 11358208,
+        "relative_percent": 4.906173631307156
+      }
+    }
+  },
+  "per_class_best": {
+    "positive_map50_95_classes": [
+      "car",
+      "truck",
+      "tricycle",
+      "motor"
+    ],
+    "negative_map50_95_classes": [
+      "pedestrian",
+      "people",
+      "bicycle",
+      "van",
+      "awning-tricycle",
+      "bus"
+    ],
+    "rows": [
+      {
+        "delta": {
+          "ap50": -0.00340335700063199,
+          "ap75": -0.0010729338434695146,
+          "f1": -0.001074723749030837,
+          "map50_95": -0.0012016897904492674,
+          "precision": 0.02733089509421005,
+          "recall": -0.016059922844620267
+        },
+        "id": 0,
+        "name": "pedestrian"
+      },
+      {
+        "delta": {
+          "ap50": -0.008662313787361209,
+          "ap75": 0.004848379800221153,
+          "f1": -0.0036989592195814103,
+          "map50_95": -0.0023833231307683056,
+          "precision": -0.031644640360177334,
+          "recall": 0.011030725731094149
+        },
+        "id": 1,
+        "name": "people"
+      },
+      {
+        "delta": {
+          "ap50": -0.0005037409826165185,
+          "ap75": 0.007546771215098294,
+          "f1": 0.0009666358782027817,
+          "map50_95": -0.001596708629761301,
+          "precision": -0.04530942959198969,
+          "recall": 0.016442849495391654
+        },
+        "id": 2,
+        "name": "bicycle"
+      },
+      {
+        "delta": {
+          "ap50": 0.002320300310943213,
+          "ap75": 0.005220853848583729,
+          "f1": 0.0013869488495793503,
+          "map50_95": 0.004469244248719195,
+          "precision": -0.0015801279541342028,
+          "recall": 0.004550625711035261
+        },
+        "id": 3,
+        "name": "car"
+      },
+      {
+        "delta": {
+          "ap50": -0.007922978593187469,
+          "ap75": -0.009657965691930726,
+          "f1": 0.009306199858972963,
+          "map50_95": -0.005474612501487952,
+          "precision": 0.03609755190416564,
+          "recall": -0.020559759881697448
+        },
+        "id": 4,
+        "name": "van"
+      },
+      {
+        "delta": {
+          "ap50": 0.007858379103621138,
+          "ap75": 0.007979473590223607,
+          "f1": 0.002671689151184431,
+          "map50_95": 0.009090863626022516,
+          "precision": -0.018720272905366153,
+          "recall": 0.020473152973907838
+        },
+        "id": 5,
+        "name": "truck"
+      },
+      {
+        "delta": {
+          "ap50": 0.02085422429113626,
+          "ap75": 0.010004760084232622,
+          "f1": 0.014583745414204652,
+          "map50_95": 0.011482681192542837,
+          "precision": 0.05259975750010759,
+          "recall": -0.011968657176139763
+        },
+        "id": 6,
+        "name": "tricycle"
+      },
+      {
+        "delta": {
+          "ap50": -0.014552432838229656,
+          "ap75": 0.00034260516342876635,
+          "f1": -0.03156364475893475,
+          "map50_95": -0.006089706083366925,
+          "precision": -0.024982424263459813,
+          "recall": -0.03249913647417291
+        },
+        "id": 7,
+        "name": "awning-tricycle"
+      },
+      {
+        "delta": {
+          "ap50": -0.02332334356146204,
+          "ap75": -0.030198454171723843,
+          "f1": -0.037397334756273715,
+          "map50_95": -0.012937471078335705,
+          "precision": -0.04513889665579818,
+          "recall": -0.031872509960159334
+        },
+        "id": 8,
+        "name": "bus"
+      },
+      {
+        "delta": {
+          "ap50": 0.0035478043273193816,
+          "ap75": 0.014873795300476611,
+          "f1": 0.002524668940951713,
+          "map50_95": 0.006478773190533471,
+          "precision": 0.009282035828086288,
+          "recall": -0.0034793286942284007
+        },
+        "id": 9,
+        "name": "motor"
+      }
+    ]
+  },
+  "verdict": {
+    "status": "not_supported",
+    "statement": "This single-seed Screen30 does not support GLGM as an effective improvement over Control.",
+    "evidence": [
+      "Best-checkpoint mAP50-95 improved by only 0.0184 percentage points.",
+      "Best-checkpoint Precision, Recall, F1, and AP50 all decreased.",
+      "Parameters increased by 9.8614 percent, while mean FP16 latency increased.",
+      "Only 4 of 10 classes improved in per-class mAP50-95."
+    ]
+  },
+  "limitations": [
+    "One random seed does not establish statistical significance.",
+    "AP-tiny and AP-small were not emitted by the locked evaluator and are not inferred.",
+    "CUDA deterministic warn-only operations prevent a bitwise reproducibility claim.",
+    "Benchmark differences should be confirmed with repeated independent runs."
+  ],
+  "publication": {
+    "contains_model_checkpoint": false,
+    "checkpoint_paths_and_hashes_in_raw_receipts_are_metadata_only": true
+  }
+}

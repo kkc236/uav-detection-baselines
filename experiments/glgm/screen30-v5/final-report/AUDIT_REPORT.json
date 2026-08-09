@@ -1,0 +1,58 @@
+{
+  "schema": "glgm-screen30-final-audit-v1",
+  "created_utc": "2026-08-09T00:25:00Z",
+  "authority": "/home/ubuntu/glgm/work/screen30-seed0-v5",
+  "result": "PASS_WITH_LIMITATIONS",
+  "checks": {
+    "supervisor_exit_code_zero": true,
+    "completed_marker_present": true,
+    "control_epochs_contiguous_1_through_30": true,
+    "glgm_epochs_contiguous_1_through_30": true,
+    "all_sixty_training_rows_finite": true,
+    "independent_best_and_last_evaluations_present": true,
+    "all_evaluation_metrics_finite": true,
+    "paired_protocol_hash_equal": true,
+    "public_initialization_hash_equal": true,
+    "same_physical_gpu_sequential": true,
+    "benchmark_protocol_equal": true,
+    "raw_and_derived_metrics_equal": true,
+    "checksum_entries_verified_before_audit_receipt": 34,
+    "checksum_mismatches": 0,
+    "published_pt_files": 0,
+    "plots_present": 5,
+    "plots_nonblank": true,
+    "plots_visually_inspected": true
+  },
+  "adversarial_findings": [
+    {
+      "severity": "material",
+      "finding": "The best-checkpoint mAP50-95 gain is only 0.0184 percentage points while four primary metrics decline.",
+      "disposition": "The final verdict is not_supported; no success claim is made."
+    },
+    {
+      "severity": "material",
+      "finding": "Only one random seed is available, so statistical significance and variance are unknown.",
+      "disposition": "The report explicitly limits inference to this single-seed screen."
+    },
+    {
+      "severity": "material",
+      "finding": "AP-tiny and AP-small were not emitted by the locked evaluator.",
+      "disposition": "The report marks them unavailable and does not infer or fabricate them."
+    },
+    {
+      "severity": "non_blocking",
+      "finding": "CUDA deterministic warn-only operations prevent bitwise reproducibility.",
+      "disposition": "The limitation is disclosed; strict protocol and same-device pairing remain verified."
+    },
+    {
+      "severity": "non_blocking",
+      "finding": "Evaluation pipeline timing and the dedicated benchmark can differ because they measure different scopes.",
+      "disposition": "Efficiency conclusions use the dedicated 200-iteration FP16 benchmark only."
+    }
+  ],
+  "publication": {
+    "contains_model_checkpoint": false,
+    "checkpoint_metadata_only": true,
+    "ready_for_github": true
+  }
+}
