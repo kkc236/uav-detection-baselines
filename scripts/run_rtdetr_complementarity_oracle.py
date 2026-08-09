@@ -8,21 +8,36 @@ import hashlib
 import io
 import json
 import os
+import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 import torch
 
 from src.iber_evaluation import compute_detection_metrics
-from src.lpr_protocol import CATEGORY_NAMES
+from src.iber_protocol import EXECUTION_ENVIRONMENT
+from src.lpr_protocol import (
+    CATEGORY_NAMES,
+    EXPECTED_DATASET_SHA256,
+    category_mapping_sha256,
+    current_environment,
+    dataset_signature,
+)
 from src.rtdetr_complementarity_oracle import (
     build_matched_quality_arm,
     candidate_iou_matrix,
     coverage_summary,
     decide_complementarity,
+    load_paired_cache,
     one_to_one_same_class_assignment,
     visdrone_size_bucket,
+    write_paired_cache,
 )
 from src.rtdetr_quality_oracle import flattened_topk
 
@@ -42,6 +57,58 @@ FREQUENCYCM_CHECKPOINT_SHA256 = (
     "2BBCD6057FEFED5792F786A18E603F8FECA3EC426A6F68938F5F8ADA1603A141"
 )
 FREQUENCYCM_SOURCE_COMMIT = "d3655b14c17a3c8ca14e1888517b6fde4e059766"
+FDR_SOURCE_COMMIT = "d97e1eb7"
+STOCK_REPRODUCTION_TOLERANCE = 0.0005
+FDR_TRAIN_ENDPOINT = {
+    "precision": 0.56778,
+    "recall": 0.49350,
+    "ap50": 0.48480,
+    "map": 0.28971,
+}
+FREQUENCYCM_TRAIN_ENDPOINT = {
+    "precision": 0.56710,
+    "recall": 0.48814,
+    "ap50": 0.47947,
+    "map": 0.28609,
+}
+
+
+def _device(value: str) -> torch.device:
+    if not isinstance(value, str) or value != "0":
+        raise ValueError("the frozen complementarity oracle permits only device 0")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA device 0 is unavailable")
+    return torch.device("cuda:0")
+
+
+def _assert_stock_reproduction(
+    metrics: Mapping[str, float],
+    endpoint: Mapping[str, float],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    if set(endpoint) != {"precision", "recall", "ap50", "map"}:
+        raise ValueError("stock endpoint schema is invalid")
+    missing = set(endpoint) - set(metrics)
+    if missing:
+        raise RuntimeError(f"{label} stock metrics are missing: {sorted(missing)}")
+    deltas = {
+        name: float(metrics[name]) - float(expected)
+        for name, expected in endpoint.items()
+    }
+    if any(abs(delta) > STOCK_REPRODUCTION_TOLERANCE for delta in deltas.values()):
+        raise RuntimeError(
+            f"{label} stock reconstruction mismatch: endpoint={dict(endpoint)}, "
+            f"actual={dict(metrics)}, deltas={deltas}, "
+            f"tolerance={STOCK_REPRODUCTION_TOLERANCE}"
+        )
+    return {
+        "passed": True,
+        "tolerance": STOCK_REPRODUCTION_TOLERANCE,
+        "training_endpoint": dict(endpoint),
+        "independent_evaluator": dict(metrics),
+        "deltas": deltas,
+    }
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -78,6 +145,153 @@ def _verify_checkpoint(path: Path, expected_sha256: str) -> str:
             f"checkpoint SHA-256 mismatch: expected={expected}, actual={actual}"
         )
     return actual
+
+
+def _source_commit() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip().lower()
+    if len(result) != 40 or any(character not in "0123456789abcdef" for character in result):
+        raise RuntimeError("source commit must be exactly 40 hexadecimal characters")
+    return result
+
+
+def _assert_source_authority(current: str) -> None:
+    for authority in (FDR_SOURCE_COMMIT, FREQUENCYCM_SOURCE_COMMIT):
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", authority, current],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"required source authority is not an ancestor: {authority}"
+            )
+
+
+def _execution_environment() -> dict[str, Any]:
+    actual: dict[str, Any] = dict(current_environment())
+    query = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip().splitlines()
+    if len(query) != 1:
+        raise RuntimeError("complementarity oracle requires exactly one visible GPU")
+    actual["reported_memory_mib"] = int(query[0].strip())
+    expected = dict(EXECUTION_ENVIRONMENT)
+    if actual != expected:
+        raise RuntimeError(
+            f"execution environment mismatch: expected={expected}, actual={actual}"
+        )
+    return actual
+
+
+def _dataset_authority(dataset_root: Path) -> dict[str, Any]:
+    root = Path(dataset_root).resolve()
+    val_images = tuple(sorted((root / "images" / "val").glob("*.jpg")))
+    val_labels = tuple(sorted((root / "labels" / "val").glob("*.txt")))
+    if len(val_images) != VAL_COUNT or len(val_labels) != VAL_COUNT:
+        raise RuntimeError(
+            "official validation count mismatch: "
+            f"images={len(val_images)}, labels={len(val_labels)}"
+        )
+    signature = dataset_signature(root)
+    if signature["sha256"] != EXPECTED_DATASET_SHA256:
+        raise RuntimeError(
+            f"dataset SHA-256 mismatch: expected={EXPECTED_DATASET_SHA256}, "
+            f"actual={signature['sha256']}"
+        )
+    return {
+        **signature,
+        "val_images": len(val_images),
+        "val_labels": len(val_labels),
+        "category_mapping_sha256": category_mapping_sha256(CATEGORY_NAMES),
+        "classes": list(CATEGORY_NAMES),
+    }
+
+
+def _load_detector(checkpoint: Path, device: torch.device) -> torch.nn.Module:
+    # Import custom model classes before Ultralytics unpickles the checkpoints.
+    import src.rtdetr_fdr  # noqa: F401
+    import src.rtdetr_fdr_frequencycm  # noqa: F401
+    from ultralytics import RTDETR
+
+    detector = RTDETR(str(Path(checkpoint).resolve())).model.to(device).eval()
+    detector.requires_grad_(False)
+    detector.model[-1].export = False
+    parameters = tuple(detector.parameters())
+    if not parameters or any(parameter.device != device for parameter in parameters):
+        raise RuntimeError("detector parameters are not entirely on cuda:0")
+    if any(parameter.requires_grad for parameter in parameters):
+        raise RuntimeError("detector is not frozen")
+    return detector
+
+
+def _build_validation_loader(
+    dataset_root: Path,
+    checkpoint: Path,
+    device: torch.device,
+    *,
+    save_dir: Path,
+):
+    from ultralytics.models.rtdetr.val import RTDETRValidator
+
+    root = Path(dataset_root).resolve()
+    data = {
+        "path": str(root),
+        "train": str((root / "images" / "train").resolve()),
+        "val": str((root / "images" / "val").resolve()),
+        "names": {index: name for index, name in enumerate(CATEGORY_NAMES)},
+        "nc": NUM_CLASSES,
+        "channels": 3,
+    }
+    validator = RTDETRValidator(
+        save_dir=Path(save_dir),
+        args={
+            "model": str(Path(checkpoint).resolve()),
+            "data": data,
+            "task": "detect",
+            "mode": "val",
+            "split": "val",
+            "imgsz": IMAGE_SIZE,
+            "batch": BATCH_SIZE,
+            "workers": WORKERS,
+            "device": "0",
+            "max_det": MAX_DET,
+            "nms": NMS,
+            "cache": False,
+            "conf": CONFIDENCE,
+            "half": False,
+            "rect": False,
+            "plots": False,
+            "save_json": False,
+            "save_txt": False,
+            "verbose": False,
+        },
+    )
+    validator.data = data
+    validator.device = device
+    loader = validator.get_dataloader(data["val"], BATCH_SIZE)
+    if len(loader.dataset) != VAL_COUNT:
+        raise RuntimeError(
+            f"validation loader count mismatch: expected={VAL_COUNT}, "
+            f"actual={len(loader.dataset)}"
+        )
+    return loader, validator
 
 
 def _extract_decoder_batch(
@@ -397,7 +611,11 @@ def _write_report_bundle(
 
 
 def run_from_records(
-    records: Sequence[Mapping[str, Any]], report_root: Path
+    records: Sequence[Mapping[str, Any]],
+    report_root: Path,
+    *,
+    authority: Mapping[str, Any] | None = None,
+    stock_authorities: Mapping[str, Mapping[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Evaluate a frozen paired cache and write all non-deployable oracle evidence."""
 
@@ -540,6 +758,18 @@ def run_from_records(
     )
     if not duplicate_neutral:
         raise RuntimeError("duplicated-FDR oracle control is not neutral")
+    reproduction: dict[str, Any] = {"duplicate_fdr_neutral": True}
+    if stock_authorities is not None:
+        if set(stock_authorities) != {"fdr", "frequencycm"}:
+            raise ValueError("stock authority arms must be exactly fdr and frequencycm")
+        reproduction["fdr"] = _assert_stock_reproduction(
+            arm_metrics["fdr_stock"], stock_authorities["fdr"], label="FDR"
+        )
+        reproduction["frequencycm"] = _assert_stock_reproduction(
+            arm_metrics["frequencycm_stock"],
+            stock_authorities["frequencycm"],
+            label="FrequencyCM",
+        )
 
     fdr_best = torch.cat(all_fdr_best)
     frequencycm_best = torch.cat(all_frequencycm_best)
@@ -589,6 +819,7 @@ def run_from_records(
     payload: dict[str, Any] = {
         "format_version": 1,
         "interpretation": "non_deployable_design_selection_evidence",
+        "authority": dict(authority or {}),
         "stock": {
             "fdr": arm_metrics["fdr_stock"],
             "frequencycm": arm_metrics["frequencycm_stock"],
@@ -599,7 +830,7 @@ def run_from_records(
             for name, metrics in arm_metrics.items()
             if name.endswith("oracle")
         },
-        "reproduction": {"duplicate_fdr_neutral": duplicate_neutral},
+        "reproduction": reproduction,
         "oracle": {
             "candidate_map_delta": candidate_map_delta,
             "candidate_ap50_delta": candidate_ap50_delta,
@@ -680,9 +911,101 @@ def _write_summary(report_root: Path, payload: Mapping[str, Any]) -> None:
     _write_create_only(sums_path, sums)
 
 
+def _run(args: argparse.Namespace) -> int:
+    fdr_checkpoint = Path(args.fdr_checkpoint).resolve()
+    frequencycm_checkpoint = Path(args.frequencycm_checkpoint).resolve()
+    dataset_root = Path(args.dataset_root).resolve()
+    cache_root = Path(args.cache_root).resolve()
+    report_root = Path(args.report_root).resolve()
+
+    fdr_sha256 = _verify_checkpoint(fdr_checkpoint, FDR_CHECKPOINT_SHA256)
+    frequencycm_sha256 = _verify_checkpoint(
+        frequencycm_checkpoint, FREQUENCYCM_CHECKPOINT_SHA256
+    )
+    source_commit = _source_commit()
+    _assert_source_authority(source_commit)
+    environment = _execution_environment()
+    dataset = _dataset_authority(dataset_root)
+    device = _device(args.device)
+    cache_authority = {
+        "fdr_sha256": fdr_sha256,
+        "frequencycm_sha256": frequencycm_sha256,
+        "dataset_sha256": str(dataset["sha256"]),
+    }
+
+    if cache_root.exists() or cache_root.is_symlink():
+        records = load_paired_cache(cache_root, cache_authority)
+    else:
+        loader, validator = _build_validation_loader(
+            dataset_root,
+            fdr_checkpoint,
+            device,
+            save_dir=report_root.parent / f".{report_root.name}-validator",
+        )
+        fdr = _load_detector(fdr_checkpoint, device)
+        frequencycm = _load_detector(frequencycm_checkpoint, device)
+        extracted = _extract_paired_records(
+            fdr,
+            frequencycm,
+            loader,
+            validator,
+            expected_count=VAL_COUNT,
+        )
+        write_paired_cache(cache_root, extracted, cache_authority)
+        del extracted, fdr, frequencycm, loader, validator
+        torch.cuda.empty_cache()
+        records = load_paired_cache(cache_root, cache_authority)
+    if len(records) != VAL_COUNT:
+        raise RuntimeError(
+            f"verified cache record count mismatch: expected={VAL_COUNT}, "
+            f"actual={len(records)}"
+        )
+    manifest_path = cache_root / "manifest.json"
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest().upper()
+    authority = {
+        "fdr_checkpoint": {
+            "path": str(fdr_checkpoint),
+            "sha256": fdr_sha256,
+            "mechanism_source_commit": FDR_SOURCE_COMMIT,
+        },
+        "frequencycm_checkpoint": {
+            "path": str(frequencycm_checkpoint),
+            "sha256": frequencycm_sha256,
+            "integration_source_commit": FREQUENCYCM_SOURCE_COMMIT,
+        },
+        "execution_source_commit": source_commit,
+        "dataset": dataset,
+        "environment": environment,
+        "cache": {
+            "path": str(cache_root),
+            "manifest_sha256": manifest_sha256,
+            "records": len(records),
+        },
+        "protocol": {
+            "imgsz": IMAGE_SIZE,
+            "batch": BATCH_SIZE,
+            "workers": WORKERS,
+            "confidence": CONFIDENCE,
+            "max_det": MAX_DET,
+            "nms": NMS,
+            "device": "0",
+            "classes": NUM_CLASSES,
+        },
+    }
+    run_from_records(
+        records,
+        report_root,
+        authority=authority,
+        stock_authorities={
+            "fdr": FDR_TRAIN_ENDPOINT,
+            "frequencycm": FREQUENCYCM_TRAIN_ENDPOINT,
+        },
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    _parse_args(argv)
-    raise RuntimeError("full complementarity execution is not implemented yet")
+    return _run(_parse_args(argv))
 
 
 if __name__ == "__main__":

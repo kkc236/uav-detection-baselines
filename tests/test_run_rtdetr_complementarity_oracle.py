@@ -287,3 +287,38 @@ def test_run_from_records_is_create_only(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         module.run_from_records([_oracle_record()], tmp_path)
+
+
+def test_device_is_frozen_to_available_cuda_zero(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    assert module._device("0") == torch.device("cuda:0")
+    with pytest.raises(ValueError, match="device 0"):
+        module._device("cpu")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        module._device("0")
+
+
+def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
+    module = _load_module()
+    endpoint = {"precision": 0.5, "recall": 0.4, "ap50": 0.3, "map": 0.2}
+    metrics = {
+        "precision": 0.5004,
+        "recall": 0.3996,
+        "ap50": 0.3004,
+        "map": 0.1996,
+        "ap75": 0.1,
+        "ap_tiny": 0.05,
+        "ap_small": 0.15,
+    }
+
+    report = module._assert_stock_reproduction(metrics, endpoint, label="test")
+
+    assert report["passed"] is True
+    assert report["tolerance"] == 0.0005
+    with pytest.raises(RuntimeError, match="stock reconstruction mismatch"):
+        module._assert_stock_reproduction(
+            {**metrics, "map": 0.1994}, endpoint, label="test"
+        )
