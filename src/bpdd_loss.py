@@ -12,6 +12,9 @@ import math
 import torch
 from torch import Tensor
 
+from src.fdr_loss import FDRDetectionLoss, MatchIndices
+from src.fdr_math import REG_MAX, REG_SCALE, UP, bbox2distance, cxcywh_to_xyxy
+
 
 @dataclass(frozen=True)
 class BPDDOptions:
@@ -48,6 +51,98 @@ class BPDDResult:
 
     loss: Tensor
     statistics: dict[str, Tensor]
+
+
+class BPDDDetectionLoss(FDRDetectionLoss):
+    """Unchanged stock+FDR criterion followed by isolated normal-query BPDD."""
+
+    def __init__(
+        self,
+        *args,
+        bpdd_options: BPDDOptions | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.bpdd_options = bpdd_options or BPDDOptions()
+        self.last_bpdd_statistics: dict[str, Tensor] = {}
+
+    def _matched_bpdd_inputs(
+        self,
+        corner_logits: Tensor,
+        pre_boxes: Tensor,
+        gt_bboxes: Tensor,
+        matches: MatchIndices,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        predicted_index, target_index = self._get_index(matches)
+        if target_index.numel() == 0:
+            empty_logits = corner_logits[:, :0].reshape(
+                corner_logits.shape[0], 0, 4, REG_MAX + 1
+            )
+            empty_target = torch.empty(
+                (0, 4), dtype=torch.long, device=corner_logits.device
+            )
+            empty_weight = torch.empty(
+                (0, 4), dtype=torch.float32, device=corner_logits.device
+            )
+            return empty_logits, empty_target, empty_weight, empty_weight
+
+        batch_index, query_index = predicted_index
+        matched_logits = corner_logits[:, batch_index, query_index].reshape(
+            corner_logits.shape[0], -1, 4, REG_MAX + 1
+        )
+        matched_reference = pre_boxes[predicted_index].detach()
+        matched_targets = gt_bboxes[target_index]
+        target_indices, weight_right, weight_left = bbox2distance(
+            matched_reference,
+            cxcywh_to_xyxy(matched_targets),
+            REG_MAX,
+            REG_SCALE,
+            UP,
+        )
+        matches_count = int(target_index.numel())
+        return (
+            matched_logits,
+            target_indices.reshape(matches_count, 4).long(),
+            weight_right.reshape(matches_count, 4),
+            weight_left.reshape(matches_count, 4),
+        )
+
+    def forward(self, *args, **kwargs) -> dict[str, Tensor]:
+        """Add BPDD only after the parent criterion records stock assignments."""
+
+        losses = super().forward(*args, **kwargs)
+        self.last_bpdd_statistics = {}
+        if not self.bpdd_options.enabled or self.bpdd_options.weight == 0:
+            return losses
+
+        corner_logits = kwargs.get("corner_logits")
+        pre_boxes = kwargs.get("pre_boxes")
+        if corner_logits is None or pre_boxes is None:
+            raise ValueError("enabled BPDD requires corner_logits and pre_boxes")
+        if not isinstance(corner_logits, Tensor) or not isinstance(pre_boxes, Tensor):
+            raise TypeError("BPDD corner_logits and pre_boxes must be tensors")
+        if corner_logits.ndim != 4 or corner_logits.shape[-1] != 4 * (REG_MAX + 1):
+            raise ValueError("corner_logits must have shape [layers,batch,queries,132]")
+
+        assignments = self.normal_assignment_snapshot()
+        if len(assignments) != corner_logits.shape[0] + 1:
+            raise ValueError("BPDD requires encoder plus one stock assignment per decoder layer")
+        batch = args[1] if len(args) >= 2 else kwargs.get("batch")
+        if not isinstance(batch, dict) or "bboxes" not in batch:
+            raise TypeError("BPDD requires the stock target batch")
+        matched = self._matched_bpdd_inputs(
+            corner_logits,
+            pre_boxes,
+            batch["bboxes"],
+            assignments[-1],
+        )
+        result = bpdd_distribution_loss(
+            *matched,
+            options=self.bpdd_options,
+        )
+        losses["loss_bpdd"] = result.loss
+        self.last_bpdd_statistics = result.statistics
+        return losses
 
 
 def _expand_edge_tensor(value: Tensor, target_shape: torch.Size, name: str) -> Tensor:
@@ -236,6 +331,7 @@ def bpdd_distribution_loss(
 
 
 __all__ = [
+    "BPDDDetectionLoss",
     "BPDDOptions",
     "BPDDResult",
     "bpdd_distribution_loss",

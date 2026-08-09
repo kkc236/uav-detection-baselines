@@ -265,6 +265,16 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             postfix=postfix,
         )
 
+    def normal_assignment_snapshot(self) -> list[MatchIndices]:
+        """Return detached stock assignments in encoder-then-decoder order."""
+
+        return [
+            _clone_matches(matches)
+            for matches in self._to_layer_order(
+                self._recorded_assignments.get("", [])
+            )
+        ]
+
     def forward(
         self,
         preds: tuple[Tensor, Tensor],
