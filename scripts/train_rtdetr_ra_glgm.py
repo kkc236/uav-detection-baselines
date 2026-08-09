@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import math
 import os
@@ -23,16 +22,16 @@ sys.path.insert(0, str(ROOT))
 
 from scripts import train_rtdetr_fdr as fdr_train  # noqa: E402
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
-from src.fdr_protocol import canonical_json_bytes, public_state_sha256  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
     RA_EXPERIMENT_PROTOCOL,
     RA_EXPERIMENT_PROTOCOL_SHA256,
     RA_STAGES,
     RA_VARIANTS,
-    build_ra_run_identity,
     file_sha256,
     ignore_sidecar_signature,
+    load_ra_authority,
     read_json,
+    validate_ra_source_authority,
 )
 from src.ra_glgm_protocol import validate_ra_glgm_initial_state  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
@@ -77,7 +76,7 @@ EVIDENCE_FIELDS = (
 class _BoundOptimizerEvidenceMixin:
     """Bind every optimizer attempt to this immutable RA run authority."""
 
-    optimizer_evidence_context: Mapping[str, str]
+    optimizer_evidence_context: Mapping[str, Any]
 
     def _record_optimizer_evidence(self, record: dict[str, Any]) -> None:
         context = getattr(self, "optimizer_evidence_context", None)
@@ -86,11 +85,15 @@ class _BoundOptimizerEvidenceMixin:
         required = ("run_id", "variant", "stage")
         if any(not isinstance(context.get(name), str) or not context[name] for name in required):
             raise RuntimeError("RA optimizer evidence authority is incomplete")
+        generation = context.get("recovery_generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise RuntimeError("RA optimizer recovery generation is invalid")
         super()._record_optimizer_evidence(
             {
                 "run_id": context["run_id"],
                 "variant": context["variant"],
                 "stage": context["stage"],
+                "recovery_generation": generation,
                 "completed_epoch": int(self.epoch) + 1,
                 **record,
             }
@@ -122,55 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_authority(path: str | Path) -> dict[str, Any]:
-    manifest = read_json(Path(path).resolve())
-    if manifest.get("format_version") != 1:
-        raise ValueError("RA protocol manifest format must be 1")
-    recorded = manifest.get("manifest_sha256")
-    unhashed = dict(manifest)
-    unhashed.pop("manifest_sha256", None)
-    actual = hashlib.sha256(canonical_json_bytes(unhashed)).hexdigest().upper()
-    if recorded != actual:
-        raise ValueError("RA protocol manifest SHA256 mismatch")
-    if manifest.get("protocol") != RA_EXPERIMENT_PROTOCOL:
-        raise ValueError("RA protocol payload differs from frozen authority")
-    if manifest.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256:
-        raise ValueError("RA protocol SHA256 differs from frozen authority")
-    source = manifest.get("source")
-    identities = manifest.get("run_identities")
-    if not isinstance(source, Mapping) or not isinstance(identities, Mapping):
-        raise ValueError("RA source/run identities are missing")
-    if manifest.get("source_sha256") != public_state_sha256(source):
-        raise ValueError("RA source identity hash mismatch")
-    source_sha = public_state_sha256(source)
-    for stage in RA_STAGES:
-        pair_id = f"ra-glgm-{stage}-seed0-{source_sha[:12].lower()}"
-        for variant in RA_VARIANTS:
-            key = f"{variant}_{stage}"
-            expected = build_ra_run_identity(
-                source,
-                stage=stage,
-                variant=variant,
-                seed=0,
-                pair_id=pair_id,
-            )
-            if identities.get(key) != expected:
-                raise ValueError(f"RA run identity mismatch: {key}")
-    evaluator = manifest.get("locked_evaluator")
-    if not isinstance(evaluator, Mapping):
-        raise ValueError("locked evaluator authority is missing")
-    evaluator_path = Path(str(evaluator.get("path", ""))).resolve()
-    if evaluator_path.is_symlink() or not evaluator_path.is_file():
-        raise FileNotFoundError("locked evaluator is missing")
-    if file_sha256(evaluator_path) != str(evaluator.get("sha256", "")).upper():
-        raise ValueError("locked evaluator SHA256 mismatch")
-    return manifest
+    return load_ra_authority(path, repository_root=ROOT)
 
 
 def validate_source(manifest: Mapping[str, Any]) -> dict[str, str]:
-    actual = fdr_train.current_source_identity(ROOT)
-    if actual != dict(manifest["source"]):
-        raise ValueError("checked-out source differs from RA authority")
-    return actual
+    return validate_ra_source_authority(manifest, repository_root=ROOT)
 
 
 def validate_initial_state(path: str | Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -254,7 +213,7 @@ def create_trainer(
     settings: Mapping[str, Any],
     initial_state: Path,
     *,
-    optimizer_evidence_context: Mapping[str, str] | None = None,
+    optimizer_evidence_context: Mapping[str, Any] | None = None,
 ):
     common = {"overrides": dict(settings), "initial_state_path": initial_state.resolve()}
     if variant == "baseline":
@@ -430,6 +389,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     authority_root = args.output_root / "_ra-authority"
     data_yaml = prepare_data(args.dataset_root, args.stage, authority_root, manifest)
     identity = manifest["run_identities"][f"{args.variant}_{args.stage}"]
+    recovery_generation = 0
     if args.resume is not None:
         from scripts.validate_ra_resume import validate_resume
 
@@ -443,6 +403,11 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         )
         if Path(decision["checkpoint"]).resolve() != args.resume:
             raise ValueError("resume path is not the audited latest exact checkpoint")
+        if decision["trailing_uncommitted_optimizer_attempts"] != 0:
+            raise ValueError("resume requires a persisted optimizer recovery generation")
+        recovery_generation = int(decision["recovery_generation"])
+        if recovery_generation < 1:
+            raise ValueError("resume was not authorized by the audited supervisor recovery lineage")
     settings = build_settings(args, data_yaml)
     summary = {
         "status": "dry-run-passed" if args.dry_run else "launching",
@@ -466,6 +431,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             "run_id": str(identity["run_id"]),
             "variant": args.variant,
             "stage": args.stage,
+            "recovery_generation": recovery_generation,
         },
     )
     trainer.add_callback(

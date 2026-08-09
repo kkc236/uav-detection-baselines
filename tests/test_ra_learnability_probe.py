@@ -13,6 +13,7 @@ import src.ra_learnability_probe as probe
 from scripts.run_ra_learnability_probe import (
     load_mature_fdr_public_state,
     support_objective,
+    write_probe_path_manifest,
 )
 from src.ra_glgm_protocol import RA_GLGM_PRIVATE_PREFIX
 from src.rtdetr_ra_glgm import RAGLGMDetectionModel
@@ -54,6 +55,10 @@ def _passing_evidence() -> dict:
             "train_count": 518,
             "dev_count": 129,
             "disjoint": True,
+            "path_manifests": {
+                "train": {"path": "/train.txt", "count": 518, "sha256": "T" * 64},
+                "dev": {"path": "/dev.txt", "count": 129, "sha256": "V" * 64},
+            },
         },
         "freeze": {
             "trainable_names": [f"{RA_GLGM_PRIVATE_PREFIX}support_head.weight"],
@@ -187,6 +192,27 @@ def test_deterministic_split_is_disjoint_and_independent_of_input_order(
     assert record_a == record_b
     assert len(train_a) == 518 and len(dev_a) == 129
     assert not set(train_a) & set(dev_a)
+
+
+def test_probe_path_manifest_is_create_only_and_ultralytics_compatible(
+    tmp_path: Path,
+) -> None:
+    images = []
+    for index in range(2):
+        image = tmp_path / f"{index}.jpg"
+        image.write_bytes(b"jpeg")
+        images.append(image)
+    manifest = tmp_path / "images.txt"
+
+    record = write_probe_path_manifest(manifest, images)
+
+    assert record["count"] == 2
+    assert len(record["sha256"]) == 64
+    assert manifest.read_text(encoding="utf-8").splitlines() == [
+        str(image.resolve()) for image in images
+    ]
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        write_probe_path_manifest(manifest, images)
 
 
 class _PrivateRA(nn.Module):

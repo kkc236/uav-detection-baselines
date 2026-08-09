@@ -12,7 +12,7 @@ import torch
 
 from src.fdr_protocol import canonical_json_bytes, public_state_sha256
 from src.lpr_protocol import EXPECTED_SUBSET_SHA256, subset_signature
-from src.ra_experiment_protocol import RA_EXPERIMENT_PROTOCOL_SHA256
+from src.ra_experiment_protocol import RA_EXPERIMENT_PROTOCOL_SHA256, file_sha256
 from src.ra_glgm_protocol import RA_GLGM_PRIVATE_PREFIX
 
 
@@ -255,6 +255,19 @@ def evaluate_learnability_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
             and split.get("dev_count") == PROBE_DEV_IMAGES
             and split.get("disjoint") is True
         ),
+        "frozen_train_dev_path_manifests": (
+            isinstance(split.get("path_manifests"), Mapping)
+            and all(
+                isinstance(split["path_manifests"].get(name), Mapping)
+                and split["path_manifests"][name].get("count") == count
+                and isinstance(split["path_manifests"][name].get("sha256"), str)
+                and len(split["path_manifests"][name]["sha256"]) == 64
+                for name, count in (
+                    ("train", PROBE_TRAIN_IMAGES),
+                    ("dev", PROBE_DEV_IMAGES),
+                )
+            )
+        ),
         "support_private_parameters_only": private_only,
         "public_fdr_state_unchanged": (
             isinstance(freeze.get("public_sha256_before"), str)
@@ -332,6 +345,16 @@ def validate_learnability_report(
         }
         if authority != expected:
             raise ValueError("RA learnability report differs from experiment authority")
+        manifests = evidence.get("split", {}).get("path_manifests", {})
+        for name, count in (("train", PROBE_TRAIN_IMAGES), ("dev", PROBE_DEV_IMAGES)):
+            record = manifests.get(name, {}) if isinstance(manifests, Mapping) else {}
+            manifest_path = Path(str(record.get("path", ""))).resolve()
+            if (
+                not manifest_path.is_file()
+                or record.get("count") != count
+                or str(record.get("sha256", "")).upper() != file_sha256(manifest_path)
+            ):
+                raise ValueError(f"RA learnability {name} path manifest differs from evidence")
     return report
 
 

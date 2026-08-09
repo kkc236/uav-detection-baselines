@@ -25,6 +25,7 @@ from src.ra_experiment_protocol import (  # noqa: E402
     RA_EXPERIMENT_PROTOCOL_SHA256,
     file_sha256,
     ignore_sidecar_signature,
+    load_ra_authority,
     read_json,
     read_jsonl,
     validate_runtime_identity,
@@ -71,9 +72,7 @@ def _parse_epochs(value: str) -> list[int]:
 
 
 def _load_authority(path: Path, runtime: Mapping[str, Any]) -> dict[str, Any]:
-    manifest = read_json(path)
-    if manifest.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256:
-        raise ValueError("foreign RA evaluator protocol manifest")
+    manifest = load_ra_authority(path, repository_root=ROOT)
     evaluator = manifest.get("locked_evaluator")
     if not isinstance(evaluator, Mapping):
         raise ValueError("locked evaluator authority is missing")

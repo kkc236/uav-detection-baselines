@@ -21,6 +21,7 @@ def test_optimizer_attempt_is_bound_to_run_stage_variant_and_epoch() -> None:
         "run_id": "method-smoke",
         "variant": "ra_glgm",
         "stage": "smoke",
+        "recovery_generation": 2,
     }
 
     subject._record_optimizer_evidence(
@@ -34,6 +35,7 @@ def test_optimizer_attempt_is_bound_to_run_stage_variant_and_epoch() -> None:
     assert subject.record["run_id"] == "method-smoke"
     assert subject.record["variant"] == "ra_glgm"
     assert subject.record["stage"] == "smoke"
+    assert subject.record["recovery_generation"] == 2
     assert subject.record["completed_epoch"] == 2
 
 

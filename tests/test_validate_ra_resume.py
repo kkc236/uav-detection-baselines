@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,8 +8,25 @@ import pytest
 import torch
 
 import scripts.validate_ra_resume as resume_module
-from scripts.validate_ra_resume import validate_optimizer_evidence, validate_resume
-from src.ra_experiment_protocol import RA_EXPERIMENT_PROTOCOL_SHA256, file_sha256
+import src.ra_experiment_protocol as protocol_module
+from scripts.validate_ra_resume import (
+    record_optimizer_recovery_generation,
+    validate_optimizer_evidence,
+    validate_resume,
+)
+from src.fdr_protocol import canonical_json_bytes, public_state_sha256
+from src.ra_experiment_protocol import (
+    RA_EXPERIMENT_PROTOCOL,
+    RA_EXPERIMENT_PROTOCOL_SHA256,
+    RA_STAGES,
+    RA_VARIANTS,
+    build_ra_run_identity,
+    file_sha256,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_SOURCE = {"git_commit": "a" * 40, "tree_sha256": "B" * 64}
 
 
 @pytest.fixture(autouse=True)
@@ -18,27 +36,43 @@ def _stub_learnability_validation(monkeypatch: pytest.MonkeyPatch) -> None:
         "validate_learnability_report",
         lambda _path, **_kwargs: {},
     )
+    monkeypatch.setattr(
+        protocol_module,
+        "current_source_identity",
+        lambda _root: dict(TEST_SOURCE),
+    )
 
 
 def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, Path]:
     initial = tmp_path / "initial.pt"
     initial.write_bytes(b"paired")
-    source = {"git_commit": "a" * 40, "tree_sha256": "B" * 64}
-    identity = {
-        "source_sha256": "S" * 64,
-        "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-        "stage": "screen",
-        "variant": "baseline",
-        "seed": 0,
-        "pair_id": "paired-screen-seed0",
-        "run_id": "baseline-screen-seed0",
-    }
+    source = dict(TEST_SOURCE)
+    source_sha = public_state_sha256(source)
+    identities = {}
+    for authority_stage in RA_STAGES:
+        pair_id = f"ra-glgm-{authority_stage}-seed0-{source_sha[:12].lower()}"
+        for authority_variant in RA_VARIANTS:
+            identities[f"{authority_variant}_{authority_stage}"] = build_ra_run_identity(
+                source,
+                stage=authority_stage,
+                variant=authority_variant,
+                seed=0,
+                pair_id=pair_id,
+            )
+    identity = identities["baseline_screen"]
     authority = {
+        "format_version": 1,
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+        "protocol": RA_EXPERIMENT_PROTOCOL,
         "source": source,
+        "source_sha256": source_sha,
         "gpu_uuid": "GPU-fixed",
         "initial_state": {"path": str(initial.resolve()), "sha256": file_sha256(initial)},
-        "run_identities": {"baseline_screen": identity},
+        "run_identities": identities,
+        "locked_evaluator": {
+            "path": str((ROOT / "scripts" / "evaluate_ra_glgm_checkpoints.py").resolve()),
+            "sha256": file_sha256(ROOT / "scripts" / "evaluate_ra_glgm_checkpoints.py"),
+        },
     }
     protocol = tmp_path / "protocol.json"
     dataset_authority = {
@@ -47,6 +81,9 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         "ignore": {"sha256": "E" * 64},
     }
     authority["dataset_authority"] = dataset_authority
+    authority["manifest_sha256"] = hashlib.sha256(
+        canonical_json_bytes(authority)
+    ).hexdigest().upper()
     protocol.write_text(json.dumps(authority), encoding="utf-8")
     learnability = tmp_path / "learnability.json"
     learnability.write_text("{}\n", encoding="utf-8")
@@ -78,6 +115,7 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
                 "completed_epoch": epoch,
                 "variant": "baseline",
                 "stage": "screen",
+                "recovery_generation": 0,
                 "run_id": identity["run_id"],
                 "map": 0.1,
                 "map50": 0.2,
@@ -94,6 +132,7 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
                 "run_id": identity["run_id"],
                 "variant": "baseline",
                 "stage": "screen",
+                "recovery_generation": 0,
                 "amp_scale_before": 128.0,
                 "amp_scale_after": 128.0,
                 "amp_step_skipped": False,
@@ -294,6 +333,7 @@ def test_method_optimizer_evidence_requires_nonzero_private_gradient(tmp_path: P
             "run_id": "method-smoke",
             "variant": "ra_glgm",
             "stage": "smoke",
+            "recovery_generation": 0,
             "amp_scale_before": 128.0,
             "amp_scale_after": 128.0,
             "amp_step_skipped": False,
@@ -393,6 +433,120 @@ def test_resume_accepts_audited_attempts_from_only_the_interrupted_next_epoch(
     rows[-1]["completed_epoch"] = 5
     _write_optimizer(run, rows)
     with pytest.raises(ValueError, match="sequence"):
+        validate_resume(
+            run,
+            variant="baseline",
+            stage="screen",
+            protocol_manifest=protocol,
+            learnability_report=learnability,
+        )
+
+
+def test_recovery_generation_persists_discarded_attempts_after_replayed_epoch(
+    tmp_path: Path,
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    rows = _read_optimizer(run)
+    for _ in range(2):
+        trailing = dict(rows[-1])
+        trailing.update(
+            {
+                "optimizer_attempt": len(rows) + 1,
+                "completed_epoch": 4,
+                "recovery_generation": 0,
+            }
+        )
+        rows.append(trailing)
+    _write_optimizer(run, rows)
+
+    decision = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+    assert decision["trailing_uncommitted_optimizer_attempts"] == 2
+    generation = record_optimizer_recovery_generation(run, decision)
+    assert generation["generation"] == 1
+    assert generation["discarded_attempt_count"] == 2
+
+    authorized = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+    assert authorized["trailing_uncommitted_optimizer_attempts"] == 0
+    assert authorized["discarded_optimizer_attempts"] == 2
+    assert authorized["recovery_generation"] == 1
+
+    replay = dict(rows[-1])
+    replay.update(
+        {
+            "optimizer_attempt": len(rows) + 1,
+            "completed_epoch": 4,
+            "recovery_generation": 1,
+        }
+    )
+    rows.append(replay)
+    _write_optimizer(run, rows)
+    evidence = [json.loads(line) for line in (run / "ra-epochs.jsonl").read_text().splitlines()]
+    evidence.append({**evidence[-1], "completed_epoch": 4})
+    (run / "ra-epochs.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in evidence), encoding="utf-8"
+    )
+    checkpoint = run / "weights" / "epoch3.pt"
+    torch.save({"epoch": 3, "optimizer": {"state": {}}, "ema": {"state": {}}}, checkpoint)
+    queue = [json.loads(line) for line in (run / "publication-queue.jsonl").read_text().splitlines()]
+    queue.append(
+        {
+            **queue[-1],
+            "completed_epoch": 4,
+            "checkpoint": str(checkpoint.resolve()),
+            "checkpoint_sha256": file_sha256(checkpoint),
+        }
+    )
+    (run / "publication-queue.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in queue), encoding="utf-8"
+    )
+
+    completed = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+    assert completed["completed_epoch"] == 4
+    assert completed["discarded_optimizer_attempts"] == 2
+    assert completed["active_optimizer_attempts"] == 4
+    assert completed["trailing_uncommitted_optimizer_attempts"] == 0
+
+    lineage = run / "optimizer-recovery-lineage.jsonl"
+    lineage_rows = [json.loads(line) for line in lineage.read_text().splitlines()]
+    lineage_rows[0]["optimizer_evidence_prefix_sha256"] = "0" * 64
+    lineage.write_text(
+        "".join(json.dumps(row) + "\n" for row in lineage_rows), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="authority/hash|prefix drift"):
+        validate_resume(
+            run,
+            variant="baseline",
+            stage="screen",
+            protocol_manifest=protocol,
+            learnability_report=learnability,
+        )
+
+
+def test_resume_rejects_manifest_with_recomputed_protocol_only_hash(tmp_path: Path) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    authority = json.loads(protocol.read_text(encoding="utf-8"))
+    authority["gpu_uuid"] = "GPU-foreign"
+    protocol.write_text(json.dumps(authority), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest SHA256"):
         validate_resume(
             run,
             variant="baseline",

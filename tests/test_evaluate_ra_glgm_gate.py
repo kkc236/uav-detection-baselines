@@ -105,6 +105,7 @@ def _write_arm(
                 "run_id": manifest["run_identity"]["run_id"],
                 "variant": variant,
                 "stage": stage,
+                "recovery_generation": 0,
                 "amp_scale_before": 128.0,
                 "amp_scale_after": 128.0,
                 "amp_step_skipped": False,

@@ -187,7 +187,41 @@ def _dataset_args() -> Any:
     )
 
 
-def build_probe_loader(paths: Sequence[Path], *, workers: int, shuffle: bool):
+def write_probe_path_manifest(path: str | Path, paths: Sequence[Path]) -> dict[str, Any]:
+    """Write one create-only Ultralytics image list and bind its exact bytes."""
+
+    destination = Path(path).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    resolved = [Path(value).resolve() for value in paths]
+    if not resolved or len(set(resolved)) != len(resolved):
+        raise ValueError("RA learnability path manifest must be non-empty and unique")
+    missing = [value for value in resolved if not value.is_file()]
+    if missing:
+        raise FileNotFoundError(f"RA learnability image is missing: {missing[0]}")
+    payload = "".join(f"{value}\n" for value in resolved)
+    try:
+        with destination.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"refusing to replace RA learnability path manifest: {destination}"
+        ) from error
+    return {
+        "path": str(destination),
+        "count": len(resolved),
+        "sha256": file_sha256(destination),
+    }
+
+
+def build_probe_loader(
+    paths: Sequence[Path],
+    *,
+    path_manifest: Path,
+    workers: int,
+    shuffle: bool,
+):
     args = _dataset_args()
     data = {
         "names": {index: name for index, name in enumerate(CATEGORY_NAMES)},
@@ -197,7 +231,9 @@ def build_probe_loader(paths: Sequence[Path], *, workers: int, shuffle: bool):
     # augment=True is required only so the audited ignore sidecar is appended;
     # every stochastic geometry/color probability above is frozen to zero.
     dataset = BTDSEVisDroneDataset(
-        img_path=[str(path) for path in paths],
+        # Ultralytics 8.4.90 treats every file passed directly in a list as a
+        # text image-list file. Pass one frozen text manifest instead.
+        img_path=str(path_manifest.resolve()),
         imgsz=640,
         batch_size=PROBE_BATCH,
         augment=True,
@@ -389,6 +425,14 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("RA learnability GPU differs from experiment authority")
     screen_paths = fixed_screen_paths(dataset_root)
     train_paths, dev_paths, split = deterministic_probe_split(screen_paths, root=dataset_root)
+    output = args.output.resolve()
+    train_manifest = write_probe_path_manifest(
+        output.with_name(f"{output.stem}-train-images.txt"), train_paths
+    )
+    dev_manifest = write_probe_path_manifest(
+        output.with_name(f"{output.stem}-dev-images.txt"), dev_paths
+    )
+    split["path_manifests"] = {"train": train_manifest, "dev": dev_manifest}
     checkpoint = args.mature_fdr_checkpoint.resolve()
     device = torch.device("cuda:0")
     model = RAGLGMDetectionModel(nc=10, verbose=False).to(device)
@@ -396,8 +440,18 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
     public_before = public_state_sha256(public_fdr_state(model))
     freeze = freeze_for_support_probe(model)
     freeze["public_sha256_before"] = public_before
-    train_loader = build_probe_loader(train_paths, workers=args.workers, shuffle=True)
-    dev_loader = build_probe_loader(dev_paths, workers=args.workers, shuffle=False)
+    train_loader = build_probe_loader(
+        train_paths,
+        path_manifest=Path(train_manifest["path"]),
+        workers=args.workers,
+        shuffle=True,
+    )
+    dev_loader = build_probe_loader(
+        dev_paths,
+        path_manifest=Path(dev_manifest["path"]),
+        workers=args.workers,
+        shuffle=False,
+    )
     optimizer = torch.optim.AdamW(
         [parameter for parameter in model.parameters() if parameter.requires_grad],
         lr=float(PROBE_OPTIMIZER["lr"]),

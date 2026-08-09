@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -20,10 +21,12 @@ from src.ra_experiment_protocol import (  # noqa: E402
     continuous_epochs,
     file_sha256,
     finite_number,
+    load_ra_authority,
     read_json,
     read_jsonl,
     validate_runtime_identity,
 )
+from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 
 
@@ -31,10 +34,128 @@ STAGE_LIMITS = {"smoke": 2, "screen": 30, "formal": 100}
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall", "cuda_peak_mib")
 FIXED_AMP_SCALE = 128.0
 COMMON_GRADIENT_FIELDS = ("gradient_norm", "fdr_gradient_norm")
+RECOVERY_LINEAGE_FILENAME = "optimizer-recovery-lineage.jsonl"
 
 
 def _positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _optimizer_raw_lines(path: Path, expected_rows: int) -> tuple[bytes, list[bytes]]:
+    data = path.read_bytes()
+    lines = data.splitlines(keepends=True)
+    if (
+        len(lines) != expected_rows
+        or any(not line.strip() for line in lines)
+        or any(not line.endswith((b"\n", b"\r")) for line in lines)
+    ):
+        raise ValueError("optimizer evidence must be one complete nonempty JSON row per line")
+    return data, lines
+
+
+def _validate_recovery_lineage(
+    path: Path,
+    *,
+    optimizer_path: Path,
+    optimizer_rows: list[dict[str, Any]],
+    run_id: str,
+    variant: str,
+    stage: str,
+    completed_epochs: int,
+) -> dict[str, Any]:
+    """Rebuild recovery generations and the discarded optimizer-attempt lineage."""
+
+    _, raw_lines = _optimizer_raw_lines(optimizer_path, len(optimizer_rows))
+    if not path.exists():
+        records: list[dict[str, Any]] = []
+    else:
+        try:
+            records = read_jsonl(path)
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError("optimizer recovery lineage is unreadable") from error
+
+    discarded: set[int] = set()
+    previous_event_sha = "0" * 64
+    previous_prefix_attempts = 0
+    for generation, record in enumerate(records, 1):
+        payload = dict(record)
+        recorded_event_sha = payload.pop("event_sha256", None)
+        expected_event_sha = hashlib.sha256(canonical_json_bytes(payload)).hexdigest().upper()
+        if (
+            record.get("generation") != generation
+            or record.get("previous_event_sha256") != previous_event_sha
+            or recorded_event_sha != expected_event_sha
+            or record.get("run_id") != run_id
+            or record.get("variant") != variant
+            or record.get("stage") != stage
+        ):
+            raise ValueError(f"optimizer recovery lineage authority/hash failure at generation {generation}")
+        prefix_attempts = record.get("optimizer_attempts_before")
+        prefix_bytes = record.get("optimizer_evidence_bytes_before")
+        recovery_epoch = record.get("completed_epoch")
+        if (
+            not _positive_int(prefix_attempts)
+            or int(prefix_attempts) < previous_prefix_attempts
+            or int(prefix_attempts) > len(optimizer_rows)
+            or not _positive_int(prefix_bytes)
+            or not _positive_int(recovery_epoch)
+            or int(recovery_epoch) > completed_epochs
+        ):
+            raise ValueError(f"optimizer recovery lineage sequence is invalid at generation {generation}")
+        prefix = b"".join(raw_lines[: int(prefix_attempts)])
+        if (
+            len(prefix) != int(prefix_bytes)
+            or hashlib.sha256(prefix).hexdigest().upper()
+            != str(record.get("optimizer_evidence_prefix_sha256", "")).upper()
+        ):
+            raise ValueError(f"optimizer evidence prefix drift at recovery generation {generation}")
+        for attempt in range(previous_prefix_attempts + 1, int(prefix_attempts) + 1):
+            if optimizer_rows[attempt - 1].get("recovery_generation") != generation - 1:
+                raise ValueError(
+                    f"optimizer attempt {attempt} is bound to the wrong recovery generation"
+                )
+
+        expected_discarded = [
+            attempt
+            for attempt in range(1, int(prefix_attempts) + 1)
+            if attempt not in discarded
+            and int(optimizer_rows[attempt - 1].get("completed_epoch", -1))
+            > int(recovery_epoch)
+        ]
+        first = record.get("discarded_attempt_first")
+        last = record.get("discarded_attempt_last")
+        count = record.get("discarded_attempt_count")
+        if expected_discarded:
+            if (
+                expected_discarded != list(range(expected_discarded[0], expected_discarded[-1] + 1))
+                or first != expected_discarded[0]
+                or last != expected_discarded[-1]
+                or count != len(expected_discarded)
+            ):
+                raise ValueError(f"discarded optimizer lineage mismatch at generation {generation}")
+            discarded.update(expected_discarded)
+        elif first is not None or last is not None or count != 0:
+            raise ValueError(f"empty discarded optimizer lineage mismatch at generation {generation}")
+
+        checkpoint = Path(str(record.get("checkpoint", ""))).resolve()
+        if (
+            not checkpoint.is_file()
+            or file_sha256(checkpoint) != str(record.get("checkpoint_sha256", "")).upper()
+        ):
+            raise ValueError(f"recovery checkpoint drift at generation {generation}")
+        previous_event_sha = str(recorded_event_sha)
+        previous_prefix_attempts = int(prefix_attempts)
+
+    for attempt in range(previous_prefix_attempts + 1, len(optimizer_rows) + 1):
+        if optimizer_rows[attempt - 1].get("recovery_generation") != len(records):
+            raise ValueError(f"optimizer attempt {attempt} is bound to the wrong recovery generation")
+    return {
+        "recovery_generation": len(records),
+        "discarded_optimizer_attempt_numbers": discarded,
+        "discarded_optimizer_attempts": len(discarded),
+        "recovery_lineage_sha256": file_sha256(path) if records else None,
+        "recovery_lineage_records": records,
+    }
 
 
 def validate_optimizer_evidence(
@@ -45,6 +166,7 @@ def validate_optimizer_evidence(
     stage: str,
     completed_epochs: int,
     allow_trailing_uncommitted_epoch: bool = False,
+    recovery_lineage_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate every optimizer attempt and return Smoke-grade evidence facts."""
     evidence_path = Path(path).resolve()
@@ -107,21 +229,64 @@ def validate_optimizer_evidence(
 
     if observed_epochs != sorted(observed_epochs):
         raise ValueError("optimizer evidence epoch sequence is not monotonic")
-    committed_observed = {epoch for epoch in observed_epochs if epoch <= completed_epochs}
+    lineage_path = (
+        Path(recovery_lineage_path).resolve()
+        if recovery_lineage_path is not None
+        else evidence_path.with_name(RECOVERY_LINEAGE_FILENAME)
+    )
+    lineage = _validate_recovery_lineage(
+        lineage_path,
+        optimizer_path=evidence_path,
+        optimizer_rows=rows,
+        run_id=run_id,
+        variant=variant,
+        stage=stage,
+        completed_epochs=completed_epochs,
+    )
+    discarded = lineage["discarded_optimizer_attempt_numbers"]
+    active_attempts = [
+        (attempt, epoch)
+        for attempt, epoch in enumerate(observed_epochs, 1)
+        if attempt not in discarded
+    ]
+    committed_observed = {
+        epoch for _, epoch in active_attempts if epoch <= completed_epochs
+    }
     if committed_observed != set(range(1, completed_epochs + 1)):
         raise ValueError("optimizer evidence does not cover every completed epoch exactly")
     expected_epochs = set(range(1, completed_epochs + 1))
-    if public_nonzero_epochs & expected_epochs != expected_epochs:
+    active_public_nonzero = {
+        observed_epochs[attempt - 1]
+        for attempt, row in enumerate(rows, 1)
+        if attempt not in discarded and float(row["gradient_norm"]) > 0.0
+    }
+    active_fdr_nonzero = {
+        observed_epochs[attempt - 1]
+        for attempt, row in enumerate(rows, 1)
+        if attempt not in discarded and float(row["fdr_gradient_norm"]) > 0.0
+    }
+    active_ra_nonzero = {
+        observed_epochs[attempt - 1]
+        for attempt, row in enumerate(rows, 1)
+        if attempt not in discarded
+        and variant == "ra_glgm"
+        and float(row["ra_glgm_gradient_norm"]) > 0.0
+    }
+    if active_public_nonzero & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero public gradient in every epoch")
-    if fdr_nonzero_epochs & expected_epochs != expected_epochs:
+    if active_fdr_nonzero & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero FDR gradient in every epoch")
-    if variant == "ra_glgm" and ra_nonzero_epochs & expected_epochs != expected_epochs:
+    if variant == "ra_glgm" and active_ra_nonzero & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero RA private gradient in every epoch")
+    trailing_attempts = [
+        attempt for attempt, epoch in active_attempts if epoch > completed_epochs
+    ]
     return {
         "optimizer_attempts": len(rows),
-        "trailing_uncommitted_optimizer_attempts": sum(
-            epoch > completed_epochs for epoch in observed_epochs
-        ),
+        "active_optimizer_attempts": len(rows) - len(discarded),
+        "trailing_uncommitted_optimizer_attempts": len(trailing_attempts),
+        "trailing_uncommitted_attempt_first": trailing_attempts[0] if trailing_attempts else None,
+        "trailing_uncommitted_attempt_last": trailing_attempts[-1] if trailing_attempts else None,
         "optimizer_evidence_sha256": file_sha256(evidence_path),
         "amp_scale": FIXED_AMP_SCALE,
         "amp_skipped_steps": 0,
@@ -130,7 +295,71 @@ def validate_optimizer_evidence(
         "public_gradient_nonzero": True,
         "fdr_gradient_nonzero": True,
         "ra_private_gradient_nonzero": True if variant == "ra_glgm" else None,
+        **{key: value for key, value in lineage.items() if key != "discarded_optimizer_attempt_numbers" and key != "recovery_lineage_records"},
     }
+
+
+def record_optimizer_recovery_generation(
+    run_dir: str | Path, decision: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Persist one recovery boundary before launching from an audited checkpoint."""
+
+    if decision.get("decision") != "resume":
+        raise ValueError("optimizer recovery generation requires a resume decision")
+    run = Path(run_dir).resolve()
+    optimizer_path = run / "optimizer-evidence.jsonl"
+    rows = read_jsonl(optimizer_path)
+    data, _ = _optimizer_raw_lines(optimizer_path, len(rows))
+    lineage_path = run / RECOVERY_LINEAGE_FILENAME
+    existing = read_jsonl(lineage_path) if lineage_path.exists() else []
+    generation = len(existing) + 1
+    first = decision.get("trailing_uncommitted_attempt_first")
+    last = decision.get("trailing_uncommitted_attempt_last")
+    count = int(decision.get("trailing_uncommitted_optimizer_attempts", -1))
+    if count < 0 or (count == 0) != (first is None and last is None):
+        raise ValueError("resume decision has invalid discarded optimizer attempt range")
+    if count and (not _positive_int(first) or not _positive_int(last) or int(last) - int(first) + 1 != count):
+        raise ValueError("resume decision discarded optimizer attempt range is not contiguous")
+    checkpoint = Path(str(decision.get("checkpoint", ""))).resolve()
+    if (
+        not checkpoint.is_file()
+        or file_sha256(checkpoint) != str(decision.get("checkpoint_sha256", "")).upper()
+    ):
+        raise ValueError("resume checkpoint changed before recovery generation was recorded")
+    payload: dict[str, Any] = {
+        "generation": generation,
+        "previous_event_sha256": existing[-1]["event_sha256"] if existing else "0" * 64,
+        "run_id": decision["run_id"],
+        "variant": decision["variant"],
+        "stage": decision["stage"],
+        "completed_epoch": decision["completed_epoch"],
+        "checkpoint": str(checkpoint),
+        "checkpoint_sha256": decision["checkpoint_sha256"],
+        "optimizer_attempts_before": len(rows),
+        "optimizer_evidence_bytes_before": len(data),
+        "optimizer_evidence_prefix_sha256": hashlib.sha256(data).hexdigest().upper(),
+        "discarded_attempt_first": first,
+        "discarded_attempt_last": last,
+        "discarded_attempt_count": count,
+    }
+    payload["event_sha256"] = hashlib.sha256(canonical_json_bytes(payload)).hexdigest().upper()
+    if lineage_path.is_symlink():
+        raise ValueError("optimizer recovery lineage may not be a symlink")
+    lineage_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(lineage_path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "ab", closefd=False) as stream:
+            stream.write(
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+                + b"\n"
+            )
+            stream.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return payload
 
 
 def _load_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -160,9 +389,7 @@ def validate_resume(
     if variant not in RA_VARIANTS or stage not in RA_STAGES:
         raise ValueError("unknown RA recovery arm/stage")
     run = Path(run_dir).resolve()
-    authority = read_json(protocol_manifest)
-    if authority.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256:
-        raise ValueError("protocol authority is not the frozen RA-GLGM protocol")
+    authority = load_ra_authority(protocol_manifest, repository_root=ROOT)
     runtime = read_json(run / "ra-run.json")
     identity = validate_runtime_identity(runtime, variant=variant, stage=stage)
     expected_identity = authority.get("run_identities", {}).get(f"{variant}_{stage}")
@@ -222,6 +449,7 @@ def validate_resume(
         stage=stage,
         completed_epochs=completed,
         allow_trailing_uncommitted_epoch=completed < limit,
+        recovery_lineage_path=run / RECOVERY_LINEAGE_FILENAME,
     )
 
     queue = read_jsonl(run / "publication-queue.jsonl")

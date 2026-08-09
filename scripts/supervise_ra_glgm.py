@@ -18,7 +18,10 @@ from typing import Any, Mapping
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.validate_ra_resume import validate_resume  # noqa: E402
+from scripts.validate_ra_resume import (  # noqa: E402
+    record_optimizer_recovery_generation,
+    validate_resume,
+)
 from scripts.train_rtdetr_ra_glgm import load_authority, validate_source  # noqa: E402
 from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
@@ -315,6 +318,18 @@ def _environment() -> dict[str, str]:
     return environment
 
 
+def revalidate_supervisor_authority(
+    protocol: Path, expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Re-read immutable authority and source bytes at every process boundary."""
+
+    current = load_authority(protocol)
+    validate_source(current)
+    if current != dict(expected):
+        raise ValueError("RA protocol manifest changed after supervisor start")
+    return current
+
+
 def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
     try:
         validate_screen_gate_report(
@@ -394,6 +409,8 @@ def run_supervisor(args: argparse.Namespace) -> int:
             resume: Path | None = None
             attempts = 0
             while True:
+                revalidate_supervisor_authority(protocol, authority)
+                decision: dict[str, Any] | None = None
                 if run.exists() and (run / "ra-run.json").is_file():
                     decision = validate_resume(
                         run,
@@ -423,6 +440,24 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 attempts += 1
                 if attempts > args.max_attempts:
                     raise RuntimeError(f"recovery attempts exhausted for {stage}/{variant}")
+                if resume is not None:
+                    if decision is None:
+                        raise RuntimeError("resume checkpoint has no audited recovery decision")
+                    generation = record_optimizer_recovery_generation(run, decision)
+                    append_audit_event(
+                        audit,
+                        {
+                            "event": "optimizer_recovery_generation_recorded",
+                            "stage": stage,
+                            "variant": variant,
+                            "generation": generation["generation"],
+                            "discarded_attempt_count": generation[
+                                "discarded_attempt_count"
+                            ],
+                            "checkpoint_sha256": generation["checkpoint_sha256"],
+                        },
+                    )
+                revalidate_supervisor_authority(protocol, authority)
                 command = build_train_command(
                     python=args.python,
                     protocol_manifest=protocol,
@@ -480,9 +515,10 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 # Success and failure both pass through the same strict recovery audit.
 
             if stage in {"screen", "formal"}:
+                revalidate_supervisor_authority(protocol, authority)
                 evaluation_output = run / "locked-evaluation.jsonl"
+                evaluation_origin = "reused" if evaluation_output.exists() else "fresh"
                 if evaluation_output.exists():
-                    validate_evaluated_arm(run, variant=variant, stage=stage)
                     append_audit_event(
                         audit,
                         {
@@ -515,8 +551,20 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     )
                     if result.returncode != 0:
                         raise RuntimeError(f"locked evaluator failed for {stage}/{variant}")
+                revalidate_supervisor_authority(protocol, authority)
+                validate_evaluated_arm(run, variant=variant, stage=stage)
+                append_audit_event(
+                    audit,
+                    {
+                        "event": "locked_evaluation_verified",
+                        "stage": stage,
+                        "variant": variant,
+                        "origin": evaluation_origin,
+                    },
+                )
 
             if stage == "screen" and variant == "ra_glgm":
+                revalidate_supervisor_authority(protocol, authority)
                 if gate_output.exists():
                     _validate_gate_for_formal(gate_output, output_root)
                     append_audit_event(audit, {"event": "screen_gate_reused_after_recomputation"})
@@ -537,8 +585,11 @@ def run_supervisor(args: argparse.Namespace) -> int:
                         _validate_gate_for_formal(
                             gate_output, output_root
                         )  # Raises a precise failed-gate error.
+                revalidate_supervisor_authority(protocol, authority)
+                _validate_gate_for_formal(gate_output, output_root)
 
             if stage == "formal" and variant == "ra_glgm":
+                revalidate_supervisor_authority(protocol, authority)
                 if formal_output.exists():
                     _validate_formal_report(formal_output)
                     append_audit_event(audit, {"event": "formal_report_reused_after_recomputation"})
@@ -561,7 +612,10 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     if result.returncode != 0:
                         raise RuntimeError("Formal100 paired report failed engineering audit")
                     _validate_formal_report(formal_output)
+                revalidate_supervisor_authority(protocol, authority)
+                _validate_formal_report(formal_output)
 
+        revalidate_supervisor_authority(protocol, authority)
         formal_report = _validate_formal_report(formal_output)
         append_audit_event(
             audit,
