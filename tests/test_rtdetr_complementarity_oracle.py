@@ -47,6 +47,15 @@ def test_candidate_iou_allows_finite_out_of_frame_decoder_boxes() -> None:
     assert 0.0 < actual.item() < 1.0
 
 
+def test_candidate_iou_assigns_zero_to_nonpositive_decoder_geometry() -> None:
+    actual = candidate_iou_matrix(
+        torch.tensor([[0.5, 0.5, -0.2, 0.2], [0.5, 0.5, 0.2, 0.0]]),
+        torch.tensor([[0.5, 0.5, 0.2, 0.2]]),
+    )
+
+    assert torch.equal(actual, torch.zeros((2, 1)))
+
+
 def test_assignment_is_same_class_one_to_one_and_maximizes_iou() -> None:
     predictions = torch.tensor(
         [
@@ -150,7 +159,6 @@ def test_assignment_returns_empty_tensors_for_empty_inputs(
         (torch.zeros((1, 5)), torch.empty((0, 4)), ValueError, r"boxes.*\[N, 4\]"),
         (torch.zeros((1, 4), dtype=torch.long), torch.empty((0, 4)), TypeError, "floating"),
         (torch.tensor([[float("nan"), 0.0, 0.0, 0.0]]), torch.empty((0, 4)), ValueError, "finite"),
-        (torch.tensor([[0.5, 0.5, -0.2, 0.2]]), torch.empty((0, 4)), ValueError, "non-negative width"),
         (torch.empty((0, 4)), torch.tensor([[0.5, 0.5, -0.1, 0.2]]), ValueError, "normalized"),
     ],
 )
@@ -445,6 +453,19 @@ def test_matched_quality_arm_handles_empty_candidates_and_targets() -> None:
     assert background[0, 5].item() == 0.0
 
 
+def test_matched_quality_arm_never_rewards_nonpositive_decoder_geometry() -> None:
+    arm = build_matched_quality_arm(
+        boxes=torch.tensor([[0.5, 0.5, -0.2, 0.2]]),
+        probabilities=torch.tensor([[0.9, 0.1]]),
+        source_ranks=torch.tensor([0]),
+        target_boxes=torch.tensor([[0.5, 0.5, 0.2, 0.2]]),
+        target_classes=torch.tensor([0]),
+        max_det=2,
+    )
+
+    assert torch.equal(arm[:, 4], torch.zeros(2))
+
+
 def test_matched_quality_arm_rejects_target_device_mismatch_before_value_checks() -> None:
     with pytest.raises(ValueError, match="device"):
         build_matched_quality_arm(
@@ -559,11 +580,13 @@ def test_paired_cache_preserves_out_of_frame_decoder_coordinates(
 ) -> None:
     record = _synthetic_record()
     record["fdr_boxes"][0, 0] = -0.004
+    record["frequencycm_boxes"][0, 2] = -0.012
 
     write_paired_cache(tmp_path / "cache", [record], _valid_authority())
     loaded = load_paired_cache(tmp_path / "cache", _valid_authority())
 
     assert loaded[0]["fdr_boxes"][0, 0].item() == pytest.approx(-0.004)
+    assert loaded[0]["frequencycm_boxes"][0, 2].item() == pytest.approx(-0.012)
 
 
 def test_paired_cache_rejects_corrupted_payload_before_deserialization(
@@ -673,11 +696,6 @@ def test_paired_cache_rejects_duplicate_image_ids_and_existing_empty_root(
         ("fdr_boxes", torch.zeros((300, 4), dtype=torch.float64), "dtype"),
         ("fdr_boxes", torch.zeros((300, 4), requires_grad=True), "detached"),
         ("fdr_boxes", torch.zeros((4, 300)).T, "contiguous"),
-        (
-            "frequencycm_boxes",
-            torch.tensor([[0.5, 0.5, -0.1, 0.1]]).repeat(300, 1),
-            "non-negative width",
-        ),
         ("fdr_logits", torch.full((300, 10), float("nan")), "finite"),
         ("frequencycm_logits", torch.zeros((300, 9)), "production tensor shape"),
         ("target_boxes", torch.zeros((1, 4), dtype=torch.float64), "dtype"),

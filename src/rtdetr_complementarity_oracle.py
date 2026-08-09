@@ -90,11 +90,6 @@ def _require_normalized(value: torch.Tensor, name: str) -> None:
         raise ValueError(f"{name} must be normalized to [0, 1]")
 
 
-def _require_candidate_geometry(value: torch.Tensor, name: str) -> None:
-    if value.numel() and not bool((value[:, 2:] >= 0).all()):
-        raise ValueError(f"{name} must have non-negative width and height")
-
-
 def _require_classes(value: object, name: str) -> torch.Tensor:
     if not isinstance(value, torch.Tensor):
         raise TypeError(f"{name} must be a tensor")
@@ -123,7 +118,6 @@ def candidate_iou_matrix(boxes: torch.Tensor, targets: torch.Tensor) -> torch.Te
         raise ValueError("boxes and targets must share a device")
     _require_finite(boxes, "boxes")
     _require_finite(targets, "targets")
-    _require_candidate_geometry(boxes, "boxes")
     _require_normalized(targets, "targets")
 
     compute_dtype = torch.promote_types(boxes.dtype, targets.dtype)
@@ -138,17 +132,20 @@ def candidate_iou_matrix(boxes: torch.Tensor, targets: torch.Tensor) -> torch.Te
     box_upper = box_centers + box_sizes / 2
     target_lower = target_centers - target_sizes / 2
     target_upper = target_centers + target_sizes / 2
+    valid_boxes = (box_sizes > 0).all(dim=-1)
+    valid_targets = (target_sizes > 0).all(dim=-1)
     intersection = (
         torch.minimum(box_upper[:, None], target_upper[None])
         - torch.maximum(box_lower[:, None], target_lower[None])
     ).clamp_min(0).prod(dim=-1)
     union = (
-        box_sizes.prod(dim=-1)[:, None]
-        + target_sizes.prod(dim=-1)[None]
+        box_sizes.clamp_min(0).prod(dim=-1)[:, None]
+        + target_sizes.clamp_min(0).prod(dim=-1)[None]
         - intersection
     )
+    valid = valid_boxes[:, None] & valid_targets[None, :] & (union > 0)
     return torch.where(
-        union > 0, intersection / union, torch.zeros_like(union)
+        valid, intersection / union.clamp_min(torch.finfo(union.dtype).tiny), torch.zeros_like(union)
     ).clamp(0, 1)
 
 
@@ -512,7 +509,6 @@ def build_matched_quality_arm(
         raise ValueError("boxes and probabilities must share a device")
     _require_finite(boxes, "boxes")
     _require_finite(probabilities, "probabilities")
-    _require_candidate_geometry(boxes, "boxes")
     if not bool(((probabilities >= 0) & (probabilities <= 1)).all()):
         raise ValueError("probabilities must be in [0, 1]")
 
@@ -758,14 +754,6 @@ def _validate_paired_record(record: object) -> dict[str, Any]:
         raise ComplementarityOracleCacheViolation("record tensors must be contiguous")
     if any(not bool(torch.isfinite(value).all()) for value in tensors):
         raise ComplementarityOracleCacheViolation("record tensors must be finite")
-    for name, boxes in (
-        ("fdr_boxes", fdr_boxes),
-        ("frequencycm_boxes", frequencycm_boxes),
-    ):
-        if boxes.numel() and not bool((boxes[:, 2:] >= 0).all()):
-            raise ComplementarityOracleCacheViolation(
-                f"{name} must have non-negative width and height"
-            )
     if not bool(((target_boxes >= 0) & (target_boxes <= 1)).all()):
         raise ComplementarityOracleCacheViolation(
             "target_boxes must be normalized to [0, 1]"
