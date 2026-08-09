@@ -232,3 +232,58 @@ def test_paired_record_extraction_rejects_wrong_image_count() -> None:
             _FakeValidator(),
             expected_count=3,
         )
+
+
+def _oracle_record() -> dict[str, object]:
+    fdr_boxes = torch.full((300, 4), 0.01, dtype=torch.float32)
+    frequencycm_boxes = torch.full((300, 4), 0.01, dtype=torch.float32)
+    fdr_boxes[0] = torch.tensor([0.25, 0.25, 0.04, 0.04])
+    frequencycm_boxes[0] = torch.tensor([0.75, 0.75, 0.04, 0.04])
+    fdr_logits = torch.full((300, 10), -20.0, dtype=torch.float32)
+    frequencycm_logits = torch.full((300, 10), -20.0, dtype=torch.float32)
+    fdr_logits[0, 0] = 10.0
+    frequencycm_logits[0, 1] = 10.0
+    return {
+        "image_id": "000001.jpg",
+        "original_shape": (640, 640),
+        "fdr_boxes": fdr_boxes,
+        "fdr_logits": fdr_logits,
+        "frequencycm_boxes": frequencycm_boxes,
+        "frequencycm_logits": frequencycm_logits,
+        "target_boxes": torch.tensor(
+            [[0.25, 0.25, 0.04, 0.04], [0.75, 0.75, 0.04, 0.04]],
+            dtype=torch.float32,
+        ),
+        "target_classes": torch.tensor([0, 1], dtype=torch.long),
+    }
+
+
+def test_run_from_records_writes_every_frozen_output(tmp_path: Path) -> None:
+    module = _load_module()
+
+    report = module.run_from_records([_oracle_record()], tmp_path)
+
+    expected = {
+        "oracle-summary.json",
+        "coverage-by-scale.csv",
+        "coverage-by-class.csv",
+        "missed-target-categories.csv",
+        "oracle-arms.csv",
+        "frequencycm-complementarity-report.md",
+        "SHA256SUMS.txt",
+    }
+    assert expected == {path.name for path in tmp_path.iterdir()}
+    assert report["interpretation"] == "non_deployable_design_selection_evidence"
+    assert report["reproduction"]["duplicate_fdr_neutral"] is True
+    assert report["coverage"]["tiny_small_recall50_delta"] > 0
+    assert report["oracle"]["candidate_map_delta"] >= 0
+    for name in expected - {"SHA256SUMS.txt"}:
+        assert name in (tmp_path / "SHA256SUMS.txt").read_text("ascii")
+
+
+def test_run_from_records_is_create_only(tmp_path: Path) -> None:
+    module = _load_module()
+    module.run_from_records([_oracle_record()], tmp_path)
+
+    with pytest.raises(FileExistsError):
+        module.run_from_records([_oracle_record()], tmp_path)
