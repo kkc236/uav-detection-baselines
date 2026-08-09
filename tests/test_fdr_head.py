@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import io
 import threading
 
 import pytest
@@ -108,6 +109,22 @@ class _FakeStockDecoder(nn.Module):
         self.hidden_dim = hidden
         self.num_layers = layers
         self.eval_idx = layers - 1
+
+
+def test_legacy_pickled_decoder_restores_pinned_behavior_flags() -> None:
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(), pre_bbox_head=nn.Linear(16, 4)
+    )
+    del decoder.cumulative
+    del decoder.preliminary_box
+    stream = io.BytesIO()
+    torch.save(decoder, stream)
+    stream.seek(0)
+
+    restored = torch.load(stream, map_location="cpu", weights_only=False)
+
+    assert restored.cumulative is True
+    assert restored.preliminary_box is True
 
 
 class _QueryPos(nn.Module):

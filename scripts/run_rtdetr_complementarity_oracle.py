@@ -63,12 +63,14 @@ FDR_TRAIN_ENDPOINT = {
     "precision": 0.56778,
     "recall": 0.49350,
     "ap50": 0.48480,
+    "ap75": 0.29272978946146405,
     "map": 0.28971,
 }
 FREQUENCYCM_TRAIN_ENDPOINT = {
     "precision": 0.56710,
     "recall": 0.48814,
     "ap50": 0.47947,
+    "ap75": 0.29008629839406985,
     "map": 0.28609,
 }
 
@@ -87,7 +89,7 @@ def _assert_stock_reproduction(
     *,
     label: str,
 ) -> dict[str, Any]:
-    if set(endpoint) != {"precision", "recall", "ap50", "map"}:
+    if set(endpoint) != {"precision", "recall", "ap50", "ap75", "map"}:
         raise ValueError("stock endpoint schema is invalid")
     missing = set(endpoint) - set(metrics)
     if missing:
@@ -145,6 +147,17 @@ def _verify_checkpoint(path: Path, expected_sha256: str) -> str:
             f"checkpoint SHA-256 mismatch: expected={expected}, actual={actual}"
         )
     return actual
+
+
+def _file_sha256(path: Path) -> str:
+    target = Path(path)
+    if target.is_symlink() or not target.is_file():
+        raise RuntimeError(f"authority file is not a regular file: {target}")
+    digest = hashlib.sha256()
+    with target.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
 
 
 def _source_commit() -> str:
@@ -378,6 +391,7 @@ def _extract_paired_records(
         )
         image_ids = batch.get("im_file")
         original_shapes = batch.get("ori_shape")
+        resized_shapes = batch.get("resized_shape")
         if (
             not isinstance(image_ids, Sequence)
             or isinstance(image_ids, (str, bytes))
@@ -390,15 +404,29 @@ def _extract_paired_records(
             or len(original_shapes) != images.shape[0]
         ):
             raise RuntimeError("validator original shapes are invalid")
+        if (
+            not isinstance(resized_shapes, Sequence)
+            or isinstance(resized_shapes, (str, bytes))
+            or len(resized_shapes) != images.shape[0]
+        ):
+            raise RuntimeError("validator resized shapes are invalid")
         for image_index, image_id in enumerate(image_ids):
             shape = tuple(int(value) for value in original_shapes[image_index])
             if len(shape) != 2 or any(value <= 0 for value in shape):
                 raise RuntimeError("validator original shape must be positive height-width")
+            resized_shape = tuple(
+                int(value) for value in resized_shapes[image_index]
+            )
+            if len(resized_shape) != 2 or any(value <= 0 for value in resized_shape):
+                raise RuntimeError(
+                    "validator resized shape must be positive height-width"
+                )
             target_boxes, target_classes = _batch_targets(batch, image_index)
             records.append(
                 {
                     "image_id": Path(str(image_id)).name,
                     "original_shape": shape,
+                    "resized_shape": resized_shape,
                     "fdr_boxes": fdr_boxes[image_index].cpu().contiguous().clone(),
                     "fdr_logits": fdr_logits[image_index].cpu().contiguous().clone(),
                     "frequencycm_boxes": frequencycm_boxes[image_index]
@@ -431,6 +459,29 @@ def _prediction_record(postprocessed: torch.Tensor) -> dict[str, torch.Tensor]:
         "scores": selected[:, 4].contiguous(),
         "classes": selected[:, 5].long().contiguous(),
     }
+
+
+def _best_same_class_iou(
+    candidate_boxes: torch.Tensor,
+    candidate_classes: torch.Tensor,
+    target_boxes: torch.Tensor,
+    target_classes: torch.Tensor,
+) -> torch.Tensor:
+    candidate_boxes = candidate_boxes.detach().float().cpu()
+    candidate_classes = candidate_classes.detach().long().cpu()
+    target_boxes = target_boxes.detach().float().cpu()
+    target_classes = target_classes.detach().long().cpu()
+    if candidate_classes.shape != (candidate_boxes.shape[0],):
+        raise ValueError("candidate classes must match candidate boxes")
+    if target_classes.shape != (target_boxes.shape[0],):
+        raise ValueError("target classes must match target boxes")
+    if target_boxes.shape[0] == 0:
+        return torch.empty(0, dtype=torch.float32)
+    if candidate_boxes.shape[0] == 0:
+        return torch.zeros(target_boxes.shape[0], dtype=torch.float32)
+    iou = candidate_iou_matrix(candidate_boxes, target_boxes)
+    same_class = candidate_classes[:, None] == target_classes[None, :]
+    return torch.where(same_class, iou, torch.zeros_like(iou)).amax(dim=0).float()
 
 
 def _matched_target_iou(
@@ -725,17 +776,22 @@ def run_from_records(
                 frequencycm_stock if frequencycm_utility > fdr_utility else fdr_stock
             )
 
-            fdr_iou = candidate_iou_matrix(fdr_boxes, target_boxes)
-            frequencycm_iou = candidate_iou_matrix(
-                frequencycm_boxes, target_boxes
-            )
+            raw_classes = torch.arange(NUM_CLASSES).repeat(MAX_DET)
             all_fdr_best.append(
-                fdr_iou.amax(dim=0) if target_boxes.shape[0] else torch.empty(0)
+                _best_same_class_iou(
+                    fdr_boxes.repeat_interleave(NUM_CLASSES, dim=0),
+                    raw_classes,
+                    target_boxes,
+                    target_classes,
+                )
             )
             all_frequencycm_best.append(
-                frequencycm_iou.amax(dim=0)
-                if target_boxes.shape[0]
-                else torch.empty(0)
+                _best_same_class_iou(
+                    frequencycm_boxes.repeat_interleave(NUM_CLASSES, dim=0),
+                    raw_classes,
+                    target_boxes,
+                    target_classes,
+                )
             )
             fdr_matched = _matched_target_iou(
                 fdr_boxes, target_boxes, target_classes
@@ -938,6 +994,10 @@ def _run(args: argparse.Namespace) -> int:
         "fdr_sha256": fdr_sha256,
         "frequencycm_sha256": frequencycm_sha256,
         "dataset_sha256": str(dataset["sha256"]),
+        "evaluator_sha256": _file_sha256(
+            REPOSITORY_ROOT / "src" / "iber_evaluation.py"
+        ),
+        "source_commit": source_commit,
     }
 
     if cache_root.exists() or cache_root.is_symlink():

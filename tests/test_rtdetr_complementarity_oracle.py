@@ -455,6 +455,8 @@ def _valid_authority() -> dict[str, str]:
         "fdr_sha256": "a" * 64,
         "frequencycm_sha256": "b" * 64,
         "dataset_sha256": "c" * 64,
+        "evaluator_sha256": "d" * 64,
+        "source_commit": "e" * 40,
     }
 
 
@@ -462,6 +464,7 @@ def _synthetic_record(image_id: str = "000001") -> dict[str, object]:
     return {
         "image_id": image_id,
         "original_shape": (1080, 1920),
+        "resized_shape": (640, 640),
         "fdr_boxes": torch.full((300, 4), 0.5),
         "fdr_logits": torch.linspace(-2.0, 2.0, 3000).reshape(300, 10),
         "frequencycm_boxes": torch.full((300, 4), 0.25),
@@ -499,6 +502,7 @@ def test_paired_cache_is_create_only_authority_bound_and_hashed(
     assert isinstance(loaded, tuple)
     assert loaded[0]["image_id"] == "000001"
     assert loaded[0]["original_shape"] == (1080, 1920)
+    assert loaded[0]["resized_shape"] == (640, 640)
     assert torch.equal(loaded[0]["fdr_logits"], _synthetic_record()["fdr_logits"])
     with pytest.raises(FileExistsError, match="cache root"):
         write_paired_cache(root, [_synthetic_record("changed")], authority)
@@ -614,6 +618,8 @@ def test_paired_cache_rejects_duplicate_image_ids_and_existing_empty_root(
     [
         ("original_shape", (1080,), "original_shape"),
         ("original_shape", (True, 1920), "original_shape"),
+        ("resized_shape", (640,), "resized_shape"),
+        ("resized_shape", (640, 0), "resized_shape"),
         ("fdr_boxes", torch.zeros((299, 4)), "production tensor shape"),
         ("fdr_boxes", torch.zeros((300, 4), dtype=torch.float64), "dtype"),
         ("fdr_boxes", torch.zeros((300, 4), requires_grad=True), "detached"),

@@ -80,6 +80,12 @@ def test_runner_is_bound_to_exact_checkpoint_authorities() -> None:
     assert module.FREQUENCYCM_SOURCE_COMMIT == (
         "d3655b14c17a3c8ca14e1888517b6fde4e059766"
     )
+    assert module.FDR_TRAIN_ENDPOINT["ap75"] == pytest.approx(
+        0.29272978946146405
+    )
+    assert module.FREQUENCYCM_TRAIN_ENDPOINT["ap75"] == pytest.approx(
+        0.29008629839406985
+    )
 
 
 def test_report_writer_is_create_only_and_labels_oracle_non_deployable(
@@ -187,6 +193,7 @@ def _paired_batch() -> dict[str, object]:
         "cls": torch.tensor([[0], [1], [2]]),
         "im_file": ["000001.jpg", "000002.jpg"],
         "ori_shape": [(540, 960), (540, 960)],
+        "resized_shape": [(640, 640), (640, 640)],
     }
 
 
@@ -208,6 +215,7 @@ def test_paired_record_extraction_uses_one_preprocessed_batch() -> None:
         "000002.jpg",
     ]
     assert records[0]["original_shape"] == (540, 960)
+    assert records[0]["resized_shape"] == (640, 640)
     assert records[0]["fdr_boxes"].shape == (300, 4)
     assert records[0]["fdr_logits"].shape == (300, 10)
     assert records[0]["frequencycm_boxes"].shape == (300, 4)
@@ -246,6 +254,7 @@ def _oracle_record() -> dict[str, object]:
     return {
         "image_id": "000001.jpg",
         "original_shape": (640, 640),
+        "resized_shape": (640, 640),
         "fdr_boxes": fdr_boxes,
         "fdr_logits": fdr_logits,
         "frequencycm_boxes": frequencycm_boxes,
@@ -303,7 +312,13 @@ def test_device_is_frozen_to_available_cuda_zero(monkeypatch) -> None:
 
 def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
     module = _load_module()
-    endpoint = {"precision": 0.5, "recall": 0.4, "ap50": 0.3, "map": 0.2}
+    endpoint = {
+        "precision": 0.5,
+        "recall": 0.4,
+        "ap50": 0.3,
+        "ap75": 0.1,
+        "map": 0.2,
+    }
     metrics = {
         "precision": 0.5004,
         "recall": 0.3996,
@@ -336,3 +351,21 @@ def test_target_scales_undo_square_letterbox_gain_for_original_pixels() -> None:
     }
 
     assert module._target_scales(record) == ("small",)
+
+
+def test_best_same_class_iou_excludes_better_wrong_class_candidate() -> None:
+    module = _load_module()
+    target = torch.tensor([[0.5, 0.5, 0.2, 0.2]], dtype=torch.float32)
+    candidates = torch.tensor(
+        [[0.5, 0.5, 0.2, 0.2], [0.5, 0.5, 0.1, 0.1]],
+        dtype=torch.float32,
+    )
+
+    best = module._best_same_class_iou(
+        candidates,
+        torch.tensor([1, 0]),
+        target,
+        torch.tensor([0]),
+    )
+
+    assert best.tolist() == pytest.approx([0.25])

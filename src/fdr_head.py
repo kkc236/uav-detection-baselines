@@ -188,6 +188,15 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_references: Tensor | None = None
         self.last_pre_bboxes: Tensor | None = None
 
+    def __setstate__(self, state: dict) -> None:
+        """Restore exact pinned defaults in pre-declarative pickled checkpoints."""
+
+        super().__setstate__(state)
+        if not hasattr(self, "cumulative"):
+            self.cumulative = True
+        if not hasattr(self, "preliminary_box"):
+            self.preliminary_box = True
+
     @classmethod
     def from_stock(
         cls,

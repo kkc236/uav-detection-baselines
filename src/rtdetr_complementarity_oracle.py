@@ -41,10 +41,13 @@ _AUTHORITY_FIELDS = (
     "fdr_sha256",
     "frequencycm_sha256",
     "dataset_sha256",
+    "evaluator_sha256",
+    "source_commit",
 )
 _RECORD_FIELDS = (
     "image_id",
     "original_shape",
+    "resized_shape",
     "fdr_boxes",
     "fdr_logits",
     "frequencycm_boxes",
@@ -629,9 +632,10 @@ def _normalize_authority(authority: object) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for name in _AUTHORITY_FIELDS:
         value = authority[name]
+        expected_length = 40 if name == "source_commit" else 64
         if (
             not isinstance(value, str)
-            or len(value) != 64
+            or len(value) != expected_length
             or any(character not in "0123456789abcdefABCDEF" for character in value)
         ):
             raise ComplementarityOracleCacheViolation(f"invalid authority {name}")
@@ -639,10 +643,10 @@ def _normalize_authority(authority: object) -> dict[str, str]:
     return normalized
 
 
-def _validate_original_shape(value: object) -> tuple[int, int]:
+def _validate_image_shape(value: object, *, label: str) -> tuple[int, int]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         raise ComplementarityOracleCacheViolation(
-            "record original_shape must contain height and width"
+            f"record {label} must contain height and width"
         )
     values = tuple(value)
     if (
@@ -651,7 +655,7 @@ def _validate_original_shape(value: object) -> tuple[int, int]:
         or any(dimension <= 0 for dimension in values)
     ):
         raise ComplementarityOracleCacheViolation(
-            "record original_shape must contain two positive integers"
+            f"record {label} must contain two positive integers"
         )
     return values  # type: ignore[return-value]
 
@@ -668,7 +672,12 @@ def _validate_paired_record(record: object) -> dict[str, Any]:
         or any(character in image_id for character in "\0\r\n")
     ):
         raise ComplementarityOracleCacheViolation("record image_id is invalid")
-    original_shape = _validate_original_shape(record["original_shape"])
+    original_shape = _validate_image_shape(
+        record["original_shape"], label="original_shape"
+    )
+    resized_shape = _validate_image_shape(
+        record["resized_shape"], label="resized_shape"
+    )
 
     fdr_boxes = record["fdr_boxes"]
     fdr_logits = record["fdr_logits"]
@@ -743,6 +752,7 @@ def _validate_paired_record(record: object) -> dict[str, Any]:
     return {
         "image_id": image_id,
         "original_shape": original_shape,
+        "resized_shape": resized_shape,
         "fdr_boxes": fdr_boxes,
         "fdr_logits": fdr_logits,
         "frequencycm_boxes": frequencycm_boxes,
