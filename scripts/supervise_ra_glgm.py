@@ -22,7 +22,7 @@ from scripts.validate_ra_resume import (  # noqa: E402
     record_optimizer_recovery_generation,
     validate_resume,
 )
-from scripts.train_rtdetr_ra_glgm import load_authority, validate_source  # noqa: E402
+from scripts.train_rtdetr_ra_glgm import load_authority  # noqa: E402
 from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
     RA_EXPERIMENT_PROTOCOL_SHA256,
@@ -324,10 +324,92 @@ def revalidate_supervisor_authority(
     """Re-read immutable authority and source bytes at every process boundary."""
 
     current = load_authority(protocol)
-    validate_source(current)
     if current != dict(expected):
         raise ValueError("RA protocol manifest changed after supervisor start")
     return current
+
+
+def validate_supervisor_evaluator(
+    evaluator_script: Path, authority: Mapping[str, Any]
+) -> Path:
+    """Require the supervisor CLI to execute the exact manifest-bound evaluator."""
+
+    evaluator = authority.get("locked_evaluator")
+    if not isinstance(evaluator, Mapping):
+        raise ValueError("locked evaluator authority is missing")
+    selected = evaluator_script.resolve()
+    expected = Path(str(evaluator.get("path", ""))).resolve()
+    if selected != expected:
+        raise ValueError("supervisor evaluator path differs from protocol authority")
+    if selected.is_symlink() or not selected.is_file():
+        raise FileNotFoundError("locked evaluator script is missing")
+    if file_sha256(selected) != str(evaluator.get("sha256", "")).upper():
+        raise ValueError("supervisor evaluator bytes differ from protocol authority")
+    return selected
+
+
+def ensure_locked_evaluation(
+    *,
+    python: Path,
+    evaluator_script: Path,
+    protocol: Path,
+    authority: Mapping[str, Any],
+    run: Path,
+    stage: str,
+    variant: str,
+    audit: Path,
+    environment: Mapping[str, str],
+) -> str:
+    """Create or reuse one evaluation, then apply the identical post-audit."""
+
+    revalidate_supervisor_authority(protocol, authority)
+    evaluation_output = run / "locked-evaluation.jsonl"
+    origin = "reused" if evaluation_output.exists() else "fresh"
+    if origin == "reused":
+        append_audit_event(
+            audit,
+            {
+                "event": "locked_evaluation_reuse_detected",
+                "stage": stage,
+                "variant": variant,
+            },
+        )
+    else:
+        evaluator = build_evaluator_command(
+            python=python,
+            evaluator_script=evaluator_script,
+            run=run,
+            protocol_manifest=protocol,
+            stage=stage,
+        )
+        append_audit_event(
+            audit,
+            {"event": "locked_evaluation_start", "stage": stage, "variant": variant},
+        )
+        result = subprocess.run(evaluator, cwd=ROOT, env=dict(environment), check=False)
+        append_audit_event(
+            audit,
+            {
+                "event": "locked_evaluation_exit",
+                "stage": stage,
+                "variant": variant,
+                "returncode": result.returncode,
+            },
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"locked evaluator failed for {stage}/{variant}")
+    revalidate_supervisor_authority(protocol, authority)
+    validate_evaluated_arm(run, variant=variant, stage=stage)
+    append_audit_event(
+        audit,
+        {
+            "event": "locked_evaluation_verified",
+            "stage": stage,
+            "variant": variant,
+            "origin": origin,
+        },
+    )
+    return origin
 
 
 def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
@@ -389,14 +471,12 @@ def run_supervisor(args: argparse.Namespace) -> int:
     status = args.status.resolve()
     lock = args.lock.resolve()
     authority = load_authority(protocol)
-    validate_source(authority)
     if file_sha256(initial_state) != str(authority.get("initial_state", {}).get("sha256", "")).upper():
         raise ValueError("paired initial-state bytes differ from protocol authority")
     validate_learnability_report(
         args.learnability_report.resolve(), protocol_manifest=authority
     )
-    if not args.evaluator_script.resolve().is_file():
-        raise FileNotFoundError(f"locked evaluator script is missing: {args.evaluator_script.resolve()}")
+    validate_supervisor_evaluator(args.evaluator_script, authority)
     validate_audit_chain(audit)
     acquire_lock(lock)
     environment = _environment()
@@ -515,52 +595,16 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 # Success and failure both pass through the same strict recovery audit.
 
             if stage in {"screen", "formal"}:
-                revalidate_supervisor_authority(protocol, authority)
-                evaluation_output = run / "locked-evaluation.jsonl"
-                evaluation_origin = "reused" if evaluation_output.exists() else "fresh"
-                if evaluation_output.exists():
-                    append_audit_event(
-                        audit,
-                        {
-                            "event": "locked_evaluation_reused_after_audit",
-                            "stage": stage,
-                            "variant": variant,
-                        },
-                    )
-                else:
-                    evaluator = build_evaluator_command(
-                        python=args.python,
-                        evaluator_script=args.evaluator_script,
-                        run=run,
-                        protocol_manifest=protocol,
-                        stage=stage,
-                    )
-                    append_audit_event(
-                        audit,
-                        {"event": "locked_evaluation_start", "stage": stage, "variant": variant},
-                    )
-                    result = subprocess.run(evaluator, cwd=ROOT, env=environment, check=False)
-                    append_audit_event(
-                        audit,
-                        {
-                            "event": "locked_evaluation_exit",
-                            "stage": stage,
-                            "variant": variant,
-                            "returncode": result.returncode,
-                        },
-                    )
-                    if result.returncode != 0:
-                        raise RuntimeError(f"locked evaluator failed for {stage}/{variant}")
-                revalidate_supervisor_authority(protocol, authority)
-                validate_evaluated_arm(run, variant=variant, stage=stage)
-                append_audit_event(
-                    audit,
-                    {
-                        "event": "locked_evaluation_verified",
-                        "stage": stage,
-                        "variant": variant,
-                        "origin": evaluation_origin,
-                    },
+                ensure_locked_evaluation(
+                    python=args.python,
+                    evaluator_script=args.evaluator_script,
+                    protocol=protocol,
+                    authority=authority,
+                    run=run,
+                    stage=stage,
+                    variant=variant,
+                    audit=audit,
+                    environment=environment,
                 )
 
             if stage == "screen" and variant == "ra_glgm":

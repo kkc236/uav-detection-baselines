@@ -15,7 +15,6 @@ sys.path.insert(0, str(ROOT))
 
 from src.checkpoint_recovery import validate_checkpoint  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
-    RA_EXPERIMENT_PROTOCOL_SHA256,
     RA_STAGES,
     RA_VARIANTS,
     continuous_epochs,
@@ -178,9 +177,6 @@ def validate_optimizer_evidence(
         raise ValueError("optimizer evidence is empty")
 
     observed_epochs: list[int] = []
-    public_nonzero_epochs: set[int] = set()
-    fdr_nonzero_epochs: set[int] = set()
-    ra_nonzero_epochs: set[int] = set()
     for attempt, row in enumerate(rows, 1):
         epoch = row.get("completed_epoch")
         if (
@@ -210,21 +206,12 @@ def validate_optimizer_evidence(
                 raise ValueError(
                     f"optimizer {field} is non-finite or invalid at attempt {attempt}"
                 )
-            if float(value) > 0.0:
-                destination = (
-                    public_nonzero_epochs
-                    if field == "gradient_norm"
-                    else fdr_nonzero_epochs
-                )
-                destination.add(int(epoch))
         if variant == "ra_glgm":
             value = row.get("ra_glgm_gradient_norm")
             if not finite_number(value) or float(value) < 0.0:
                 raise ValueError(
                     f"optimizer RA private gradient is non-finite at attempt {attempt}"
                 )
-            if float(value) > 0.0:
-                ra_nonzero_epochs.add(int(epoch))
         observed_epochs.append(int(epoch))
 
     if observed_epochs != sorted(observed_epochs):
@@ -312,6 +299,14 @@ def record_optimizer_recovery_generation(
     data, _ = _optimizer_raw_lines(optimizer_path, len(rows))
     lineage_path = run / RECOVERY_LINEAGE_FILENAME
     existing = read_jsonl(lineage_path) if lineage_path.exists() else []
+    expected_lineage_sha = decision.get("recovery_lineage_sha256")
+    actual_lineage_sha = file_sha256(lineage_path) if existing else None
+    if (
+        decision.get("recovery_generation") != len(existing)
+        or expected_lineage_sha != actual_lineage_sha
+        or decision.get("optimizer_evidence_sha256") != file_sha256(optimizer_path)
+    ):
+        raise ValueError("resume decision became stale before recovery generation recording")
     generation = len(existing) + 1
     first = decision.get("trailing_uncommitted_attempt_first")
     last = decision.get("trailing_uncommitted_attempt_last")

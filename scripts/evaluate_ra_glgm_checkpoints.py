@@ -22,7 +22,6 @@ sys.path.insert(0, str(ROOT))
 from src.ra_experiment_protocol import (  # noqa: E402
     BASELINE_PARAMETERS,
     RA_EXPERIMENT_PROTOCOL,
-    RA_EXPERIMENT_PROTOCOL_SHA256,
     file_sha256,
     ignore_sidecar_signature,
     load_ra_authority,

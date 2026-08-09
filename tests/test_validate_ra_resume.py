@@ -554,3 +554,46 @@ def test_resume_rejects_manifest_with_recomputed_protocol_only_hash(tmp_path: Pa
             protocol_manifest=protocol,
             learnability_report=learnability,
         )
+
+
+def test_resume_rejects_current_source_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    monkeypatch.setattr(
+        protocol_module,
+        "current_source_identity",
+        lambda _root: {"git_commit": "f" * 40, "tree_sha256": "0" * 64},
+    )
+
+    with pytest.raises(ValueError, match="checked-out source differs"):
+        validate_resume(
+            run,
+            variant="baseline",
+            stage="screen",
+            protocol_manifest=protocol,
+            learnability_report=learnability,
+        )
+
+
+def test_recovery_generation_rejects_a_stale_optimizer_decision(tmp_path: Path) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    decision = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+    rows = _read_optimizer(run)
+    rows.append(
+        {
+            **rows[-1],
+            "optimizer_attempt": len(rows) + 1,
+            "completed_epoch": 4,
+        }
+    )
+    _write_optimizer(run, rows)
+
+    with pytest.raises(ValueError, match="became stale"):
+        record_optimizer_recovery_generation(run, decision)
