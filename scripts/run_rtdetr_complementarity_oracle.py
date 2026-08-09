@@ -104,6 +104,97 @@ def _extract_decoder_batch(
     return stock_output, boxes, logits
 
 
+def _model_state_sha256(detector: torch.nn.Module) -> str:
+    digest = hashlib.sha256()
+    for name, tensor in sorted(detector.state_dict().items()):
+        value = tensor.detach().cpu().contiguous()
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update(str(value.dtype).encode("ascii") + b"\0")
+        digest.update(str(tuple(value.shape)).encode("ascii") + b"\0")
+        digest.update(value.numpy().tobytes(order="C"))
+    return digest.hexdigest().upper()
+
+
+def _batch_targets(
+    batch: Mapping[str, Any], image_index: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    mask = batch["batch_idx"].view(-1).long() == image_index
+    boxes = batch["bboxes"][mask].detach().float().cpu().contiguous()
+    classes = batch["cls"][mask].view(-1).detach().long().cpu().contiguous()
+    return boxes, classes
+
+
+def _extract_paired_records(
+    fdr: torch.nn.Module,
+    frequencycm: torch.nn.Module,
+    loader: Any,
+    validator: Any,
+    *,
+    expected_count: int,
+) -> list[dict[str, Any]]:
+    if expected_count <= 0:
+        raise ValueError("expected_count must be positive")
+    for label, detector in (("FDR", fdr), ("FrequencyCM", frequencycm)):
+        if any(parameter.requires_grad for parameter in detector.parameters()):
+            raise RuntimeError(f"{label} detector must be frozen")
+        if any(parameter.grad is not None for parameter in detector.parameters()):
+            raise RuntimeError(f"{label} detector contains gradients")
+    states_before = (_model_state_sha256(fdr), _model_state_sha256(frequencycm))
+    records: list[dict[str, Any]] = []
+    for raw_batch in loader:
+        batch = validator.preprocess(raw_batch)
+        images = batch["img"]
+        _, fdr_boxes, fdr_logits = _extract_decoder_batch(fdr, images)
+        _, frequencycm_boxes, frequencycm_logits = _extract_decoder_batch(
+            frequencycm, images
+        )
+        image_ids = batch.get("im_file")
+        original_shapes = batch.get("ori_shape")
+        if (
+            not isinstance(image_ids, Sequence)
+            or isinstance(image_ids, (str, bytes))
+            or len(image_ids) != images.shape[0]
+        ):
+            raise RuntimeError("validator image identifiers are invalid")
+        if (
+            not isinstance(original_shapes, Sequence)
+            or isinstance(original_shapes, (str, bytes))
+            or len(original_shapes) != images.shape[0]
+        ):
+            raise RuntimeError("validator original shapes are invalid")
+        for image_index, image_id in enumerate(image_ids):
+            shape = tuple(int(value) for value in original_shapes[image_index])
+            if len(shape) != 2 or any(value <= 0 for value in shape):
+                raise RuntimeError("validator original shape must be positive height-width")
+            target_boxes, target_classes = _batch_targets(batch, image_index)
+            records.append(
+                {
+                    "image_id": Path(str(image_id)).name,
+                    "original_shape": shape,
+                    "fdr_boxes": fdr_boxes[image_index].cpu().contiguous().clone(),
+                    "fdr_logits": fdr_logits[image_index].cpu().contiguous().clone(),
+                    "frequencycm_boxes": frequencycm_boxes[image_index]
+                    .cpu()
+                    .contiguous()
+                    .clone(),
+                    "frequencycm_logits": frequencycm_logits[image_index]
+                    .cpu()
+                    .contiguous()
+                    .clone(),
+                    "target_boxes": target_boxes.clone(),
+                    "target_classes": target_classes.clone(),
+                }
+            )
+    if len(records) != expected_count:
+        raise RuntimeError(
+            f"paired evidence count mismatch: expected={expected_count}, actual={len(records)}"
+        )
+    states_after = (_model_state_sha256(fdr), _model_state_sha256(frequencycm))
+    if states_after != states_before:
+        raise RuntimeError("detector state changed during paired evidence extraction")
+    return records
+
+
 def _write_create_only(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() or path.is_symlink():

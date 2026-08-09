@@ -169,3 +169,66 @@ def test_checkpoint_hash_verification_is_exact_and_uppercase(tmp_path: Path) -> 
     assert module._verify_checkpoint(checkpoint, expected) == expected
     with pytest.raises(RuntimeError, match="checkpoint SHA-256 mismatch"):
         module._verify_checkpoint(checkpoint, "0" * 64)
+
+
+class _FakeValidator:
+    @staticmethod
+    def preprocess(batch):
+        return batch
+
+
+def _paired_batch() -> dict[str, object]:
+    return {
+        "img": torch.zeros((2, 3, 16, 16)),
+        "batch_idx": torch.tensor([0, 0, 1]),
+        "bboxes": torch.tensor(
+            [[0.5, 0.5, 0.2, 0.2], [0.2, 0.2, 0.1, 0.1], [0.4, 0.4, 0.3, 0.3]]
+        ),
+        "cls": torch.tensor([[0], [1], [2]]),
+        "im_file": ["000001.jpg", "000002.jpg"],
+        "ori_shape": [(540, 960), (540, 960)],
+    }
+
+
+def test_paired_record_extraction_uses_one_preprocessed_batch() -> None:
+    module = _load_module()
+    fdr = _FakeDetector()
+    frequencycm = _FakeDetector()
+
+    records = module._extract_paired_records(
+        fdr,
+        frequencycm,
+        [_paired_batch()],
+        _FakeValidator(),
+        expected_count=2,
+    )
+
+    assert [record["image_id"] for record in records] == [
+        "000001.jpg",
+        "000002.jpg",
+    ]
+    assert records[0]["original_shape"] == (540, 960)
+    assert records[0]["fdr_boxes"].shape == (300, 4)
+    assert records[0]["fdr_logits"].shape == (300, 10)
+    assert records[0]["frequencycm_boxes"].shape == (300, 4)
+    assert records[0]["frequencycm_logits"].shape == (300, 10)
+    assert records[0]["target_boxes"].shape == (2, 4)
+    assert records[0]["target_classes"].tolist() == [0, 1]
+    assert all(
+        value.device.type == "cpu" and not value.requires_grad
+        for record in records
+        for value in record.values()
+        if isinstance(value, torch.Tensor)
+    )
+
+
+def test_paired_record_extraction_rejects_wrong_image_count() -> None:
+    module = _load_module()
+    with pytest.raises(RuntimeError, match="evidence count mismatch"):
+        module._extract_paired_records(
+            _FakeDetector(),
+            _FakeDetector(),
+            [_paired_batch()],
+            _FakeValidator(),
+            expected_count=3,
+        )
