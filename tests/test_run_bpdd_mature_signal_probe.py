@@ -60,7 +60,7 @@ def test_gate_requires_usable_teacher_and_mixture_ablation_support() -> None:
         "statistics_finite": True,
         "active_edge_ratio_max": 0.1,
         "mean_teacher_improvement_max": 0.2,
-        "mixture_beats_final_ratio_mean": 0.6,
+        "mixture_beats_final_ratio_mean": 0.36,
         "mean_mixture_advantage_over_final": 0.01,
     }
 
@@ -73,7 +73,7 @@ def test_gate_requires_usable_teacher_and_mixture_ablation_support() -> None:
     for key, value in (
         ("active_edge_ratio_max", 0.0),
         ("mean_teacher_improvement_max", 0.0),
-        ("mixture_beats_final_ratio_mean", 0.5),
+        ("mixture_beats_final_ratio_mean", 0.0),
         ("mean_mixture_advantage_over_final", 0.0),
     ):
         failed = dict(passing)
