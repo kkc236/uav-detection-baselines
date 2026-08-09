@@ -296,7 +296,6 @@ class FDRDeformableTransformerDecoder(nn.Module):
                 if not self.training:
                     break
 
-            cumulative_corners = cumulative_corners
             reference = refined.detach() if self.training else refined
             output_detach = output.detach()
 

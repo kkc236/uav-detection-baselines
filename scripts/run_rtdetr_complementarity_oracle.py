@@ -8,8 +8,11 @@ import hashlib
 import io
 import json
 import os
+import random
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 import torch
+import numpy as np
 
 from src.iber_evaluation import compute_detection_metrics
 from src.iber_protocol import EXECUTION_ENVIRONMENT
@@ -30,6 +34,7 @@ from src.lpr_protocol import (
     dataset_signature,
 )
 from src.rtdetr_complementarity_oracle import (
+    _is_symlink_or_reparse,
     build_matched_quality_arm,
     candidate_iou_matrix,
     coverage_summary,
@@ -39,7 +44,11 @@ from src.rtdetr_complementarity_oracle import (
     visdrone_size_bucket,
     write_paired_cache,
 )
-from src.rtdetr_quality_oracle import flattened_topk
+from src.rtdetr_quality_oracle import (
+    _fsync_directory,
+    _publish_directory_no_replace,
+    flattened_topk,
+)
 
 
 IMAGE_SIZE = 640
@@ -81,6 +90,16 @@ def _device(value: str) -> torch.device:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA device 0 is unavailable")
     return torch.device("cuda:0")
+
+
+def _freeze_randomness() -> None:
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    torch.cuda.manual_seed_all(0)
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def _assert_stock_reproduction(
@@ -523,14 +542,18 @@ def _stock_utility(
 
 def _target_scales(record: Mapping[str, Any]) -> tuple[str, ...]:
     height, width = record["original_shape"]
-    # With the frozen square letterbox transform both box dimensions share the
-    # gain IMAGE_SIZE / max(original_height, original_width).  Normalized box
-    # widths/heights therefore map back through the same original long side.
-    original_long_side = max(height, width)
+    resized_height, resized_width = record["resized_shape"]
+    if (resized_height, resized_width) != (IMAGE_SIZE, IMAGE_SIZE):
+        raise RuntimeError(
+            "cached resized geometry differs from the frozen 640x640 contract"
+        )
+    gain = min(resized_height / height, resized_width / width)
+    if gain <= 0:
+        raise RuntimeError("cached resize gain must be positive")
     return tuple(
         visdrone_size_bucket(
-            float(box[2]) * original_long_side,
-            float(box[3]) * original_long_side,
+            float(box[2]) * resized_width / gain,
+            float(box[3]) * resized_height / gain,
         )
         for box in record["target_boxes"]
     )
@@ -599,6 +622,18 @@ def _missed_rows(coverage: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _validate_report_output_path(path: Path) -> Path:
+    root = Path(os.path.abspath(path))
+    for candidate in (root, *root.parents):
+        if os.path.lexists(candidate) and _is_symlink_or_reparse(candidate):
+            raise RuntimeError(
+                f"report output path crosses a symlink or reparse point: {candidate}"
+            )
+    if os.path.lexists(root):
+        raise FileExistsError(f"immutable report root already exists: {root}")
+    return root
+
+
 def _write_report_bundle(
     report_root: Path,
     payload: Mapping[str, Any],
@@ -608,7 +643,7 @@ def _write_report_bundle(
     missed_rows: Sequence[Mapping[str, Any]],
     arm_rows: Sequence[Mapping[str, Any]],
 ) -> None:
-    root = Path(report_root)
+    root = _validate_report_output_path(report_root)
     artifact_payloads = {
         "oracle-summary.json": _canonical_json(payload),
         "coverage-by-scale.csv": _csv_bytes(
@@ -652,20 +687,33 @@ def _write_report_bundle(
         f"`{payload['reproduction']['duplicate_fdr_neutral']}`\n"
     ).encode("utf-8")
     artifact_payloads["frequencycm-complementarity-report.md"] = markdown
-    for name in artifact_payloads:
-        path = root / name
-        if path.exists() or path.is_symlink():
-            raise FileExistsError(f"immutable report output already exists: {path}")
-    sums_path = root / "SHA256SUMS.txt"
-    if sums_path.exists() or sums_path.is_symlink():
-        raise FileExistsError(f"immutable report output already exists: {sums_path}")
-    for name, content in artifact_payloads.items():
-        _write_create_only(root / name, content)
     sums = "".join(
         f"{hashlib.sha256(content).hexdigest().upper()}  {name}\n"
         for name, content in sorted(artifact_payloads.items())
     ).encode("ascii")
-    _write_create_only(sums_path, sums)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    _validate_report_output_path(root)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent)
+    )
+    published = False
+    try:
+        for name, content in artifact_payloads.items():
+            _write_create_only(staging / name, content)
+        _write_create_only(staging / "SHA256SUMS.txt", sums)
+        _fsync_directory(staging)
+        _fsync_directory(root.parent)
+        _publish_directory_no_replace(staging, root)
+        published = True
+        _fsync_directory(root.parent)
+    except Exception:
+        if not published and os.path.lexists(staging):
+            shutil.rmtree(staging)
+            try:
+                _fsync_directory(root.parent)
+            except OSError:
+                pass
+        raise
 
 
 def run_from_records(
@@ -978,8 +1026,8 @@ def _run(args: argparse.Namespace) -> int:
     fdr_checkpoint = Path(args.fdr_checkpoint).resolve()
     frequencycm_checkpoint = Path(args.frequencycm_checkpoint).resolve()
     dataset_root = Path(args.dataset_root).resolve()
-    cache_root = Path(args.cache_root).resolve()
-    report_root = Path(args.report_root).resolve()
+    cache_root = Path(os.path.abspath(args.cache_root))
+    report_root = Path(os.path.abspath(args.report_root))
 
     fdr_sha256 = _verify_checkpoint(fdr_checkpoint, FDR_CHECKPOINT_SHA256)
     frequencycm_sha256 = _verify_checkpoint(
@@ -990,6 +1038,7 @@ def _run(args: argparse.Namespace) -> int:
     environment = _execution_environment()
     dataset = _dataset_authority(dataset_root)
     device = _device(args.device)
+    _freeze_randomness()
     cache_authority = {
         "fdr_sha256": fdr_sha256,
         "frequencycm_sha256": frequencycm_sha256,
@@ -1057,6 +1106,8 @@ def _run(args: argparse.Namespace) -> int:
             "nms": NMS,
             "device": "0",
             "classes": NUM_CLASSES,
+            "seed": 0,
+            "deterministic_algorithms": True,
         },
     }
     run_from_records(

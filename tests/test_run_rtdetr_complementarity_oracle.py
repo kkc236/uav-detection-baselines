@@ -269,8 +269,9 @@ def _oracle_record() -> dict[str, object]:
 
 def test_run_from_records_writes_every_frozen_output(tmp_path: Path) -> None:
     module = _load_module()
+    report_root = tmp_path / "report"
 
-    report = module.run_from_records([_oracle_record()], tmp_path)
+    report = module.run_from_records([_oracle_record()], report_root)
 
     expected = {
         "oracle-summary.json",
@@ -281,21 +282,22 @@ def test_run_from_records_writes_every_frozen_output(tmp_path: Path) -> None:
         "frequencycm-complementarity-report.md",
         "SHA256SUMS.txt",
     }
-    assert expected == {path.name for path in tmp_path.iterdir()}
+    assert expected == {path.name for path in report_root.iterdir()}
     assert report["interpretation"] == "non_deployable_design_selection_evidence"
     assert report["reproduction"]["duplicate_fdr_neutral"] is True
     assert report["coverage"]["tiny_small_recall50_delta"] > 0
     assert report["oracle"]["candidate_map_delta"] >= 0
     for name in expected - {"SHA256SUMS.txt"}:
-        assert name in (tmp_path / "SHA256SUMS.txt").read_text("ascii")
+        assert name in (report_root / "SHA256SUMS.txt").read_text("ascii")
 
 
 def test_run_from_records_is_create_only(tmp_path: Path) -> None:
     module = _load_module()
-    module.run_from_records([_oracle_record()], tmp_path)
+    report_root = tmp_path / "report"
+    module.run_from_records([_oracle_record()], report_root)
 
     with pytest.raises(FileExistsError):
-        module.run_from_records([_oracle_record()], tmp_path)
+        module.run_from_records([_oracle_record()], report_root)
 
 
 def test_device_is_frozen_to_available_cuda_zero(monkeypatch) -> None:
@@ -308,6 +310,25 @@ def test_device_is_frozen_to_available_cuda_zero(monkeypatch) -> None:
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="unavailable"):
         module._device("0")
+
+
+def test_randomness_freeze_is_repeatable() -> None:
+    module = _load_module()
+    module._freeze_randomness()
+    first = (
+        module.random.random(),
+        float(module.np.random.random()),
+        float(torch.rand(1)),
+    )
+    module._freeze_randomness()
+    second = (
+        module.random.random(),
+        float(module.np.random.random()),
+        float(torch.rand(1)),
+    )
+
+    assert first == second
+    assert torch.are_deterministic_algorithms_enabled()
 
 
 def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
@@ -343,6 +364,7 @@ def test_target_scales_undo_square_letterbox_gain_for_original_pixels() -> None:
     module = _load_module()
     record = {
         "original_shape": (540, 960),
+        "resized_shape": (640, 640),
         # A 16x16 object becomes 16/960 in each normalized dimension after
         # aspect-preserving letterbox to the frozen square input.
         "target_boxes": torch.tensor(
@@ -351,6 +373,18 @@ def test_target_scales_undo_square_letterbox_gain_for_original_pixels() -> None:
     }
 
     assert module._target_scales(record) == ("small",)
+
+
+def test_target_scales_rejects_nonfrozen_resized_geometry() -> None:
+    module = _load_module()
+    record = {
+        "original_shape": (540, 960),
+        "resized_shape": (384, 640),
+        "target_boxes": torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+    }
+
+    with pytest.raises(RuntimeError, match="resized geometry"):
+        module._target_scales(record)
 
 
 def test_best_same_class_iou_excludes_better_wrong_class_candidate() -> None:
@@ -369,3 +403,42 @@ def test_best_same_class_iou_excludes_better_wrong_class_candidate() -> None:
     )
 
     assert best.tolist() == pytest.approx([0.25])
+
+
+def test_atomic_report_failure_leaves_no_partial_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_module()
+    report_root = tmp_path / "report"
+    original = module._write_create_only
+    calls = 0
+
+    def fail_second(path: Path, payload: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected report failure")
+        original(path, payload)
+
+    monkeypatch.setattr(module, "_write_create_only", fail_second)
+    with pytest.raises(OSError, match="injected report failure"):
+        module.run_from_records([_oracle_record()], report_root)
+
+    assert not report_root.exists()
+    assert not tuple(tmp_path.glob(".report.staging-*"))
+
+
+def test_report_path_rejects_symlink_or_reparse_parent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_module()
+    unsafe_parent = tmp_path / "unsafe"
+    unsafe_parent.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_is_symlink_or_reparse",
+        lambda path: Path(path) == unsafe_parent,
+    )
+
+    with pytest.raises(RuntimeError, match="symlink or reparse"):
+        module._validate_report_output_path(unsafe_parent / "report")
