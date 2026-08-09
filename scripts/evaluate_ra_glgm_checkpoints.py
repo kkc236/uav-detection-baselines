@@ -299,6 +299,20 @@ def _validate_checkpoint_model(model: Any, *, variant: str) -> int:
     return parameters
 
 
+def _load_saved_predictions(result: Any) -> list[dict[str, Any]]:
+    """Read the validator's structured JSON output across Ultralytics versions."""
+
+    prediction_path = Path(result.save_dir).resolve() / "predictions.json"
+    if prediction_path.is_symlink() or not prediction_path.is_file():
+        raise FileNotFoundError(
+            f"locked evaluator prediction JSON is missing: {prediction_path}"
+        )
+    payload = json.loads(prediction_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not all(isinstance(row, Mapping) for row in payload):
+        raise ValueError("locked evaluator prediction JSON must contain a list of objects")
+    return [dict(row) for row in payload]
+
+
 def evaluate(
     *,
     run_dir: str | Path,
@@ -385,7 +399,7 @@ def evaluate(
             for index, class_id in enumerate(box.ap_class_index)
         }
         class_ap = [class_ap_by_id[index] for index in range(10)]
-        predictions = list(model.validator.jdict)
+        predictions = _load_saved_predictions(result)
         area = _coco_area_metrics(predictions, ground_truth, image_ids)
         row = {
             "completed_epoch": epoch,

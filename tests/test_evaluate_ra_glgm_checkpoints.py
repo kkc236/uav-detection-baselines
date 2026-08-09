@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from scripts.evaluate_ra_glgm_checkpoints import (
     COCO_CATEGORY_IDS,
     MAX_DETECTIONS_PER_IMAGE,
     _coco_category_id,
+    _load_saved_predictions,
     _normalized_640_area,
     _ordered_names,
     _validated_predictions,
@@ -62,3 +66,17 @@ def test_tiny_small_area_is_normalized_to_640_not_source_resolution() -> None:
     # 0.02 x 0.02 is 163.84 square pixels on the frozen 640 canvas,
     # independently of the source-resolution image dimensions.
     assert _normalized_640_area(0.02, 0.02) == pytest.approx(163.84)
+
+
+def test_saved_predictions_are_loaded_from_validator_output(tmp_path) -> None:
+    rows = [{"image_id": "sample", "category_id": 1, "bbox": [0, 0, 1, 1]}]
+    (tmp_path / "predictions.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    assert _load_saved_predictions(SimpleNamespace(save_dir=tmp_path)) == rows
+
+
+def test_saved_predictions_reject_non_object_rows(tmp_path) -> None:
+    (tmp_path / "predictions.json").write_text("[1]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="list of objects"):
+        _load_saved_predictions(SimpleNamespace(save_dir=tmp_path))
