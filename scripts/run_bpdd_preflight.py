@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 GATE_ORDER = ("B0", "B1", "B2", "B3", "B4")
 FIXED_RUNTIME = {"device": "cuda:0", "batch": 8, "imgsz": 640, "amp_scale": 128.0}
 SCREEN_AUTHORITY = {"schedule_epochs": 50, "cutoff_epoch": 30, "seed": 0}

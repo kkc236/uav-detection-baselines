@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from pathlib import Path
+import inspect
 
 import src.bpdd_runtime_preflight as runtime
 from src.bpdd_runtime_preflight import summarize_assignment_continuity
@@ -50,6 +51,13 @@ def test_assignment_continuity_handles_empty_final_assignment() -> None:
 def test_default_runtime_exposes_all_five_bpdd_gates() -> None:
     for name in ("run_b0", "run_b1", "run_b2", "run_b3", "run_b4"):
         assert callable(getattr(runtime, name))
+
+
+def test_preflight_cli_bootstraps_repository_root_before_runtime_imports() -> None:
+    import scripts.run_bpdd_preflight as cli
+
+    source = inspect.getsource(cli)
+    assert "sys.path.insert(0, str(ROOT))" in source
 
 
 def test_ordered_preflight_fails_closed_and_blocks_later_gates(tmp_path: Path) -> None:
