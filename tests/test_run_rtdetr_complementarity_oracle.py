@@ -86,6 +86,28 @@ def test_runner_is_bound_to_exact_checkpoint_authorities() -> None:
     assert module.FREQUENCYCM_TRAIN_ENDPOINT["ap75"] == pytest.approx(
         0.29008629839406985
     )
+    assert module.FDR_INDEPENDENT_EVALUATOR_AUTHORITY == pytest.approx(
+        {
+            "precision": 0.5691126151072722,
+            "recall": 0.49277710639408445,
+            "ap50": 0.48468375790335755,
+            "ap75": 0.29252552290080275,
+            "map": 0.289659749097641,
+            "ap_tiny": 0.14479634888637893,
+            "ap_small": 0.2899815508690768,
+        }
+    )
+    assert module.FREQUENCYCM_INDEPENDENT_EVALUATOR_AUTHORITY == pytest.approx(
+        {
+            "precision": 0.5677066100719492,
+            "recall": 0.48872966518590005,
+            "ap50": 0.47958417750977145,
+            "ap75": 0.29031845090890795,
+            "map": 0.28617480114898347,
+            "ap_tiny": 0.14395574915129714,
+            "ap_small": 0.28490162249703355,
+        }
+    )
 
 
 def test_report_writer_is_create_only_and_labels_oracle_non_deployable(
@@ -331,7 +353,7 @@ def test_randomness_freeze_is_repeatable() -> None:
     assert torch.are_deterministic_algorithms_enabled()
 
 
-def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
+def test_stock_reproduction_separates_endpoint_ap_gate_from_independent_identity() -> None:
     module = _load_module()
     endpoint = {
         "precision": 0.5,
@@ -341,8 +363,8 @@ def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
         "map": 0.2,
     }
     metrics = {
-        "precision": 0.5004,
-        "recall": 0.3996,
+        "precision": 0.5013,
+        "recall": 0.3992,
         "ap50": 0.3004,
         "map": 0.1996,
         "ap75": 0.1,
@@ -350,14 +372,59 @@ def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
         "ap_small": 0.15,
     }
 
-    report = module._assert_stock_reproduction(metrics, endpoint, label="test")
+    independent = dict(metrics)
+    report = module._assert_stock_reproduction(
+        metrics, endpoint, independent, label="test"
+    )
 
     assert report["passed"] is True
-    assert report["tolerance"] == 0.0005
+    assert report["training_endpoint_reproduction"]["gate_metrics"] == [
+        "ap50",
+        "ap75",
+        "map",
+    ]
+    assert report["training_endpoint_reproduction"]["tolerance"] == 0.0005
+    assert report["independent_evaluator_reproduction"]["tolerance"] == 1e-12
+    assert report["training_endpoint_reproduction"]["deltas"]["precision"] == pytest.approx(
+        0.0013
+    )
     with pytest.raises(RuntimeError, match="stock reconstruction mismatch"):
         module._assert_stock_reproduction(
-            {**metrics, "map": 0.1994}, endpoint, label="test"
+            {**metrics, "map": 0.1994}, endpoint, independent, label="test"
         )
+    with pytest.raises(RuntimeError, match="independent evaluator mismatch"):
+        module._assert_stock_reproduction(
+            {**metrics, "precision": 0.5014},
+            endpoint,
+            independent,
+            label="test",
+        )
+
+
+def test_cached_ancestor_source_can_be_resumed_without_rewriting_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_module()
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    current = {
+        "fdr_sha256": "A" * 64,
+        "frequencycm_sha256": "B" * 64,
+        "dataset_sha256": "C" * 64,
+        "evaluator_sha256": "D" * 64,
+        "source_commit": "2" * 40,
+    }
+    cached = {**current, "source_commit": "1" * 40}
+    (cache_root / "manifest.json").write_text(
+        json.dumps({"authority": cached}), encoding="utf-8"
+    )
+    monkeypatch.setattr(module, "_commit_is_ancestor", lambda old, new: True)
+
+    assert module._cache_authority_for_resume(cache_root, current) == cached
+
+    changed = {**current, "evaluator_sha256": "E" * 64}
+    with pytest.raises(RuntimeError, match="cache authority mismatch"):
+        module._cache_authority_for_resume(cache_root, changed)
 
 
 def test_target_scales_undo_square_letterbox_gain_for_original_pixels() -> None:

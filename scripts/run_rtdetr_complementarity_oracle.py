@@ -68,6 +68,8 @@ FREQUENCYCM_CHECKPOINT_SHA256 = (
 FREQUENCYCM_SOURCE_COMMIT = "d3655b14c17a3c8ca14e1888517b6fde4e059766"
 FDR_SOURCE_COMMIT = "d97e1eb7"
 STOCK_REPRODUCTION_TOLERANCE = 0.0005
+INDEPENDENT_EVALUATOR_TOLERANCE = 1e-12
+TRAINING_ENDPOINT_GATE_METRICS = ("ap50", "ap75", "map")
 FDR_TRAIN_ENDPOINT = {
     "precision": 0.56778,
     "recall": 0.49350,
@@ -81,6 +83,24 @@ FREQUENCYCM_TRAIN_ENDPOINT = {
     "ap50": 0.47947,
     "ap75": 0.29008629839406985,
     "map": 0.28609,
+}
+FDR_INDEPENDENT_EVALUATOR_AUTHORITY = {
+    "precision": 0.5691126151072722,
+    "recall": 0.49277710639408445,
+    "ap50": 0.48468375790335755,
+    "ap75": 0.29252552290080275,
+    "map": 0.289659749097641,
+    "ap_tiny": 0.14479634888637893,
+    "ap_small": 0.2899815508690768,
+}
+FREQUENCYCM_INDEPENDENT_EVALUATOR_AUTHORITY = {
+    "precision": 0.5677066100719492,
+    "recall": 0.48872966518590005,
+    "ap50": 0.47958417750977145,
+    "ap75": 0.29031845090890795,
+    "map": 0.28617480114898347,
+    "ap_tiny": 0.14395574915129714,
+    "ap_small": 0.28490162249703355,
 }
 
 
@@ -105,30 +125,62 @@ def _freeze_randomness() -> None:
 def _assert_stock_reproduction(
     metrics: Mapping[str, float],
     endpoint: Mapping[str, float],
+    independent_authority: Mapping[str, float],
     *,
     label: str,
 ) -> dict[str, Any]:
     if set(endpoint) != {"precision", "recall", "ap50", "ap75", "map"}:
         raise ValueError("stock endpoint schema is invalid")
-    missing = set(endpoint) - set(metrics)
+    missing = (set(endpoint) | set(independent_authority)) - set(metrics)
     if missing:
         raise RuntimeError(f"{label} stock metrics are missing: {sorted(missing)}")
-    deltas = {
+    endpoint_deltas = {
         name: float(metrics[name]) - float(expected)
         for name, expected in endpoint.items()
     }
-    if any(abs(delta) > STOCK_REPRODUCTION_TOLERANCE for delta in deltas.values()):
+    if any(
+        abs(endpoint_deltas[name]) > STOCK_REPRODUCTION_TOLERANCE
+        for name in TRAINING_ENDPOINT_GATE_METRICS
+    ):
         raise RuntimeError(
             f"{label} stock reconstruction mismatch: endpoint={dict(endpoint)}, "
-            f"actual={dict(metrics)}, deltas={deltas}, "
+            f"actual={dict(metrics)}, deltas={endpoint_deltas}, "
             f"tolerance={STOCK_REPRODUCTION_TOLERANCE}"
+        )
+    independent_deltas = {
+        name: float(metrics[name]) - float(expected)
+        for name, expected in independent_authority.items()
+    }
+    if any(
+        abs(delta) > INDEPENDENT_EVALUATOR_TOLERANCE
+        for delta in independent_deltas.values()
+    ):
+        raise RuntimeError(
+            f"{label} independent evaluator mismatch: "
+            f"expected={dict(independent_authority)}, actual={dict(metrics)}, "
+            f"deltas={independent_deltas}, "
+            f"tolerance={INDEPENDENT_EVALUATOR_TOLERANCE}"
         )
     return {
         "passed": True,
-        "tolerance": STOCK_REPRODUCTION_TOLERANCE,
-        "training_endpoint": dict(endpoint),
-        "independent_evaluator": dict(metrics),
-        "deltas": deltas,
+        "training_endpoint_reproduction": {
+            "passed": True,
+            "gate_metrics": list(TRAINING_ENDPOINT_GATE_METRICS),
+            "tolerance": STOCK_REPRODUCTION_TOLERANCE,
+            "expected": dict(endpoint),
+            "actual": {name: float(metrics[name]) for name in endpoint},
+            "deltas": endpoint_deltas,
+            "precision_recall_are_diagnostics_only": True,
+        },
+        "independent_evaluator_reproduction": {
+            "passed": True,
+            "tolerance": INDEPENDENT_EVALUATOR_TOLERANCE,
+            "expected": dict(independent_authority),
+            "actual": {
+                name: float(metrics[name]) for name in independent_authority
+            },
+            "deltas": independent_deltas,
+        },
     }
 
 
@@ -206,6 +258,47 @@ def _assert_source_authority(current: str) -> None:
             raise RuntimeError(
                 f"required source authority is not an ancestor: {authority}"
             )
+
+
+def _commit_is_ancestor(ancestor: str, descendant: str) -> bool:
+    for value in (ancestor, descendant):
+        if len(value) != 40 or any(
+            character not in "0123456789abcdef" for character in value.lower()
+        ):
+            raise RuntimeError("cache source commit must be 40 hexadecimal characters")
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return result.returncode == 0
+
+
+def _cache_authority_for_resume(
+    cache_root: Path, current_authority: Mapping[str, str]
+) -> dict[str, str]:
+    manifest_path = Path(cache_root) / "manifest.json"
+    if _is_symlink_or_reparse(manifest_path) or not manifest_path.is_file():
+        raise RuntimeError("cache manifest is not a regular file")
+    try:
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("cache manifest is invalid") from error
+    cached = manifest.get("authority")
+    if not isinstance(cached, dict) or set(cached) != set(current_authority):
+        raise RuntimeError("cache authority schema mismatch")
+    for name, expected in current_authority.items():
+        if name != "source_commit" and cached.get(name) != expected:
+            raise RuntimeError(f"cache authority mismatch: {name}")
+    cached_source = cached.get("source_commit")
+    current_source = current_authority.get("source_commit")
+    if not isinstance(cached_source, str) or not isinstance(current_source, str):
+        raise RuntimeError("cache source authority is invalid")
+    if not _commit_is_ancestor(cached_source, current_source):
+        raise RuntimeError("cache source is not an ancestor of execution source")
+    return {name: str(value) for name, value in cached.items()}
 
 
 def _execution_environment() -> dict[str, Any]:
@@ -722,6 +815,9 @@ def run_from_records(
     *,
     authority: Mapping[str, Any] | None = None,
     stock_authorities: Mapping[str, Mapping[str, float]] | None = None,
+    independent_evaluator_authorities: (
+        Mapping[str, Mapping[str, float]] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Evaluate a frozen paired cache and write all non-deployable oracle evidence."""
 
@@ -873,12 +969,23 @@ def run_from_records(
     if stock_authorities is not None:
         if set(stock_authorities) != {"fdr", "frequencycm"}:
             raise ValueError("stock authority arms must be exactly fdr and frequencycm")
+        if (
+            independent_evaluator_authorities is None
+            or set(independent_evaluator_authorities) != {"fdr", "frequencycm"}
+        ):
+            raise ValueError(
+                "independent evaluator authorities must be exactly fdr and frequencycm"
+            )
         reproduction["fdr"] = _assert_stock_reproduction(
-            arm_metrics["fdr_stock"], stock_authorities["fdr"], label="FDR"
+            arm_metrics["fdr_stock"],
+            stock_authorities["fdr"],
+            independent_evaluator_authorities["fdr"],
+            label="FDR",
         )
         reproduction["frequencycm"] = _assert_stock_reproduction(
             arm_metrics["frequencycm_stock"],
             stock_authorities["frequencycm"],
+            independent_evaluator_authorities["frequencycm"],
             label="FrequencyCM",
         )
 
@@ -1049,8 +1156,12 @@ def _run(args: argparse.Namespace) -> int:
         "source_commit": source_commit,
     }
 
+    loaded_cache_authority = cache_authority
     if cache_root.exists() or cache_root.is_symlink():
-        records = load_paired_cache(cache_root, cache_authority)
+        loaded_cache_authority = _cache_authority_for_resume(
+            cache_root, cache_authority
+        )
+        records = load_paired_cache(cache_root, loaded_cache_authority)
     else:
         loader, validator = _build_validation_loader(
             dataset_root,
@@ -1096,6 +1207,7 @@ def _run(args: argparse.Namespace) -> int:
             "path": str(cache_root),
             "manifest_sha256": manifest_sha256,
             "records": len(records),
+            "source_commit": loaded_cache_authority["source_commit"],
         },
         "protocol": {
             "imgsz": IMAGE_SIZE,
@@ -1117,6 +1229,10 @@ def _run(args: argparse.Namespace) -> int:
         stock_authorities={
             "fdr": FDR_TRAIN_ENDPOINT,
             "frequencycm": FREQUENCYCM_TRAIN_ENDPOINT,
+        },
+        independent_evaluator_authorities={
+            "fdr": FDR_INDEPENDENT_EVALUATOR_AUTHORITY,
+            "frequencycm": FREQUENCYCM_INDEPENDENT_EVALUATOR_AUTHORITY,
         },
     )
     return 0

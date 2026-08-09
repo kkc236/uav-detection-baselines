@@ -33,7 +33,7 @@ Run each checkpoint once through the frozen validation loader and cache, per ima
 - query index and model source;
 - all ground-truth boxes, classes, and size bucket labels.
 
-Cache files are immutable and include checkpoint, data, evaluator, source, and content SHA-256 values. A stock reconstruction from each cache must reproduce that checkpoint's ordinary Precision, Recall, AP50, AP75, and mAP50-95 within the evaluator's frozen numerical tolerance before any oracle calculation is accepted.
+Cache files are immutable and include checkpoint, data, evaluator, source, and content SHA-256 values. Before any oracle calculation is accepted, each stock reconstruction must reproduce AP50, AP75, and mAP50-95 against the frozen Ultralytics training endpoint within `0.0005`, and must independently reproduce Precision, Recall, AP50, AP75, mAP50-95, AP-tiny, and AP-small against the exact project evaluator authority within `1e-12`. Training-endpoint Precision/Recall remain diagnostic because their operating-point implementation is not numerically identical to the independent evaluator; the two identities are stored separately and are never interchanged.
 
 ## 5. Oracle family
 

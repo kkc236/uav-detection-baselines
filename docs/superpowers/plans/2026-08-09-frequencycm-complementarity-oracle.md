@@ -350,7 +350,7 @@ Add runtime assertions that shared preprocessing tensors, image IDs, target boxe
 
 - [ ] **Step 4: Implement stock reconstruction gate**
 
-Use `src.rtdetr_quality_oracle.flattened_topk` and `src.iber_evaluation.compute_detection_metrics` to reconstruct ordinary FDR and FrequencyCM metrics. Abort unless FDR reproduces its frozen endpoint/evaluator authority and FrequencyCM reproduces its checkpoint endpoint within the explicitly stored tolerance. Record both training-endpoint and independent-evaluator identities separately rather than treating them as interchangeable.
+Use `src.rtdetr_quality_oracle.flattened_topk` and `src.iber_evaluation.compute_detection_metrics` to reconstruct ordinary FDR and FrequencyCM metrics. Abort unless AP50, AP75, and mAP50-95 reproduce each frozen training endpoint within `0.0005`, and all independent-evaluator metrics reproduce their exact cache-derived authority within `1e-12`. Training-endpoint Precision/Recall are recorded only as diagnostics because that operating point is not numerically identical to the project evaluator. Record both identities separately rather than treating them as interchangeable.
 
 - [ ] **Step 5: Run CLI tests and commit**
 
