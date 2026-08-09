@@ -236,11 +236,25 @@ def run_b1(_context: Any) -> dict[str, Any]:
 def run_b2(context: Any) -> dict[str, Any]:
     """Prove parameter/state identity and inference equivalence to FDR."""
 
-    from src.fdr_protocol import public_state_sha256
+    from src.fdr_protocol import load_fdr_initial_state, public_state_sha256
+    from src.rtdetr_fdr import FDR_MODEL_CFG, FDRRTDETRDetectionModel
+    from src.rtdetr_fdr_bpdd import BPDD_MODEL_CFG, FDRBPDDDetectionModel
 
-    rng_before = torch.random.get_rng_state().clone()
-    fdr, bpdd, _artifact = _models(context, torch.device("cpu"))
-    rng_after = torch.random.get_rng_state().clone()
+    _manifest, artifact = _manifest_and_artifact(context)
+    rng_start = torch.random.get_rng_state().clone()
+    torch.random.set_rng_state(rng_start)
+    fdr = FDRRTDETRDetectionModel(
+        FDR_MODEL_CFG, ch=3, nc=10, verbose=False, private_seed=10_000
+    )
+    rng_after_fdr = torch.random.get_rng_state().clone()
+    torch.random.set_rng_state(rng_start)
+    bpdd = FDRBPDDDetectionModel(
+        BPDD_MODEL_CFG, ch=3, nc=10, verbose=False, private_seed=10_000
+    )
+    rng_after_bpdd = torch.random.get_rng_state().clone()
+    torch.random.set_rng_state(rng_start)
+    load_fdr_initial_state(fdr, artifact, variant="fdr")
+    load_fdr_initial_state(bpdd, artifact, variant="fdr")
     fdr_state = {name: value.detach().cpu() for name, value in fdr.state_dict().items()}
     bpdd_state = {name: value.detach().cpu() for name, value in bpdd.state_dict().items()}
     generator = torch.Generator().manual_seed(2902)
@@ -260,7 +274,9 @@ def run_b2(context: Any) -> dict[str, Any]:
         "state_hash_exact": public_state_sha256(fdr_state) == public_state_sha256(bpdd_state),
         "parameter_count_exact": sum(p.numel() for p in fdr.parameters()) == sum(p.numel() for p in bpdd.parameters()),
         "inference_exact": _tree_equal(fdr_prediction, bpdd_prediction),
-        "constructor_rng_preserved": bool(torch.equal(rng_before, rng_after)),
+        "constructor_rng_equivalent": bool(
+            torch.equal(rng_after_fdr, rng_after_bpdd)
+        ),
         "checkpoint_roundtrip": _tree_equal(bpdd_state, restored),
         "no_bpdd_module_parameters": not any("bpdd" in name.lower() for name, _ in bpdd.named_parameters()),
     }

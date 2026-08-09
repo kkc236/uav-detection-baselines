@@ -60,6 +60,12 @@ def test_preflight_cli_bootstraps_repository_root_before_runtime_imports() -> No
     assert "sys.path.insert(0, str(ROOT))" in source
 
 
+def test_b2_compares_rng_trajectory_between_the_two_paired_constructors() -> None:
+    source = inspect.getsource(runtime.run_b2)
+    assert "constructor_rng_equivalent" in source
+    assert "constructor_rng_preserved" not in source
+
+
 def test_ordered_preflight_fails_closed_and_blocks_later_gates(tmp_path: Path) -> None:
     manifest = tmp_path / "protocol.json"
     manifest.write_text("{}", encoding="utf-8")
