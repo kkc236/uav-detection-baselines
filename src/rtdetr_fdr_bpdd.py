@@ -108,8 +108,12 @@ class FDRBPDDTrainer(FDRTrainer):
         weights: str | None = None,
         verbose: bool = True,
     ) -> FDRBPDDDetectionModel:
+        # Resume checkpoints may carry the plain FDR YAML. BPDD has an identical
+        # state contract, so normalize the graph authority to the candidate YAML
+        # before strictly loading those tensors.
+        del cfg
         model = FDRBPDDDetectionModel(
-            cfg or BPDD_MODEL_CFG,
+            BPDD_MODEL_CFG,
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,
