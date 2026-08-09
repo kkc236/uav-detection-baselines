@@ -1,14 +1,14 @@
-# FDR-RTDETR-L：面向 VisDrone 定位回归的细粒度分布细化方法与阶段性验证
+# FDR-RTDETR-L：面向 VisDrone 定位回归的细粒度分布细化方法与正式验证
 
-> 文档性质：论文“方法设计—实现细节—实验设置—阶段性结果”章节草稿
-> 证据快照时间：2026-08-04 19:15（Asia/Shanghai）
-> 当前结论边界：固定 10% 子集 seed0 的 30 epoch 配对筛选已经完成并通过 Gate2；全数据 seed0 的 100 epoch 正式训练正在进行，本文不把中间轮次写成最终结果。
+> 文档性质：论文“方法设计—实现细节—实验设置—正式结果”章节草稿
+> 证据更新时间：2026-08-09（Asia/Shanghai）
+> 当前结论边界：固定 10% 子集 seed0 paired Screen30 已通过 Gate2；全数据 seed0 的 FDR 与同 formal authority stock Control 均已完成 100 epoch。统一独立复评显示 mAP50-95 `0.21911 → 0.28966`（`+7.055 pp`）。该结果仍限于 seed0，且 exact-checkpoint tensor identity、最终 latency 和多 seed 统计尚未封口。
 
 ## 摘要
 
 针对 RT-DETR 在密集小目标场景中直接回归四维边界框时定位表达粒度有限的问题，本文在 Ultralytics RT-DETR-L 基线上迁移 D-FINE 的 Fine-grained Distribution Refinement（FDR）与 Fine-Grained Localization（FGL）机制，构建 FDR-RTDETR-L。该方法不改变主干网络、混合编码器、Query 选择、Transformer 解码层、分类分支、匈牙利匹配、Top-300 后处理与 NMS 设置，仅将六层解码器中的四维连续框回归头替换为每条边 33 个离散位置、共 132 维输出的分布回归头，并增加一个由原第 0 层回归头复制得到的 preliminary box 分支。各解码层在同一 preliminary box 参考系内累计分布残差，经非均匀 Integral 解码为四边距离，再恢复为边界框；训练阶段复用原始匹配索引，增加 IoU 加权的相邻分箱 FGL 损失与 preliminary box 的 L1/GIoU 监督。因此，当前实际实验臂是“FDR 表示 + FGL + preliminary-box 辅助定位”的完整组合，而不是仅替换输出维度的单一变量。
 
-为排除训练协议漂移，control 与 FDR 使用相同公共参数初始化、样本顺序、数据增强随机序列、优化器、AMP、验证流程和指标代码。F0--F4 工程与表示门检全部通过。在固定 647 张训练子集、548 张验证集、seed0、共同 50-epoch 学习率计划并于第 30 轮冻结比较的配对筛选中，FDR 相对 control 的最终 mAP、尾三轮平均 mAP 和最终 AP75 分别提高 0.01801、0.0156367 和 0.0154279，满足配对评估前以代码冻结的 Gate2。随后已从相同正式初始状态在 6471 张完整训练集上重新启动 100 epoch 训练；截至本文快照已完成 12 epoch，当前 mAP 为 0.13073。由于正式训练尚未完成，本文只将 30-epoch 结果解释为“进入正式实验的筛选证据”，不据此宣称最终优于 100-epoch baseline。
+为排除训练协议漂移，Control 与 FDR 使用相同公共参数初始化、样本顺序、数据增强随机序列、优化器、AMP、验证流程和指标代码。F0--F4 工程与表示门检全部通过。在固定 647 张训练子集、548 张验证集和 seed0 的配对筛选中，FDR 相对 Control 的最终 mAP、尾三轮平均 mAP 和最终 AP75 分别提高 `0.01801`、`0.0156367` 和 `0.0154279`，通过代码冻结的 Gate2。随后 FDR 与 stock Control 均在 6471 张完整训练集上从相同 formal authority fresh 完成 100 epoch。统一 same-evaluator 对 548 张验证图和 38,759 个目标进行独立复评后，FDR 的 Precision、Recall、F1、AP50、AP75 和 mAP50-95 分别较 Control 提高 `10.150/7.546/8.827/9.805/7.951/7.055 pp`；Tiny、Small、Medium、Large 以及十个类别的 mAP、AP50 和 AP75 全部正向。正式结果与完整证据边界见[严格 Control 与完整结果报告](../../docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md)。
 
 **关键词：** RT-DETR；D-FINE；细粒度分布回归；边界框定位；VisDrone；小目标检测
 
@@ -409,11 +409,11 @@ formal_eligible = true
 
 ---
 
-## 8. 全数据 100-epoch 正式实验的当前状态
+## 8. 全数据 100-epoch 正式实验与严格 Control
 
-### 8.1 启动条件与运行状态
+### 8.1 FDR formal100 完成状态
 
-Gate2 通过后，正式实验已使用：
+Gate2 通过后，FDR 正式实验使用：
 
 ```text
 stage: formal
@@ -426,35 +426,36 @@ initialization: shared formal seed0 initial state
 resume from screen: false
 ```
 
-截至本次冻结快照 2026-08-04 19:15，已完成 12/100 epoch，训练进程和 RTX 4090 计算仍在运行。第 1--12 epoch 的本地 checkpoint、manifest、轻量训练证据和 publication queue 均已产生；后台同步器异步发布滚动 checkpoint，训练不会等待远端发布完成。已完成远端核验的 epoch10 checkpoint 文件名为 `fdr-formal-seed0-fdr-d97e1eb7-epoch-0010.pt`，SHA256 为 `4966CAB23869781A3B1BBBF492FFE392C4D28E7FA4DC4086104B0A35B813BD01`。
+FDR 已完成 `100/100` epoch。epoch98--100 的训练日志 mAP50-95 为 `0.29007/0.28996/0.28971`；epoch100 checkpoint 为 `fdr-formal-seed0-fdr-d97e1eb7-epoch-0100.pt`，SHA-256 为 `C2F638744508ADFE7B6C4A1EF3E08C503273F628062E4650AD59FFFF4C6588C2`，大小为 200,024,985 bytes。100 轮轻量结果位于远端 `training-results` 分支，epoch98--100 重 checkpoint 位于 GitHub Release [`fdr-formal-d97e1eb7-live`](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live)。
 
-### 8.2 当前训练轨迹（非最终结果）
+### 8.2 严格 stock Control 重跑
 
-| Epoch | Precision | Recall | mAP50 | mAP50-95 | AP75 |
-|---:|---:|---:|---:|---:|---:|
-| 8 | 0.21338 | 0.23891 | 0.14548 | 0.08048 | 0.0788152 |
-| 9 | 0.25771 | 0.25605 | 0.17717 | 0.09882 | 0.0958046 |
-| 10 | 0.27241 | 0.27239 | 0.19399 | **0.11036** | **0.1091642** |
-| 11 | 0.29417 | 0.28102 | 0.20946 | 0.11559 | 0.1120824 |
-| 12 | 0.31498 | 0.30281 | 0.22916 | **0.13073** | **0.1287715** |
+此前历史 matched baseline 与 FDR formal 在 optimizer、warmup bias lr 和 initial-state authority 上存在差异，因此只适合作为早期参考。随后使用 FDR formal authority fresh 启动 stock Control，保持数据、seed、公共初始化、MuSGD、batch、AMP、增强、验证和 checkpoint 规则一致；Control 不继承 FDR 或 Screen checkpoint。
 
-快照内 mAP 和 AP75 总体上升，尚未出现非有限损失、AMP skipped step 或本地 checkpoint 断链。但这些数值只是中间训练轨迹，不能与 100-epoch baseline 的最终指标直接相减。F0--F4 与 epoch10 归档见 [`live-snapshot-epoch0010`](./evidence/d97e1eb7/live-snapshot-epoch0010)；epoch12 只读状态更新见 [`runtime-update-epoch0012`](./evidence/d97e1eb7/runtime-update-epoch0012)。
+严格 Control 已完成 `100/100` epoch。公开 Release 保存 epoch98--100 checkpoint 和 manifest，其中 epoch100 checkpoint SHA-256 为 `9C242711F44B7E68B360AF904AB7C44F64505C7136B7E7F90481092AE3308AF7`，大小为 197,665,100 bytes。证据位于 [`fdr-formal-control-d97e1eb7-live`](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-control-d97e1eb7-live)。当前不需要再次重跑 seed0 Control；若补多 seed，必须成对补 Control/FDR。
 
-### 8.3 正式 baseline authority
+### 8.3 统一独立复评正式结果
 
-现有冻结 matched RT-DETR-L baseline checkpoint 在统一 evaluator 下的 authority metrics 为：
+两臂在 548 张 val、38,759 个目标、`imgsz=640`、`batch=8`、`conf=0.001`、`NMS=false`、`max_det=300` 下由同一 evaluator 复评：
 
-| Precision | Recall | AP50 | AP75 | mAP50-95 | AP-tiny | AP-small |
-|---:|---:|---:|---:|---:|---:|---:|
-| 0.5119369 | 0.4352546 | 0.4143947 | 0.2391638 | 0.2416484 | 0.1031486 | 0.2416615 |
+| 指标 | 严格 Control | FDR | FDR - Control |
+|---|---:|---:|---:|
+| Precision | 0.46761 | 0.56911 | **+10.150 pp** |
+| Recall | 0.41731 | 0.49278 | **+7.546 pp** |
+| F1 | 0.43657 | 0.52484 | **+8.827 pp** |
+| AP50 | 0.38663 | 0.48468 | **+9.805 pp** |
+| AP75 | 0.21302 | 0.29253 | **+7.951 pp** |
+| mAP50-95 | 0.21911 | 0.28966 | **+7.055 pp** |
 
-该表是“历史 checkpoint + 统一 evaluator”的指标 authority，不自动解决第 5.4 节所述旧协议文档冲突。最终只有在 FDR 100 epoch 完成、独立 evaluator 使用相同验证预处理和类别映射重新评估，并再次核对两者训练 authority 后，才生成 FDR - baseline 的论文主表差值。
+Tiny、Small、Medium、Large mAP 分别提高 `+5.795/+7.214/+7.130/+6.786 pp`；十个类别的 mAP、AP50 和 AP75 均严格正向。完整分尺度、分类别表、Control checkpoint 状态和 SHA-256 见[严格 Control 与完整结果报告](../../docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md)。
+
+统一复评 JSON 的 SHA-256 为 `8FFD439C4C48044C0D1937019CE58DDB857CE8FCED64C0082CBC28EDD44333E8`。该 JSON 仍标记 `preliminary_same_evaluator`；复评实际使用的 `last.pt` 与 rolling epoch100 asset 文件哈希不同。最终投稿前应上传 exact `last.pt` 或发布 model/EMA tensor equality 报告，但这一剩余工作是 artifact identity 封口，不是重新训练 strict Control。
 
 ---
 
 ## 9. 参数量、GFLOPs 与推理开销
 
-在相同 `rtdetr-l.yaml, nc=10, imgsz=640` 下进行当前探索性静态审计；最终论文版审计将在 100 epoch 后重新冻结：
+在相同 `rtdetr-l.yaml, nc=10, imgsz=640` 下完成静态审计：
 
 | 指标 | Stock RT-DETR-L | FDR-RTDETR-L | 增量 | 相对增幅 |
 |---|---:|---:|---:|---:|
@@ -463,7 +464,7 @@ resume from screen: false
 
 参数增量主要来自六个 `256→256→256→132` 分布头以及额外 preliminary head；同时原六个四维 decoder box heads 被替换，因此表中为净增量。
 
-需要注意：最初提出的“参数量增幅 <1%”严格阈值被超出约 0.00524 个百分点。用户已允许放宽该限制，因此不影响当前训练，但论文中不能写成“参数增幅低于1%”。GFLOPs 增幅仍明显低于 1%。端到端 latency/FPS 尚未完成最终统一审计，不能提前声称 `<3%`；该项将在 100 epoch 后以同一 RTX 4090、相同 batch、warmup 和同步方式测量。
+需要注意：最初提出的“参数量增幅 <1%”严格阈值被超出约 0.00524 个百分点。用户已允许放宽该限制，因此不影响结论，但论文中不能写成“参数增幅低于1%”。GFLOPs 增幅仍明显低于 1%。端到端 latency/FPS 尚未形成与正式主表同等级的冻结证据，不能提前声称 `<3%`；应以同一 RTX 4090、相同 batch、warmup、同步和统计口径补测。
 
 30-epoch screen 的累计训练/验证耗时和 CUDA 峰值显存只能作为工程参考，不能代替推理延迟：
 
@@ -480,14 +481,14 @@ resume from screen: false
 
 当前实验设计已经控制公共初始化、数据顺序和主要超参数，但仍存在以下必须公开的有效性边界：
 
-1. **组件归因尚未分离。** 当前方法同时改变分布表示、加入 FGL、加入 preliminary-box L1/GIoU，并对 FDR 私有参数独立裁剪；30-epoch 正增益不能只归因给其中一项。
+1. **组件归因尚未分离。** 当前方法同时改变分布表示、加入 FGL、加入 preliminary-box L1/GIoU，并对 FDR 私有参数独立裁剪；正式 `+7.055 pp` 不能只归因给其中一项。
 2. **筛选 control 地板过低。** epoch30 control mAP 仅为 0.00026，导致 screen 适合做候选淘汰，不适合估计最终效应量。
 3. **只有 seed0。** 按当前决策不运行 seed2，也未完成 seed1，因此不能报告跨 seed 均值、方差或显著性。
 4. **子集并非分层抽样。** 固定 647 张子集由确定性 SHA 规则生成，不保证类别、tiny/small 比例与完整训练集严格同分布。
 5. **表示范围在 tiny 上更紧张。** F4 的 tiny edge saturation 为 9.77%，显著高于 small 和 other；这可能限制极小目标的最终收益。
-6. **历史 baseline authority 仍需协议复核。** 现有最终指标可作为 evaluator authority，但旧文档字段不能代替当前正式协议的逐项核对。
+6. **Artifact identity 尚未最终封口。** 统一复评实际使用的 `last.pt` 与 rolling epoch100 Release 文件哈希不同；在 exact checkpoint 或 tensor equality JSON 上传前，应保留这一审计说明。
 
-若 100-epoch 正式结果为正，论文至少应补充以下消融，才能回答贡献来源：
+正式 100-epoch 结果已经为正，论文仍应补充以下消融，才能回答贡献来源：
 
 | 消融臂 | 目的 |
 |---|---|
@@ -511,20 +512,23 @@ resume from screen: false
 4. 30-epoch paired control/FDR 的公共初始状态和数据顺序哈希一致；
 5. F0--F4、真实 RTX4090 单步和专项回归测试均通过；
 6. 固定 10% 子集 seed0 的 30-epoch 配对 Gate2 通过；
-7. 在本次冻结快照中，全数据 100-epoch FDR 已正常运行至第 12 epoch，本地检查点逐轮保存，epoch10 已完成远端发布核验。
+7. 全数据 seed0 FDR 与同 formal authority stock Control 均已完成 100 epoch；
+8. 统一独立复评中，FDR 的 mAP50-95 从 `0.21911` 提高到 `0.28966`，提升 `+7.055 pp`；
+9. Precision、Recall、F1、AP50、AP75、四尺度 mAP/AP50/AP75 和十类别 mAP/AP50/AP75 均严格正向；
+10. FDR 和 strict Control epoch100 checkpoint、统一复评 JSON 与 SHA-256 已上传 GitHub Release。
 
 ### 11.2 目前不能写入论文结论的内容
 
-1. 不能宣称 FDR 已最终超过 100-epoch matched baseline；
-2. 不能把 30-epoch 子集增益 `+0.01801` 写成正式全数据提升；
-3. 不能宣称多 seed 稳定，因为当前按用户决定只运行 seed0；
+1. 不能把历史跨-authority baseline 的 `+4.801 pp` 当成正式主结果；正式主结果是 strict Control 下的 `+7.055 pp`；
+2. 不能把 30-epoch 子集增益 `+0.01801` 写成 full-data 100-epoch 效应量；
+3. 不能宣称多 seed 稳定或统计显著，因为当前严格主结果只有 seed0；
 4. 不能宣称参数增幅 `<1%`；实际为 `+1.00524%`；
-5. 不能宣称端到端延迟增幅 `<3%`，因为最终 latency audit 尚未完成；
-6. 不能把 FDR 的原创性归于本文；本文贡献是受控迁移、隔离集成和 VisDrone 验证；
+5. 不能宣称端到端延迟增幅 `<3%`，因为最终 latency audit 尚未冻结；
+6. 不能把 D-FINE 的 FDR/FGL 基础公式归为本文首创；本文贡献是受控迁移、隔离集成、YAML 声明和 VisDrone 验证；
 7. 不能把 F4 的 matched-IoU/representation 指标当成 detector mAP；
-8. 不能忽略 tiny 目标 9.77% 的表示饱和率；
-9. 不能在缺少消融时把当前收益单独归因给 FDR、FGL 或 preliminary-box supervision；
-10. 不能仅凭旧 baseline 文档宣称历史 run 与当前 formal 协议逐字段相同。
+8. 不能在缺少消融时把当前收益单独归因给 FDR、FGL 或 preliminary-box supervision；
+9. 不能声称 formal 1–100 每轮重 checkpoint 都已公开；
+10. 不能声称统一复评 checkpoint identity 已完全封口。
 
 ---
 
@@ -546,6 +550,10 @@ resume from screen: false
 | F0--F4 与 formal epoch10 冻结快照 | [`live-snapshot-epoch0010`](./evidence/d97e1eb7/live-snapshot-epoch0010) |
 | 快照来源与 SHA256 | [`live-snapshot-epoch0010/README.md`](./evidence/d97e1eb7/live-snapshot-epoch0010/README.md) |
 | Formal epoch12 运行状态更新 | [`runtime-update-epoch0012`](./evidence/d97e1eb7/runtime-update-epoch0012) |
+| FDR formal100 训练结果 | [`training-results/results/fdr-formal-d97e1eb7-seed0-fdr`](https://github.com/kkc236/uav-detection-baselines/tree/training-results/results/fdr-formal-d97e1eb7-seed0-fdr) |
+| FDR epoch100 checkpoint | [`fdr-formal-d97e1eb7-live`](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live) |
+| strict Control 与统一复评 | [`fdr-formal-control-d97e1eb7-live`](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-control-d97e1eb7-live) |
+| 完整正式结果报告 | [`FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md`](../../docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md) |
 
 关键版本：
 
@@ -558,11 +566,11 @@ screen evidence commit: d6b0b3e1
 
 ---
 
-## 13. 阶段性结论
+## 13. 正式结论
 
-当前结果表明，FDR 主线完整方法是近期候选中第一个同时完成“官方机制对齐、工程门检通过、严格配对 screen 正向、正式 100-epoch 启动”的定位回归方案。其主要优势不是增加新的特征融合或 Query 机制，而是在保持 RT-DETR 检测骨架不变的情况下，将四维点回归替换为可逐层累计的四边分布表示，并以 FGL 和 preliminary-box 辅助监督训练该表示，使 decoder 能以更细粒度学习目标边界。
+当前结果表明，FDR 主线完整方法是近期候选中第一个同时完成“官方机制对齐、工程门检通过、严格配对 Screen30 正向、FDR/stock Control 两臂 full-data 100 epoch 完成、统一独立复评正向”的定位回归方案。其主要优势不是增加新的特征融合或 Query 机制，而是在保持 RT-DETR 检测骨架不变的情况下，将四维点回归替换为可逐层累计的四边分布表示，并以 FGL 和 preliminary-box 辅助监督训练该表示，使 Decoder 能以更细粒度学习目标边界。
 
-现阶段最有价值的证据是：30-epoch screen 的正向变化同时出现在 mAP、尾三轮均值和 AP75，并且正式全数据训练前 12 轮总体保持上升趋势。最重要的未决问题是：这种早期优势能否在 100 epoch 后保持，并最终超过 mAP 0.2416484 的 matched baseline；此外还需完成 AP-tiny/AP-small、最终参数/GFLOPs/latency 和统一 checkpoint 评估。故当前最严谨的论文表述应为“方法已通过筛选并进入正式验证”，而不是“方法已经取得最终性能提升”。
+最有价值的证据已经从早期筛选升级为正式结果：统一 same-evaluator 下，FDR 相对 strict Control 的 mAP50-95 提升 `+7.055 pp`，AP50/AP75、四个尺度和十个类别全部正向。因此可以表述为“FDR 在当前 seed0 严格协议中取得正式性能提升”。仍需保留的边界是：当前只有 seed0；基础 FDR/FGL 机制来自 D-FINE；单变量消融、最终 latency 和 exact-checkpoint tensor identity 尚未闭环。后续工作的重点不是再次重跑 seed0 Control，而是完成这些论文证据封口，并要求新增模块直接以 FDR 为强 Control。
 
 ## 参考文献
 

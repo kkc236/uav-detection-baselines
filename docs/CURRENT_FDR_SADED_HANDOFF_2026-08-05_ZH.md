@@ -1,5 +1,7 @@
 # RT-DETR-L / VisDrone 当前成果与下一步执行交接
 
+> **2026-08-09 状态更新：** 本文件保留 2026-08-05 时点的交接过程。其 P0“恢复 authority 并重跑 strict Control”已经完成：stock Control 与 FDR 均已完成 full-data seed0 100 epoch，统一独立复评 mAP50-95 为 `0.21911 → 0.28966`（`+7.055 pp`）。最新方法、完整总体/分尺度/分类别指标、checkpoint SHA-256、GitHub 上传状态和剩余审计边界以 [`FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md`](FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md) 为准。下面“P0待跑Control”等文字仅是历史任务快照，不再代表当前状态。
+
 > 交接日期：2026-08-05（Asia/Shanghai）<br>
 > 交接性质：面向下一位研究与工程负责人，可直接据此恢复代码、下载权重、复核证据并继续实验<br>
 > 主仓库：<https://github.com/kkc236/uav-detection-baselines><br>

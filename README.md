@@ -2,6 +2,16 @@
 
 This workspace reproduces baseline detectors for UAV aerial object detection.
 
+## FDR-RTDETR-L final seed0 evidence
+
+- [FDR method, strict Control rerun, full metrics and audit boundary](docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md)
+- [Detailed FDR method and formal validation chapter](research/fdr/FDR_RTDETR_METHOD_AND_CURRENT_VALIDATION_ZH.md)
+- [Declarative FDR YAML and ablation configurations](docs/FDR_YAML_DECLARATIVE_MODULE.md)
+- [FDR formal checkpoint Release](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-d97e1eb7-live)
+- [Strict Control and same-evaluator Release](https://github.com/kkc236/uav-detection-baselines/releases/tag/fdr-formal-control-d97e1eb7-live)
+
+The completed seed0 same-evaluator comparison is `0.21911 → 0.28966` mAP50-95 (`+7.055 pp`). Both full-data 100-epoch arms are complete. The report explicitly separates this result from the older cross-authority baseline and records the remaining exact-checkpoint identity, latency, ablation, and multi-seed boundaries.
+
 Scientific problems:
 
 1. Background interference: small objects have weak responses in complex aerial backgrounds.
