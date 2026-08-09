@@ -30,14 +30,22 @@
     "classes": 10,
     "ignore_sidecar": {
       "boxes": {
-        "train": 10345,
+        "train": 10343,
         "val": 1410
       },
       "files": {
         "train": 6471,
         "val": 548
       },
-      "source_rule": "VisDrone source confidence/score field equals zero"
+      "invalid_zero_area_rows_excluded": {
+        "train": 2,
+        "val": 0
+      },
+      "raw_score_zero_rows": {
+        "train": 10345,
+        "val": 1410
+      },
+      "source_rule": "VisDrone source confidence/score field equals zero; non-positive width or height rows are excluded before sidecar materialization"
     },
     "name": "VisDrone",
     "screen_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",

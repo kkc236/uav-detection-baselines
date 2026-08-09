@@ -362,3 +362,41 @@ def test_optimizer_evidence_requires_nonzero_public_and_fdr_gradient_each_epoch(
             protocol_manifest=protocol,
             learnability_report=learnability,
         )
+
+
+def test_resume_accepts_audited_attempts_from_only_the_interrupted_next_epoch(
+    tmp_path: Path,
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    rows = _read_optimizer(run)
+    trailing = dict(rows[-1])
+    trailing.update(
+        {
+            "optimizer_attempt": len(rows) + 1,
+            "completed_epoch": 4,
+        }
+    )
+    rows.append(trailing)
+    _write_optimizer(run, rows)
+
+    decision = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+
+    assert decision["decision"] == "resume"
+    assert decision["trailing_uncommitted_optimizer_attempts"] == 1
+
+    rows[-1]["completed_epoch"] = 5
+    _write_optimizer(run, rows)
+    with pytest.raises(ValueError, match="sequence"):
+        validate_resume(
+            run,
+            variant="baseline",
+            stage="screen",
+            protocol_manifest=protocol,
+            learnability_report=learnability,
+        )

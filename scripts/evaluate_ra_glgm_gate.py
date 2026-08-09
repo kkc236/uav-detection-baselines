@@ -499,6 +499,33 @@ def evaluate_formal_report(
     }
 
 
+def validate_evaluated_arm(
+    run_dir: str | Path, *, variant: str, stage: str
+) -> dict[str, Any]:
+    """Validate an existing create-only locked evaluation before reuse."""
+
+    if stage == "screen":
+        expected_epochs, tail_epochs = EXPECTED_EPOCHS, TAIL_EPOCHS
+    elif stage == "formal":
+        expected_epochs, tail_epochs = FORMAL_EXPECTED_EPOCHS, FORMAL_TAIL_EPOCHS
+    else:
+        raise ValueError(f"locked evaluation is unsupported for stage: {stage}")
+    arm = _load_arm(
+        run_dir,
+        variant,
+        strict_hashes=True,
+        stage=stage,
+        expected_epochs=expected_epochs,
+        tail_epochs=tail_epochs,
+    )
+    if not all(arm["checks"].values()) or arm["errors"]:
+        raise ValueError(
+            f"existing locked evaluation failed audit for {stage}/{variant}: "
+            f"{arm['errors'][:3]}"
+        )
+    return arm
+
+
 def validate_screen_gate_report(
     path: str | Path,
     *,
@@ -517,6 +544,23 @@ def validate_screen_gate_report(
         != "start_fresh_from_paired_scratch_initial_state"
     ):
         raise ValueError("Screen30 gate did not authorize Formal100")
+    return recorded
+
+
+def validate_formal_report(
+    path: str | Path,
+    *,
+    baseline_run: str | Path,
+    method_run: str | Path,
+) -> dict[str, Any]:
+    """Recompute the completed Formal100 comparison before accepting it."""
+
+    recorded = read_json(path)
+    expected = evaluate_formal_report(baseline_run, method_run)
+    if recorded != expected:
+        raise ValueError("Formal100 report differs from frozen recomputation")
+    if recorded.get("engineering", {}).get("complete") is not True:
+        raise ValueError("Formal100 report failed engineering audit")
     return recorded
 
 

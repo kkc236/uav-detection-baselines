@@ -44,6 +44,7 @@ def validate_optimizer_evidence(
     variant: str,
     stage: str,
     completed_epochs: int,
+    allow_trailing_uncommitted_epoch: bool = False,
 ) -> dict[str, Any]:
     """Validate every optimizer attempt and return Smoke-grade evidence facts."""
     evidence_path = Path(path).resolve()
@@ -64,7 +65,8 @@ def validate_optimizer_evidence(
             row.get("optimizer_attempt") != attempt
             or not _positive_int(row.get("optimizer_attempt"))
             or not _positive_int(epoch)
-            or int(epoch) > completed_epochs
+            or int(epoch)
+            > completed_epochs + (1 if allow_trailing_uncommitted_epoch else 0)
         ):
             raise ValueError(f"optimizer evidence sequence is invalid at attempt {attempt}")
         if (
@@ -105,17 +107,21 @@ def validate_optimizer_evidence(
 
     if observed_epochs != sorted(observed_epochs):
         raise ValueError("optimizer evidence epoch sequence is not monotonic")
-    if set(observed_epochs) != set(range(1, completed_epochs + 1)):
+    committed_observed = {epoch for epoch in observed_epochs if epoch <= completed_epochs}
+    if committed_observed != set(range(1, completed_epochs + 1)):
         raise ValueError("optimizer evidence does not cover every completed epoch exactly")
     expected_epochs = set(range(1, completed_epochs + 1))
-    if public_nonzero_epochs != expected_epochs:
+    if public_nonzero_epochs & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero public gradient in every epoch")
-    if fdr_nonzero_epochs != expected_epochs:
+    if fdr_nonzero_epochs & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero FDR gradient in every epoch")
-    if variant == "ra_glgm" and ra_nonzero_epochs != expected_epochs:
+    if variant == "ra_glgm" and ra_nonzero_epochs & expected_epochs != expected_epochs:
         raise ValueError("optimizer evidence has no nonzero RA private gradient in every epoch")
     return {
         "optimizer_attempts": len(rows),
+        "trailing_uncommitted_optimizer_attempts": sum(
+            epoch > completed_epochs for epoch in observed_epochs
+        ),
         "optimizer_evidence_sha256": file_sha256(evidence_path),
         "amp_scale": FIXED_AMP_SCALE,
         "amp_skipped_steps": 0,
@@ -215,6 +221,7 @@ def validate_resume(
         variant=variant,
         stage=stage,
         completed_epochs=completed,
+        allow_trailing_uncommitted_epoch=completed < limit,
     )
 
     queue = read_jsonl(run / "publication-queue.jsonl")

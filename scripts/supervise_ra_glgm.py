@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.validate_ra_resume import validate_resume  # noqa: E402
+from scripts.train_rtdetr_ra_glgm import load_authority, validate_source  # noqa: E402
 from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
     RA_EXPERIMENT_PROTOCOL_SHA256,
@@ -26,7 +27,11 @@ from src.ra_experiment_protocol import (  # noqa: E402
     read_json,
 )
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
-from scripts.evaluate_ra_glgm_gate import validate_screen_gate_report  # noqa: E402
+from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
+    validate_evaluated_arm,
+    validate_formal_report,
+    validate_screen_gate_report,
+)
 
 
 TRAIN_STEPS = (
@@ -322,7 +327,12 @@ def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
 
 
 def _validate_formal_report(path: Path) -> dict[str, Any]:
-    report = read_json(path)
+    root = path.resolve().parent
+    report = validate_formal_report(
+        path,
+        baseline_run=root / run_name("formal", "baseline"),
+        method_run=root / run_name("formal", "ra_glgm"),
+    )
     if (
         report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
         or report.get("report_name") != "RA-GLGM-Formal100-v1"
@@ -363,9 +373,8 @@ def run_supervisor(args: argparse.Namespace) -> int:
     audit = args.audit.resolve()
     status = args.status.resolve()
     lock = args.lock.resolve()
-    authority = read_json(protocol)
-    if authority.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256:
-        raise ValueError("supervisor received a foreign protocol manifest")
+    authority = load_authority(protocol)
+    validate_source(authority)
     if file_sha256(initial_state) != str(authority.get("initial_state", {}).get("sha256", "")).upper():
         raise ValueError("paired initial-state bytes differ from protocol authority")
     validate_learnability_report(
@@ -471,59 +480,87 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 # Success and failure both pass through the same strict recovery audit.
 
             if stage in {"screen", "formal"}:
-                evaluator = build_evaluator_command(
-                    python=args.python,
-                    evaluator_script=args.evaluator_script,
-                    run=run,
-                    protocol_manifest=protocol,
-                    stage=stage,
-                )
-                append_audit_event(audit, {"event": "locked_evaluation_start", "stage": stage, "variant": variant})
-                result = subprocess.run(evaluator, cwd=ROOT, env=environment, check=False)
-                append_audit_event(
-                    audit,
-                    {"event": "locked_evaluation_exit", "stage": stage, "variant": variant, "returncode": result.returncode},
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"locked evaluator failed for {stage}/{variant}")
+                evaluation_output = run / "locked-evaluation.jsonl"
+                if evaluation_output.exists():
+                    validate_evaluated_arm(run, variant=variant, stage=stage)
+                    append_audit_event(
+                        audit,
+                        {
+                            "event": "locked_evaluation_reused_after_audit",
+                            "stage": stage,
+                            "variant": variant,
+                        },
+                    )
+                else:
+                    evaluator = build_evaluator_command(
+                        python=args.python,
+                        evaluator_script=args.evaluator_script,
+                        run=run,
+                        protocol_manifest=protocol,
+                        stage=stage,
+                    )
+                    append_audit_event(
+                        audit,
+                        {"event": "locked_evaluation_start", "stage": stage, "variant": variant},
+                    )
+                    result = subprocess.run(evaluator, cwd=ROOT, env=environment, check=False)
+                    append_audit_event(
+                        audit,
+                        {
+                            "event": "locked_evaluation_exit",
+                            "stage": stage,
+                            "variant": variant,
+                            "returncode": result.returncode,
+                        },
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(f"locked evaluator failed for {stage}/{variant}")
 
             if stage == "screen" and variant == "ra_glgm":
-                result = subprocess.run(
-                    build_gate_command(
-                        python=args.python,
-                        output_root=output_root,
-                        gate_output=gate_output,
-                        stage="screen",
-                    ),
-                    cwd=ROOT,
-                    env=environment,
-                    check=False,
-                )
-                append_audit_event(audit, {"event": "screen_gate_exit", "returncode": result.returncode})
-                if result.returncode != 0:
-                    _validate_gate_for_formal(
-                        gate_output, output_root
-                    )  # Raises a precise failed-gate error.
+                if gate_output.exists():
+                    _validate_gate_for_formal(gate_output, output_root)
+                    append_audit_event(audit, {"event": "screen_gate_reused_after_recomputation"})
+                else:
+                    result = subprocess.run(
+                        build_gate_command(
+                            python=args.python,
+                            output_root=output_root,
+                            gate_output=gate_output,
+                            stage="screen",
+                        ),
+                        cwd=ROOT,
+                        env=environment,
+                        check=False,
+                    )
+                    append_audit_event(audit, {"event": "screen_gate_exit", "returncode": result.returncode})
+                    if result.returncode != 0:
+                        _validate_gate_for_formal(
+                            gate_output, output_root
+                        )  # Raises a precise failed-gate error.
 
             if stage == "formal" and variant == "ra_glgm":
-                result = subprocess.run(
-                    build_gate_command(
-                        python=args.python,
-                        output_root=output_root,
-                        gate_output=formal_output,
-                        stage="formal",
-                    ),
-                    cwd=ROOT,
-                    env=environment,
-                    check=False,
-                )
-                append_audit_event(
-                    audit,
-                    {"event": "formal_report_exit", "returncode": result.returncode},
-                )
-                if result.returncode != 0:
-                    raise RuntimeError("Formal100 paired report failed engineering audit")
-                _validate_formal_report(formal_output)
+                if formal_output.exists():
+                    _validate_formal_report(formal_output)
+                    append_audit_event(audit, {"event": "formal_report_reused_after_recomputation"})
+                else:
+                    result = subprocess.run(
+                        build_gate_command(
+                            python=args.python,
+                            output_root=output_root,
+                            gate_output=formal_output,
+                            stage="formal",
+                        ),
+                        cwd=ROOT,
+                        env=environment,
+                        check=False,
+                    )
+                    append_audit_event(
+                        audit,
+                        {"event": "formal_report_exit", "returncode": result.returncode},
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError("Formal100 paired report failed engineering audit")
+                    _validate_formal_report(formal_output)
 
         formal_report = _validate_formal_report(formal_output)
         append_audit_event(

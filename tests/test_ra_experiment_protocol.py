@@ -37,9 +37,16 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
         "val": 548,
     }
     assert protocol["dataset"]["ignore_sidecar"]["boxes"] == {
+        "train": 10_343,
+        "val": 1_410,
+    }
+    assert protocol["dataset"]["ignore_sidecar"]["raw_score_zero_rows"] == {
         "train": 10_345,
         "val": 1_410,
     }
+    assert protocol["dataset"]["ignore_sidecar"][
+        "invalid_zero_area_rows_excluded"
+    ] == {"train": 2, "val": 0}
     module = protocol["module"]
     assert module["private_parameters"] == 812_817
     assert module["input"] == {

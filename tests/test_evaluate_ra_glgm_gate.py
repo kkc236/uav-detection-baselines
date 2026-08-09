@@ -8,6 +8,8 @@ import pytest
 from scripts.evaluate_ra_glgm_gate import (
     evaluate_formal_report,
     evaluate_gate,
+    validate_evaluated_arm,
+    validate_formal_report,
     validate_screen_gate_report,
     write_create_only_report,
 )
@@ -300,6 +302,37 @@ def test_formal_launch_recomputes_and_rejects_a_tampered_screen_gate(
     output.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(ValueError, match="recomputation"):
         validate_screen_gate_report(output, baseline_run=baseline, method_run=method)
+
+
+def test_existing_evaluation_and_formal_report_are_reused_only_after_recomputation(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_arm(tmp_path, "baseline", stage="formal")
+    method = _write_arm(
+        tmp_path,
+        "ra_glgm",
+        stage="formal",
+        delta=0.006,
+        class_wins=8,
+        parameters=BASELINE_PARAMETERS
+        + int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"]),
+    )
+    assert validate_evaluated_arm(
+        baseline, variant="baseline", stage="formal"
+    )["checks"]["locked_evaluation"] is True
+    output = tmp_path / "formal-report.json"
+    output.write_text(
+        json.dumps(evaluate_formal_report(baseline, method)), encoding="utf-8"
+    )
+    assert validate_formal_report(
+        output, baseline_run=baseline, method_run=method
+    )["engineering"]["complete"] is True
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    report["formal_success"] = not report["formal_success"]
+    output.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="recomputation"):
+        validate_formal_report(output, baseline_run=baseline, method_run=method)
 
 
 def test_gate_report_is_create_only(tmp_path: Path) -> None:

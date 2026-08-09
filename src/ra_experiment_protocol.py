@@ -35,8 +35,13 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
         **FDR_PROTOCOL["dataset"],
         "ignore_sidecar": {
             "files": {"train": 6471, "val": 548},
-            "boxes": {"train": 10_345, "val": 1_410},
-            "source_rule": "VisDrone source confidence/score field equals zero",
+            "boxes": {"train": 10_343, "val": 1_410},
+            "raw_score_zero_rows": {"train": 10_345, "val": 1_410},
+            "invalid_zero_area_rows_excluded": {"train": 2, "val": 0},
+            "source_rule": (
+                "VisDrone source confidence/score field equals zero; "
+                "non-positive width or height rows are excluded before sidecar materialization"
+            ),
         },
     },
     "training": {
