@@ -7,6 +7,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import pytest
+import torch
 
 
 SCRIPT = Path("scripts/run_rtdetr_complementarity_oracle.py")
@@ -104,3 +105,67 @@ def test_report_writer_is_create_only_and_labels_oracle_non_deployable(
     with pytest.raises(FileExistsError):
         module._write_summary(tmp_path, payload)
 
+
+class _FakeHead(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.export = True
+
+    def postprocess(self, boxes: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        selected_scores, index = scores.flatten(1).topk(300)
+        query_index = torch.div(index, 10, rounding_mode="floor")
+        selected_boxes = boxes.gather(
+            1, query_index.unsqueeze(-1).expand(-1, -1, 4)
+        )
+        classes = (index - query_index * 10).unsqueeze(-1).float()
+        return torch.cat((selected_boxes, selected_scores.unsqueeze(-1), classes), -1)
+
+
+class _FakeDetector(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.tensor([1.0]), requires_grad=False)
+        self.model = torch.nn.ModuleList([torch.nn.Identity(), _FakeHead()])
+
+    def predict(self, images: torch.Tensor):
+        assert torch.is_inference_mode_enabled()
+        assert self.model[-1].export is False
+        generator = torch.Generator().manual_seed(71)
+        boxes = torch.rand((images.shape[0], 300, 4), generator=generator)
+        logits = torch.randn((images.shape[0], 300, 10), generator=generator)
+        stock = self.model[-1].postprocess(boxes, logits.sigmoid())
+        auxiliary = (
+            boxes.unsqueeze(0),
+            logits.unsqueeze(0),
+            torch.empty(0),
+            torch.empty(0),
+            None,
+        )
+        return stock, auxiliary
+
+
+def test_decoder_extraction_reconstructs_exact_stock_and_restores_export() -> None:
+    module = _load_module()
+    detector = _FakeDetector()
+    images = torch.zeros((2, 3, 16, 16))
+
+    stock, boxes, logits = module._extract_decoder_batch(detector, images)
+
+    expected = detector.model[-1].postprocess(boxes, logits.sigmoid())
+    assert torch.equal(stock, expected)
+    assert boxes.shape == (2, 300, 4)
+    assert logits.shape == (2, 300, 10)
+    assert detector.model[-1].export is True
+    assert not boxes.requires_grad and not logits.requires_grad
+    assert all(parameter.grad is None for parameter in detector.parameters())
+
+
+def test_checkpoint_hash_verification_is_exact_and_uppercase(tmp_path: Path) -> None:
+    module = _load_module()
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"authority")
+    expected = "8F76FD501BB68EF71F4E276BC28F29BCE1003B0C2C9D9478DE81B5BFC0CDE1E9"
+
+    assert module._verify_checkpoint(checkpoint, expected) == expected
+    with pytest.raises(RuntimeError, match="checkpoint SHA-256 mismatch"):
+        module._verify_checkpoint(checkpoint, "0" * 64)

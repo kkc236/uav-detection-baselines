@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import torch
+
 
 IMAGE_SIZE = 640
 BATCH_SIZE = 8
@@ -43,6 +45,63 @@ def _canonical_json(payload: Mapping[str, Any]) -> bytes:
     return (
         json.dumps(payload, sort_keys=True, indent=2, allow_nan=False) + "\n"
     ).encode("utf-8")
+
+
+def _verify_checkpoint(path: Path, expected_sha256: str) -> str:
+    checkpoint = Path(path)
+    if checkpoint.is_symlink() or not checkpoint.is_file():
+        raise RuntimeError(f"checkpoint is not a regular file: {checkpoint}")
+    expected = str(expected_sha256).upper()
+    if len(expected) != 64 or any(character not in "0123456789ABCDEF" for character in expected):
+        raise ValueError("expected checkpoint SHA-256 must be 64 hexadecimal characters")
+    digest = hashlib.sha256()
+    with checkpoint.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest().upper()
+    if actual != expected:
+        raise RuntimeError(
+            f"checkpoint SHA-256 mismatch: expected={expected}, actual={actual}"
+        )
+    return actual
+
+
+def _extract_decoder_batch(
+    detector: Any, images: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if not isinstance(images, torch.Tensor) or images.ndim != 4:
+        raise ValueError("images must have shape [B,C,H,W]")
+    head = detector.model[-1]
+    original_export = head.export
+    try:
+        head.export = False
+        with torch.inference_mode():
+            result = detector.predict(images)
+            if not isinstance(result, tuple) or len(result) != 2:
+                raise RuntimeError("RT-DETR prediction must contain stock and auxiliary outputs")
+            stock_output, auxiliary = result
+            if not isinstance(auxiliary, tuple) or len(auxiliary) != 5:
+                raise RuntimeError("RT-DETR auxiliary decoder tuple is invalid")
+            decoder_boxes, decoder_logits, _, _, _ = auxiliary
+            boxes = decoder_boxes[-1].detach().float()
+            logits = decoder_logits[-1].detach().float()
+            reconstructed = head.postprocess(boxes, logits.sigmoid())
+    finally:
+        head.export = original_export
+    if not torch.equal(reconstructed, stock_output):
+        raise RuntimeError("decoder reconstruction differs from stock RT-DETR output")
+    expected_batch = images.shape[0]
+    if boxes.shape != (expected_batch, MAX_DET, 4):
+        raise RuntimeError(f"decoder box shape mismatch: {tuple(boxes.shape)}")
+    if logits.shape != (expected_batch, MAX_DET, NUM_CLASSES):
+        raise RuntimeError(f"decoder logit shape mismatch: {tuple(logits.shape)}")
+    if not torch.isfinite(boxes).all() or not torch.isfinite(logits).all():
+        raise RuntimeError("decoder evidence contains non-finite values")
+    if boxes.requires_grad or logits.requires_grad or stock_output.requires_grad:
+        raise RuntimeError("decoder evidence is attached to gradients")
+    if any(parameter.grad is not None for parameter in detector.parameters()):
+        raise RuntimeError("detector parameters contain gradients after inference")
+    return stock_output, boxes, logits
 
 
 def _write_create_only(path: Path, payload: bytes) -> None:
@@ -98,4 +157,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
