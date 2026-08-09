@@ -3,7 +3,17 @@ from hashlib import sha256
 import pytest
 import torch
 
-from src.pfcr import PFCR_FEATURE_DIM, PFCRGate, pfcr_features, pfcr_split
+from src.pfcr import (
+    PFCR_FEATURE_DIM,
+    PFCRGate,
+    _stable_unique_indices,
+    one_to_one_union_teacher,
+    pfcr_boundary_loss,
+    pfcr_features,
+    pfcr_split,
+    protected_merge,
+    stock_predictions,
+)
 
 
 NUM_QUERIES = 300
@@ -196,3 +206,123 @@ def test_gate_detaches_features_but_trains_gate_parameters():
 def test_gate_rejects_invalid_features(features, error, message):
     with pytest.raises(error, match=message):
         PFCRGate()(features)
+
+
+@pytest.mark.parametrize("slots", [0, 15, 30, 60])
+def test_protected_merge_preserves_registered_fdr_prefix(slots):
+    fdr_boxes, fdr_logits, cm_boxes, cm_logits = synthetic_pair()
+    stock = stock_predictions(fdr_boxes, fdr_logits)
+    merged = protected_merge(
+        fdr_boxes,
+        fdr_logits,
+        cm_boxes,
+        cm_logits,
+        rescue_slots=slots,
+    )
+
+    assert merged.shape == (NUM_QUERIES, 6)
+    if slots == 0:
+        assert torch.equal(merged, stock)
+    else:
+        assert torch.equal(merged[: NUM_QUERIES - slots], stock[: NUM_QUERIES - slots])
+
+
+def test_protected_merge_rejects_unregistered_budget():
+    tensors = synthetic_pair()
+    with pytest.raises(ValueError, match="rescue"):
+        protected_merge(*tensors, rescue_slots=29)
+
+
+def test_protected_merge_can_rescue_cm_without_modifying_fdr_inputs():
+    fdr_boxes, fdr_logits, cm_boxes, cm_logits = synthetic_pair()
+    originals = tuple(value.clone() for value in (fdr_boxes, fdr_logits, cm_boxes, cm_logits))
+    fdr_logits.fill_(-8.0)
+    cm_logits.fill_(-9.0)
+    cm_logits[7, 3] = 8.0
+
+    merged = protected_merge(
+        fdr_boxes, fdr_logits, cm_boxes, cm_logits, rescue_slots=15
+    )
+
+    assert bool(((merged[:, 5] == 3) & (merged[:, 4] > 0.99)).any())
+    assert torch.equal(fdr_boxes, originals[0])
+    assert torch.equal(cm_boxes, originals[2])
+
+
+def test_duplicate_union_candidates_receive_only_one_positive_teacher():
+    fdr_boxes, fdr_logits, cm_boxes, cm_logits = synthetic_pair()
+    fdr_logits.fill_(-10.0)
+    cm_logits.fill_(-10.0)
+    fdr_logits[0, 2] = 5.0
+    cm_logits[0, 2] = 5.0
+    target_boxes = fdr_boxes[:1].clone()
+    target_classes = torch.tensor([2])
+
+    teacher = one_to_one_union_teacher(
+        fdr_boxes,
+        fdr_logits,
+        cm_boxes,
+        cm_logits,
+        target_boxes,
+        target_classes,
+    )
+
+    assert teacher.fdr.shape == (NUM_QUERIES, NUM_CLASSES)
+    assert teacher.frequencycm.shape == (NUM_QUERIES, NUM_CLASSES)
+    assert int(((teacher.fdr > 0).sum() + (teacher.frequencycm > 0).sum()).item()) == 1
+    assert not teacher.fdr.requires_grad
+    assert not teacher.frequencycm.requires_grad
+
+
+def test_invalid_candidate_never_receives_positive_teacher():
+    fdr_boxes, fdr_logits, cm_boxes, cm_logits = synthetic_pair()
+    cm_boxes[0, 2] = -0.2
+    cm_logits.fill_(-10.0)
+    cm_logits[0, 0] = 10.0
+    teacher = one_to_one_union_teacher(
+        fdr_boxes,
+        fdr_logits,
+        cm_boxes,
+        cm_logits,
+        fdr_boxes[:1],
+        torch.tensor([0]),
+    )
+    assert torch.equal(teacher.frequencycm[0], torch.zeros(NUM_CLASSES))
+
+
+def test_pfcr_boundary_loss_prefers_teacher_boundary_order():
+    fdr_logits = torch.full((NUM_QUERIES, NUM_CLASSES), -4.0)
+    fdr_teacher = torch.zeros_like(fdr_logits)
+    cm_teacher = torch.zeros_like(fdr_logits)
+    fdr_logits.reshape(-1)[299] = 0.0
+    fdr_teacher.reshape(-1)[299] = 0.1
+    cm_teacher.reshape(-1)[0] = 0.9
+    aligned = torch.full_like(fdr_logits, -4.0, requires_grad=True)
+    reversed_order = torch.full_like(fdr_logits, -4.0, requires_grad=True)
+    aligned.data.reshape(-1)[0] = 2.0
+    reversed_order.data.reshape(-1)[0] = -2.0
+
+    aligned_loss = pfcr_boundary_loss(
+        aligned, cm_teacher, fdr_logits, fdr_teacher, rescue_slots=15
+    )
+    reversed_loss = pfcr_boundary_loss(
+        reversed_order, cm_teacher, fdr_logits, fdr_teacher, rescue_slots=15
+    )
+
+    assert aligned_loss < reversed_loss
+    aligned_loss.backward()
+    assert aligned.grad is not None
+    assert torch.isfinite(aligned.grad).all()
+
+
+def test_pfcr_boundary_loss_rejects_zero_or_unregistered_budget():
+    values = torch.zeros(NUM_QUERIES, NUM_CLASSES)
+    with pytest.raises(ValueError, match="rescue"):
+        pfcr_boundary_loss(values, values, values, values, rescue_slots=0)
+    with pytest.raises(ValueError, match="rescue"):
+        pfcr_boundary_loss(values, values, values, values, rescue_slots=29)
+
+
+def test_boundary_candidate_union_is_stably_deduplicated():
+    values = torch.tensor([7, 2, 7, 3, 2, 9], dtype=torch.long)
+    assert _stable_unique_indices(values).tolist() == [7, 2, 3, 9]
