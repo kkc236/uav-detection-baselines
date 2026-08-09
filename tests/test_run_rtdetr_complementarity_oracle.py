@@ -322,3 +322,17 @@ def test_stock_reproduction_uses_frozen_endpoint_tolerance() -> None:
         module._assert_stock_reproduction(
             {**metrics, "map": 0.1994}, endpoint, label="test"
         )
+
+
+def test_target_scales_undo_square_letterbox_gain_for_original_pixels() -> None:
+    module = _load_module()
+    record = {
+        "original_shape": (540, 960),
+        # A 16x16 object becomes 16/960 in each normalized dimension after
+        # aspect-preserving letterbox to the frozen square input.
+        "target_boxes": torch.tensor(
+            [[0.5, 0.5, 16 / 960, 16 / 960]], dtype=torch.float32
+        ),
+    }
+
+    assert module._target_scales(record) == ("small",)

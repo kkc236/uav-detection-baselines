@@ -472,8 +472,15 @@ def _stock_utility(
 
 def _target_scales(record: Mapping[str, Any]) -> tuple[str, ...]:
     height, width = record["original_shape"]
+    # With the frozen square letterbox transform both box dimensions share the
+    # gain IMAGE_SIZE / max(original_height, original_width).  Normalized box
+    # widths/heights therefore map back through the same original long side.
+    original_long_side = max(height, width)
     return tuple(
-        visdrone_size_bucket(float(box[2]) * width, float(box[3]) * height)
+        visdrone_size_bucket(
+            float(box[2]) * original_long_side,
+            float(box[3]) * original_long_side,
+        )
         for box in record["target_boxes"]
     )
 
