@@ -1,0 +1,265 @@
+{
+  "format_version": 1,
+  "as_of": "2026-08-10",
+  "repository": {
+    "url": "https://github.com/kkc236/uav-detection-baselines",
+    "branch": "codex/bpdd-fdr",
+    "fdr_model_training_authority": "d97e1eb7",
+    "bpdd_model_training_authority": "848f00cb7a40907e3884885ecd5bbd474450758a",
+    "bpdd_evaluator_fix": "2997705c"
+  },
+  "environment": {
+    "base_model": "Ultralytics RT-DETR-L",
+    "ultralytics": "8.4.90",
+    "gpu": "NVIDIA GeForce RTX 4090 24GB",
+    "driver": "550.142",
+    "python": "3.10.12",
+    "pytorch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "cuda": "12.1"
+  },
+  "dataset": {
+    "name": "VisDrone train/val",
+    "train_images": 6471,
+    "val_images": 548,
+    "val_objects": 38759,
+    "classes": 10,
+    "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "screen_subset_images": 647,
+    "screen_subset_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0"
+  },
+  "protocol": {
+    "pretrained": false,
+    "formal_epochs": 100,
+    "screen_epochs": 30,
+    "imgsz": 640,
+    "batch": 8,
+    "workers": 8,
+    "device": 0,
+    "amp": true,
+    "fixed_amp_scale": 128,
+    "seed": 0,
+    "deterministic": true,
+    "cache": false,
+    "optimizer": "MuSGD",
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "momentum": 0.937,
+    "weight_decay": 0.0005,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "warmup_bias_lr": 0.0,
+    "nbs": 64,
+    "cos_lr": false,
+    "queries": 300,
+    "max_det": 300,
+    "nms": false,
+    "mosaic": 1.0,
+    "close_mosaic": 10,
+    "mixup": 0.0,
+    "scale": 0.5,
+    "translate": 0.1,
+    "degrees": 0.0,
+    "shear": 0.0,
+    "perspective": 0.0,
+    "flipud": 0.0,
+    "fliplr": 0.5,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "cutmix": 0.0,
+    "copy_paste": 0.0
+  },
+  "strict_control_fdr_formal100": {
+    "evidence_status": "strict-full-data-seed0-100epoch-same-evaluator",
+    "control_values_are_legacy_five_decimal": true,
+    "control": {
+      "precision": 0.46761,
+      "recall": 0.41731,
+      "evaluator_reported_f1": 0.43657,
+      "derived_harmonic_f1_from_aggregate_pr": 0.44103044139583236,
+      "ap50": 0.38663,
+      "ap75": 0.21302,
+      "map50_95": 0.21911
+    },
+    "fdr": {
+      "precision": 0.5691126151072722,
+      "recall": 0.49277710639408445,
+      "evaluator_reported_f1": 0.52484,
+      "derived_harmonic_f1_from_aggregate_pr": 0.5282011154386592,
+      "ap50": 0.48468375790335755,
+      "ap75": 0.29252552290080275,
+      "map50_95": 0.289659749097641
+    },
+    "full_precision_deltas_from_available_raw_values": {
+      "precision": 0.10150261510727221,
+      "recall": 0.07546710639408444,
+      "derived_harmonic_f1": 0.08717067404282686,
+      "ap50": 0.09805375790335757,
+      "ap75": 0.07950552290080276,
+      "map50_95": 0.07054974909764097
+    },
+    "legacy_reported_f1_delta": 0.08827,
+    "f1_definition_warning": "The legacy strict report's evaluator-reported F1 values are not the harmonic mean of the displayed aggregate Precision and Recall. Treat evaluator-reported F1 and derived harmonic F1 as separate fields until the evaluator aggregation definition is frozen for the paper.",
+    "scale_metrics": {
+      "tiny": {
+        "gt": 20861,
+        "control": {"map50_95": 0.08684, "ap50": 0.20242, "ap75": 0.06019},
+        "fdr": {"map50_95": 0.14480, "ap50": 0.30322, "ap75": 0.11485}
+      },
+      "small": {
+        "gt": 12420,
+        "control": {"map50_95": 0.21784, "ap50": 0.37701, "ap75": 0.22544},
+        "fdr": {"map50_95": 0.28998, "ap50": 0.46100, "ap75": 0.31944}
+      },
+      "medium": {
+        "gt": 5348,
+        "control": {"map50_95": 0.32499, "ap50": 0.46969, "ap75": 0.35851},
+        "fdr": {"map50_95": 0.39630, "ap50": 0.54957, "ap75": 0.44447}
+      },
+      "large": {
+        "gt": 130,
+        "control": {"map50_95": 0.31822, "ap50": 0.39276, "ap75": 0.35713},
+        "fdr": {"map50_95": 0.38608, "ap50": 0.45976, "ap75": 0.38931}
+      }
+    },
+    "class_metrics": {
+      "pedestrian": {"control": {"map50_95": 0.17638, "ap50": 0.41722, "ap75": 0.11627}, "fdr": {"map50_95": 0.27277, "ap50": 0.56665, "ap75": 0.22404}},
+      "people": {"control": {"map50_95": 0.13004, "ap50": 0.33741, "ap75": 0.06693}, "fdr": {"map50_95": 0.20888, "ap50": 0.49829, "ap75": 0.13556}},
+      "bicycle": {"control": {"map50_95": 0.05132, "ap50": 0.12410, "ap75": 0.02806}, "fdr": {"map50_95": 0.11044, "ap50": 0.23732, "ap75": 0.08441}},
+      "car": {"control": {"map50_95": 0.54785, "ap50": 0.80905, "ap75": 0.60952}, "fdr": {"map50_95": 0.60930, "ap50": 0.85692, "ap75": 0.68546}},
+      "van": {"control": {"map50_95": 0.31458, "ap50": 0.46538, "ap75": 0.35274}, "fdr": {"map50_95": 0.37972, "ap50": 0.53207, "ap75": 0.43397}},
+      "truck": {"control": {"map50_95": 0.21277, "ap50": 0.34079, "ap75": 0.22671}, "fdr": {"map50_95": 0.26403, "ap50": 0.39085, "ap75": 0.28742}},
+      "tricycle": {"control": {"map50_95": 0.12815, "ap50": 0.24221, "ap75": 0.12539}, "fdr": {"map50_95": 0.20574, "ap50": 0.36624, "ap75": 0.19978}},
+      "awning-tricycle": {"control": {"map50_95": 0.08782, "ap50": 0.14871, "ap75": 0.09283}, "fdr": {"map50_95": 0.11370, "ap50": 0.18469, "ap75": 0.12190}},
+      "bus": {"control": {"map50_95": 0.34460, "ap50": 0.51086, "ap75": 0.38279}, "fdr": {"map50_95": 0.43801, "ap50": 0.60786, "ap75": 0.50753}},
+      "motor": {"control": {"map50_95": 0.19754, "ap50": 0.47060, "ap75": 0.12896}, "fdr": {"map50_95": 0.29401, "ap50": 0.60595, "ap75": 0.24518}}
+    },
+    "efficiency": {
+      "control_parameters": 32826626,
+      "fdr_parameters": 33156614,
+      "parameter_delta": 329988,
+      "parameter_delta_fraction": 0.0100524,
+      "control_gflops": 108.0318976,
+      "fdr_gflops": 108.22912,
+      "gflops_delta": 0.1972224,
+      "gflops_delta_fraction": 0.0018256,
+      "final_fp16_latency_status": "pending-strict-same-runtime-benchmark"
+    },
+    "artifacts": {
+      "same_evaluator_result_sha256": "8FFD439C4C48044C0D1937019CE58DDB857CE8FCED64C0082CBC28EDD44333E8",
+      "control_evaluated_last_pt_sha256": "7CCDAE649426505F157CB78AEBAA1981CDABB28B483338743983D2A264B50E4F",
+      "fdr_evaluated_last_pt_sha256": "2C1ADE3FD9DC59B8FE5B816B8B95183037E47839186BB8F68C93774B0B60451A",
+      "control_release_epoch100_sha256": "9C242711F44B7E68B360AF904AB7C44F64505C7136B7E7F90481092AE3308AF7",
+      "fdr_release_epoch100_sha256": "C2F638744508ADFE7B6C4A1EF3E08C503273F628062E4650AD59FFFF4C6588C2"
+    },
+    "source": "docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md"
+  },
+  "bpdd": {
+    "screen30": {
+      "evidence_status": "strict-paired-fixed-subset-seed0-30epoch",
+      "final_map50_95_delta": 0.00189,
+      "final_ap75_delta": 0.001846,
+      "tail3_map50_95_delta": 0.000557,
+      "gate_passed": true
+    },
+    "formal100": {
+      "evidence_status": "complete-single-arm-independent-exact-final-ema",
+      "completed_epochs": 100,
+      "publication_ledger_records": 100,
+      "official_val_images": 548,
+      "metrics": {
+        "precision": 0.5706336342276676,
+        "recall": 0.494464137092214,
+        "derived_harmonic_f1": 0.5298252895497555,
+        "ap50": 0.4864074913692349,
+        "ap75": 0.29809564823246976,
+        "map50_95": 0.29225786956881444
+      },
+      "scale_metrics": {
+        "tiny": {"gt": 20860, "map50_95": 0.14463531068711544, "ap50": 0.3029407494954908, "ap75": 0.1214109642137848},
+        "small": {"gt": 12420, "map50_95": 0.297757999423297, "ap50": 0.4677836139845458, "ap75": 0.32912419300336565},
+        "medium": {"gt": 5349, "map50_95": 0.39665846896394596, "ap50": 0.5439459427480983, "ap75": 0.4486794914704892},
+        "large": {"gt": 130, "map50_95": 0.37684750599225275, "ap50": 0.44570972730705666, "ap75": 0.39571166112153444}
+      },
+      "class_metrics": {
+        "pedestrian": {"map50_95": 0.27317954143213263, "ap50": 0.5632133597627832, "ap75": 0.2272571231789442},
+        "people": {"map50_95": 0.21167614814280436, "ap50": 0.5032583174563785, "ap75": 0.13837392663187623},
+        "bicycle": {"map50_95": 0.10526584771406584, "ap50": 0.22153404050659373, "ap75": 0.08818544861114536},
+        "car": {"map50_95": 0.6130662271394293, "ap50": 0.8592268676356407, "ap75": 0.6887891042906243},
+        "van": {"map50_95": 0.37323238948281245, "ap50": 0.524488694412945, "ap75": 0.42297158187824724},
+        "truck": {"map50_95": 0.27424113301138286, "ap50": 0.4041579873687752, "ap75": 0.30077723444803006},
+        "tricycle": {"map50_95": 0.20866746814819098, "ap50": 0.362530161561057, "ap75": 0.21596985220763742},
+        "awning-tricycle": {"map50_95": 0.12051805948012302, "ap50": 0.1947076270092081, "ap75": 0.12786403667478832},
+        "bus": {"map50_95": 0.44789227619470334, "ap50": 0.6207292033364868, "ap75": 0.5247243520721203},
+        "motor": {"map50_95": 0.2948396049424997, "ap50": 0.6102286546424808, "ap75": 0.2460438223312838}
+      },
+      "checkpoint_sha256": "E8342C208CE9F5AA8A5F1B341A168170C7D4551E10730E08F05B9794E57CCE4B",
+      "ema_state_sha256": "1C19C1A124AD1058650CAC0EECA1E7E1B41143A7F35D3EDA6B25854A94476454",
+      "report_url": "https://github.com/kkc236/uav-detection-baselines/releases/download/bpdd-formal-848f00cb-live/bpdd-formal-848f00cb-independent-eval.json"
+    },
+    "comparison_to_existing_strict_fdr100": {
+      "formal_comparison_kind": "preliminary-cross-authority",
+      "fresh_formal_pair": false,
+      "strict_pair_required_for_final_paper": true,
+      "multi_seed_complete": false,
+      "deltas": {
+        "precision": 0.00152101912039537,
+        "recall": 0.00168703069812953,
+        "derived_harmonic_f1": 0.00162417411109628,
+        "ap50": 0.00172373346587734,
+        "ap75": 0.00557012533166701,
+        "map50_95": 0.00259812047117347
+      },
+      "warning": "The fresh same-authority FDR Formal100 arm was stopped at epoch 24 by explicit user instruction. These deltas are useful preliminary references but are not a publication-level paired Formal100 comparison."
+    },
+    "efficiency": {
+      "module_kind": "parameter-free-training-only-loss",
+      "inference_graph": "ordinary FDR",
+      "inference_parameter_delta": 0,
+      "inference_gflops_delta": 0,
+      "strict_fp16_latency_status": "pending"
+    }
+  },
+  "originality_and_claim_boundary": {
+    "fdr": {
+      "status": "D-FINE-derived structural adaptation",
+      "allowed": "Ultralytics RT-DETR-L and VisDrone adaptation, isolated integration, declarative YAML modularization, frozen-protocol validation and empirical evidence",
+      "forbidden": "Claiming invention of the base FDR, FGL, distribution integral, or D-FINE formula"
+    },
+    "bpdd": {
+      "status": "project-specific narrow combination",
+      "allowed_components": [
+        "future-decoder-layer-only FDR edge-distribution teachers",
+        "softmin teacher mixture scored by the same two-bin ground-truth proper score used by FGL",
+        "quality evaluation of the actual mixture rather than average component error",
+        "detached better-only edge reliability",
+        "reuse of one final stock Hungarian assignment for matched normal Queries",
+        "no inference branch parameters score change matching union or unmatched-query distillation"
+      ],
+      "forbidden": "Claiming invention of self-distillation, localization distillation, later-to-earlier supervision, or better-teacher gating in general",
+      "nearest_required_comparison": "D-FINE GO-LSD under the same Ultralytics RT-DETR-L and VisDrone protocol"
+    },
+    "third_original_module": {
+      "status": "not-frozen",
+      "paper_ready": false
+    }
+  },
+  "validation": {
+    "fdr_engineering_gates": "F0-F4 passed",
+    "bpdd_tests": {
+      "last_verified": "129 passed",
+      "commit": "2997705c",
+      "fresh_rerun_status": "pending because frozen server SSH host identity changed"
+    }
+  },
+  "pending_for_submission": [
+    "fresh same-authority paired FDR versus BPDD Formal100",
+    "seed1 and seed2 repeats for the final method",
+    "same-runtime FP16 latency benchmark",
+    "direct same-protocol GO-LSD comparison",
+    "full BPDD component ablation",
+    "external dataset or held-out generalization evidence",
+    "a third original module if the paper structure still requires three innovations"
+  ]
+}

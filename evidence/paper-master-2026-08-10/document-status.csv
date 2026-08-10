@@ -1,0 +1,33 @@
+path,status,topic,reason,replaced_by
+docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md,current,Control/FDR,"strict full-data seed0 Control-versus-FDR report with overall scale and class metrics",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+research/fdr/FDR_RTDETR_METHOD_AND_CURRENT_VALIDATION_ZH.md,current,FDR,"current method implementation validation and claim boundary",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/FDR_YAML_DECLARATIVE_MODULE.md,current,FDR/YAML,"current declarative FDR module and compatibility guide",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+configs/rtdetr-l-fdr.yaml,current,FDR/YAML,"paper-authority FDR graph configuration",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+configs/rtdetr-l-fdr-bpdd.yaml,current,BPDD/YAML,"paper-authority FDR plus training-only BPDD configuration",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/fdr_head.py,current,FDR,"FDR head implementation",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/fdr_loss.py,current,FDR,"FGL and isolated FDR criterion implementation",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/fdr_math.py,current,FDR,"distribution integral and geometry implementation",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/rtdetr_fdr.py,current,FDR,"Ultralytics RT-DETR-L FDR integration",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+research/bpdd/BPDD_AUTHORITY.md,current,BPDD,"current originality and no-go authority",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+research/bpdd/authority.json,current,BPDD,"machine-readable BPDD source and protocol authority",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-09-bpdd-fdr-design.md,current,BPDD,"frozen BPDD scientific and engineering design",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/plans/2026-08-09-bpdd-fdr.md,current,BPDD,"frozen implementation and experiment plan",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/bpdd_loss.py,current,BPDD,"parameter-free training-only BPDD functional unit",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/rtdetr_fdr_bpdd.py,current,BPDD,"BPDD YAML parsing criterion and trainer integration",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+src/bpdd_formal_evaluation.py,current,BPDD,"strict final-checkpoint evaluation primitives",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+https://github.com/kkc236/uav-detection-baselines/releases/download/bpdd-formal-848f00cb-live/bpdd-formal-848f00cb-independent-eval.json,current,BPDD,"published exact-final-EMA independent official-val evidence",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/CURRENT_FDR_SADED_HANDOFF_2026-08-05_ZH.md,superseded,FDR/history,"older handoff predating strict Control and BPDD completion",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/UAV_DETECTION_RESEARCH_STATUS.md,superseded,research-status,"older status narrative contains preliminary conclusions",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+research/fdr/evidence/d97e1eb7/live-snapshot-epoch0010/README.md,superseded,FDR,"early Formal100 snapshot superseded by final strict report",docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md
+research/fdr/evidence/d97e1eb7/runtime-update-epoch0012/README.md,superseded,FDR,"early runtime update superseded by final strict report",docs/FDR_RTDETR_L_STRICT_CONTROL_AND_RESULTS_2026-08-09_ZH.md
+docs/IBER_BE_BOUNDARY_EVIDENCE_METHOD_ZH.md,historical-only,IBER/Boundary,"boundary probe showed signal but failed attribution and detector gates",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-07-31-lpr-rtdetr-design.md,historical-only,LPR,"direct refinement hypothesis rejected by paired seed evidence",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-01-lpr-g-v2-design.md,historical-only,LPR-G,"quality gate collapsed and did not rescue detector AP",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-02-iber-be-v1-design.md,historical-only,IBER/Boundary,"isolated boundary-evidence candidate failed mechanism gates",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-03-iber-p2-boundary-oracle-design.md,historical-only,Boundary/P2,"P2 boundary oracle was frozen scientific_failed",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+evidence/quality-oracle/quality-oracle-decision.json,historical-only,Quality-oracle,"strong non-deployable upper bound retained only as diagnostic evidence",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-04-oar-all-pair-amendment.md,historical-only,OAR,"sparse prerequisite failed and deployable learner lacked AP evidence",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-09-pfcr-frequency-candidate-rescue-design.md,historical-only,PFCR,"learnability rescue was frozen scientific_failed",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+configs/rtdetr-l-fdr-frequencycm.yaml,historical-only,FrequencyCM,"completed candidate failed to retain a final gain over FDR",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+reports/frequencycm-complementarity-oracle-v1/frequencycm-complementarity-report.md,historical-only,FrequencyCM,"ground-truth oracle indicates complementarity but is not deployable evidence",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
+docs/superpowers/specs/2026-08-08-rtdetr-audit-report-update-design.md,historical-only,SCADS,"Screen30 evidence was exploratory and later long-run evidence is not current authority in this branch",docs/CCF_B_PAPER_MATERIALS_MASTER_2026-08-10_ZH.md
