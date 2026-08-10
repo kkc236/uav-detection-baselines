@@ -47,11 +47,13 @@ TRAIN_STEPS = (
     ("formal", "baseline"),
     ("formal", "ra_glgm"),
 )
-STAGE_TARGETS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100}
+EXPLORE50_TRAIN_STEPS = (("explore50", "baseline"), ("explore50", "ra_glgm"))
+STAGE_TARGETS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
 
 
 def run_name(stage: str, variant: str) -> str:
-    return f"{stage}-seed0-{variant}-ra-glgm-v1.1"
+    suffix = "ra-glgm-v1.1-long50" if stage == "explore50" else "ra-glgm-v1.1"
+    return f"{stage}-seed0-{variant}-{suffix}"
 
 
 def build_train_command(
@@ -108,6 +110,8 @@ def build_evaluator_command(
         if stage == "screen10"
         else "28,29,30"
         if stage == "screen"
+        else "5,10,15,20,25,30,35,40,45,50"
+        if stage == "explore50"
         else "98,99,100"
     )
     return [
@@ -610,11 +614,14 @@ def run_supervisor(args: argparse.Namespace) -> int:
     validate_audit_chain(audit)
     acquire_lock(lock)
     environment = _environment()
-    append_audit_event(audit, {"event": "supervisor_start", "pid": os.getpid()})
+    explore50_only = bool(getattr(args, "explore50_only", False))
+    mode = "explore50" if explore50_only else "confirmatory_pipeline"
+    append_audit_event(audit, {"event": "supervisor_start", "pid": os.getpid(), "mode": mode})
     active_stage = "startup"
     active_variant = "none"
     try:
-        for stage, variant in TRAIN_STEPS:
+        train_steps = EXPLORE50_TRAIN_STEPS if explore50_only else TRAIN_STEPS
+        for stage, variant in train_steps:
             active_stage, active_variant = stage, variant
             if stage == "screen":
                 _validate_gate_for_screen(screen10_gate_output, output_root)
@@ -746,7 +753,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     return 128 + received_signal
                 # Success and failure both pass through the same strict recovery audit.
 
-            if stage in {"screen10", "screen", "formal"}:
+            if stage in {"screen10", "screen", "formal", "explore50"}:
                 ensure_locked_evaluation(
                     python=args.python,
                     evaluator_script=args.evaluator_script,
@@ -843,6 +850,33 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 _validate_formal_report(formal_output)
 
         revalidate_supervisor_authority(protocol, authority)
+        if explore50_only:
+            baseline_run = output_root / run_name("explore50", "baseline")
+            method_run = output_root / run_name("explore50", "ra_glgm")
+            validate_evaluated_arm(baseline_run, variant="baseline", stage="explore50")
+            validate_evaluated_arm(method_run, variant="ra_glgm", stage="explore50")
+            append_audit_event(
+                audit,
+                {
+                    "event": "explore50_complete",
+                    "role": "post-hoc trajectory evidence only",
+                    "baseline_run": str(baseline_run),
+                    "ra_run": str(method_run),
+                },
+            )
+            _atomic_json(
+                status,
+                {
+                    "time": _utc_now(),
+                    "process_state": "complete",
+                    "mode": "explore50",
+                    "target_epoch": 50,
+                    "baseline_run": str(baseline_run),
+                    "ra_run": str(method_run),
+                    "role": "post-hoc trajectory evidence only",
+                },
+            )
+            return 0
         formal_report = _validate_formal_report(formal_output)
         append_audit_event(
             audit,
@@ -910,6 +944,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument(
+        "--explore50-only",
+        action="store_true",
+        help="run only a fresh paired 50-epoch post-hoc trajectory experiment",
+    )
     return parser
 
 

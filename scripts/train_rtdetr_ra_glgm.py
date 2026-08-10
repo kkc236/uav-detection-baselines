@@ -47,8 +47,8 @@ from src.rtdetr_ra_glgm import (  # noqa: E402
 )
 
 
-STAGE_SCHEDULE = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100}
-STAGE_CUTOFF = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100}
+STAGE_SCHEDULE = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100, "explore50": 50}
+STAGE_CUTOFF = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
 EVIDENCE_FIELDS = (
     "completed_epoch",
     "variant",
@@ -207,16 +207,16 @@ def prepare_data(
     actual_ignore = ignore_sidecar_signature(dataset_root)
     if actual_ignore != dataset_authority.get("ignore"):
         raise ValueError("runtime ignore sidecar differs from RA authority")
-    subset_stage = "screen" if stage in {"smoke", "screen10", "screen"} else "formal"
+    subset_stage = "screen" if stage in {"smoke", "screen10", "screen", "explore50"} else "formal"
     source = fdr_train.prepare_data_yaml(dataset_root, subset_stage, authority_root)
-    if stage not in {"smoke", "screen10", "screen"}:
+    if stage not in {"smoke", "screen10", "screen", "explore50"}:
         return source
     destination = authority_root / f"{stage}-data.yaml"
     payload = json.loads(source.read_text(encoding="utf-8"))
-    if stage in {"smoke", "screen10", "screen"}:
+    if stage in {"smoke", "screen10", "screen", "explore50"}:
         authority_name = (
             "selection_set"
-            if stage in {"smoke", "screen10"}
+            if stage in {"smoke", "screen10", "explore50"}
             else "screen30_selection_set"
         )
         selection = dataset_authority.get(authority_name)
@@ -420,7 +420,7 @@ def write_runtime_manifest(
         "dataset_authority": manifest["dataset_authority"],
         "gpu_uuid": actual_gpu,
         "schedule_epochs": STAGE_SCHEDULE[args.stage],
-        "cutoff_epoch": STAGE_CUTOFF[args.stage] if args.stage in {"screen10", "screen"} else None,
+        "cutoff_epoch": STAGE_CUTOFF[args.stage] if args.stage in {"screen10", "screen", "explore50"} else None,
         "model_parameters": sum(parameter.numel() for parameter in _model(trainer).parameters()),
         "locked_evaluator_sha256": manifest["locked_evaluator"]["sha256"],
         "initialization_mode": "fresh_paired_scratch",

@@ -548,6 +548,7 @@ def evaluate(
         "screen10": RA_EXPERIMENT_PROTOCOL["evaluation"]["screen10_evaluated_epochs"],
         "screen": RA_EXPERIMENT_PROTOCOL["evaluation"]["screen_evaluated_epochs"],
         "formal": RA_EXPERIMENT_PROTOCOL["evaluation"]["formal_evaluated_epochs"],
+        "explore50": RA_EXPERIMENT_PROTOCOL["evaluation"]["explore50_evaluated_epochs"],
     }.get(stage)
     if expected_epochs is None or list(epochs) != list(expected_epochs):
         raise ValueError(f"locked evaluator epochs differ from frozen {stage} authority")
@@ -558,9 +559,10 @@ def evaluate(
     selection_name = {
         "screen10": "selection_set",
         "screen": "screen30_selection_set",
+        "explore50": "selection_set",
     }.get(stage)
     selection = dataset_authority.get(selection_name) if selection_name else None
-    if stage in {"screen10", "screen"}:
+    if stage in {"screen10", "screen", "explore50"}:
         if not isinstance(selection, Mapping):
             raise ValueError(f"{stage} selection-set authority is missing")
         expected_images = int(selection.get("images", -1))
@@ -577,7 +579,7 @@ def evaluate(
         raise ValueError("locked evaluator positive dataset differs from authority")
     if ignore_sidecar_signature(dataset_root) != dataset_authority.get("ignore"):
         raise ValueError("locked evaluator ignore sidecars differ from authority")
-    if stage in {"screen10", "screen"}:
+    if stage in {"screen10", "screen", "explore50"}:
         if validation_source != Path(str(selection.get("path", ""))).resolve():
             raise ValueError(f"{stage} validation list path differs from authority")
         if file_sha256(validation_source) != str(selection.get("sha256", "")).upper():

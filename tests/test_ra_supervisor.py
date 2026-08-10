@@ -9,6 +9,7 @@ import pytest
 
 import scripts.supervise_ra_glgm as supervisor_module
 from scripts.supervise_ra_glgm import (
+    EXPLORE50_TRAIN_STEPS,
     TRAIN_STEPS,
     append_audit_event,
     acquire_lock,
@@ -36,6 +37,10 @@ def test_supervisor_order_is_sequential_and_screen10_precedes_screen30() -> None
         ("screen", "ra_glgm"),
         ("formal", "baseline"),
         ("formal", "ra_glgm"),
+    )
+    assert EXPLORE50_TRAIN_STEPS == (
+        ("explore50", "baseline"),
+        ("explore50", "ra_glgm"),
     )
 
 
@@ -89,6 +94,16 @@ def test_screen10_evaluator_and_gate_commands_use_frozen_stage(tmp_path: Path) -
     assert gate[gate.index("--stage") + 1] == "screen10"
     assert run_name("screen10", "baseline") in gate[gate.index("--baseline-run") + 1]
     assert run_name("screen10", "ra_glgm") in gate[gate.index("--ra-run") + 1]
+
+    explore = build_evaluator_command(
+        python=Path("/venv/bin/python"),
+        evaluator_script=tmp_path / "evaluator.py",
+        run=tmp_path / "explore50-run",
+        protocol_manifest=tmp_path / "protocol.json",
+        stage="explore50",
+    )
+    assert explore[explore.index("--epochs") + 1] == "5,10,15,20,25,30,35,40,45,50"
+    assert run_name("explore50", "baseline").endswith("ra-glgm-v1.1-long50")
 
 
 def test_supervisor_accepts_only_v11_formal_report(

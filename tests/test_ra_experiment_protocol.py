@@ -49,6 +49,8 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     assert protocol["training"]["screen_schedule_epochs"] == 50
     assert protocol["training"]["screen_cutoff_epoch"] == 30
     assert protocol["training"]["screen10_cutoff_epoch"] == 10
+    assert protocol["training"]["explore50_schedule_epochs"] == 50
+    assert protocol["training"]["explore50_cutoff_epoch"] == 50
     assert protocol["training"]["formal_schedule_epochs"] == 100
     assert protocol["training"]["save_period"] == 1
     assert protocol["dataset"]["screen_train_images"] == 647
@@ -114,6 +116,14 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     assert protocol["dataset"]["screen30_selection_set"]["official_val_used"] is False
     assert protocol["advancement"]["formal_validation"].startswith("official val")
     assert protocol["advancement"]["formal_initialization"].startswith("fresh paired scratch")
+    assert protocol["exploration"] == {
+        "explore50_role": "post-hoc trajectory evidence only; never confirmatory",
+        "fresh_paired_scratch": True,
+        "validation": "frozen train-derived selection_set; official val remains isolated",
+        "report_every_epochs": 5,
+        "no_advancement_gate": True,
+    }
+    assert protocol["evaluation"]["explore50_evaluated_epochs"] == list(range(5, 51, 5))
     assert protocol["publication"]["publish_pt"] is False
     assert BASELINE_PARAMETERS == 33_156_614
 
@@ -168,6 +178,7 @@ def test_smoke_and_screen_stages_never_validate_on_official_val(
         ("smoke", screen10),
         ("screen10", screen10),
         ("screen", screen30),
+        ("explore50", screen10),
     ):
         generated = ra_train.prepare_data(dataset, stage, authority_root, manifest)
         assert json.loads(generated.read_text(encoding="utf-8"))["val"] == str(

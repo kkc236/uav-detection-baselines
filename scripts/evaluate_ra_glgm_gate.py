@@ -39,6 +39,8 @@ SCREEN10_EXPECTED_EPOCHS = 10
 SCREEN10_TAIL_EPOCHS = (8, 9, 10)
 FORMAL_EXPECTED_EPOCHS = 100
 FORMAL_TAIL_EPOCHS = (98, 99, 100)
+EXPLORE50_EXPECTED_EPOCHS = 50
+EXPLORE50_EVALUATED_EPOCHS = tuple(range(5, 51, 5))
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall")
 DETAILED_METRICS = (*STANDARD_METRICS, "ap_tiny", "ap_small")
 
@@ -68,9 +70,10 @@ def _build_prediction_metric_context(
     selection_name = {
         "screen10": "selection_set",
         "screen": "screen30_selection_set",
+        "explore50": "selection_set",
     }.get(stage)
     selection = authority.get(selection_name) if selection_name else None
-    if stage in {"screen10", "screen"}:
+    if stage in {"screen10", "screen", "explore50"}:
         if not isinstance(selection, Mapping):
             raise ValueError(f"{stage} selection authority is missing")
         expected_images = int(selection.get("images", -1))
@@ -84,7 +87,7 @@ def _build_prediction_metric_context(
     )
     if root != Path(str(authority.get("root", ""))).resolve():
         raise ValueError("metric rederivation dataset root differs from runtime authority")
-    if stage in {"screen10", "screen"}:
+    if stage in {"screen10", "screen", "explore50"}:
         selection_path = Path(str(selection.get("path", ""))).resolve()
         if (
             validation_source != selection_path
@@ -866,6 +869,8 @@ def validate_evaluated_arm(
         expected_epochs, tail_epochs = EXPECTED_EPOCHS, TAIL_EPOCHS
     elif stage == "formal":
         expected_epochs, tail_epochs = FORMAL_EXPECTED_EPOCHS, FORMAL_TAIL_EPOCHS
+    elif stage == "explore50":
+        expected_epochs, tail_epochs = EXPLORE50_EXPECTED_EPOCHS, EXPLORE50_EVALUATED_EPOCHS
     else:
         raise ValueError(f"locked evaluation is unsupported for stage: {stage}")
     arm = _load_arm(

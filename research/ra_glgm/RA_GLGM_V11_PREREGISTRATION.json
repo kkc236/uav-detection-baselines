@@ -12,6 +12,13 @@
     "screen30_requires_screen10_gate": true,
     "screen30_validation": "frozen train-derived screen30_selection_set"
   },
+  "exploration": {
+    "explore50_role": "post-hoc trajectory evidence only; never confirmatory",
+    "fresh_paired_scratch": true,
+    "no_advancement_gate": true,
+    "report_every_epochs": 5,
+    "validation": "frozen train-derived selection_set; official val remains isolated"
+  },
   "augmentation": {
     "close_mosaic": 10,
     "copy_paste": 0.0,
@@ -98,6 +105,18 @@
       98,
       99,
       100
+    ],
+    "explore50_evaluated_epochs": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50
     ],
     "half": false,
     "imgsz": 640,
@@ -303,6 +322,8 @@
     "cos_lr": false,
     "deterministic": true,
     "device": 0,
+    "explore50_cutoff_epoch": 50,
+    "explore50_schedule_epochs": 50,
     "formal_schedule_epochs": 100,
     "imgsz": 640,
     "lr0": 0.01,
