@@ -31,6 +31,7 @@ SCALE_DEFINITION = {
     "large": "sqrt(area) >= 96",
 }
 IOU_THRESHOLDS = torch.linspace(0.50, 0.95, 10)
+FORMAL_CLASS_COUNT = 10
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ def load_exact_final_checkpoint(
     if source is None:
         raise ValueError("Formal100 checkpoint contains neither EMA nor model state")
     state = _checkpoint_state(source)
-    model = model_factory()
+    model = model_factory(nc=FORMAL_CLASS_COUNT)
     if model_factory is FDRRTDETRDetectionModel and type(model) is not FDRRTDETRDetectionModel:
         raise TypeError("Formal100 must instantiate the ordinary FDR inference graph")
     model.load_state_dict(state, strict=True)

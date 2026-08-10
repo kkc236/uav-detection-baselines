@@ -47,9 +47,18 @@ class TinyFDRInferenceModel(nn.Module):
         return super().load_state_dict(state_dict, strict=strict)
 
 
+class ClassAwareTinyFDRInferenceModel(TinyFDRInferenceModel):
+    received_nc: list[int | None] = []
+
+    def __init__(self, *args, nc: int | None = None, **kwargs) -> None:
+        type(self).received_nc.append(nc)
+        super().__init__(*args, **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def _reset_models() -> None:
     TinyFDRInferenceModel.instances.clear()
+    ClassAwareTinyFDRInferenceModel.received_nc.clear()
 
 
 def _checkpoint(path: Path, *, epoch: int = 99) -> tuple[Path, str]:
@@ -89,6 +98,18 @@ def test_exact_final_checkpoint_prefers_ema_and_strictly_loads_plain_fdr(tmp_pat
     assert type(loaded.model) is TinyFDRInferenceModel
     assert TinyFDRInferenceModel.instances[0].loaded_strict is True
     torch.testing.assert_close(loaded.model.weight, torch.tensor([2.0]))
+
+
+def test_exact_final_checkpoint_builds_the_frozen_ten_class_graph(tmp_path: Path) -> None:
+    checkpoint, digest = _checkpoint(tmp_path / "epoch99.pt")
+
+    formal.load_exact_final_checkpoint(
+        checkpoint,
+        expected_sha256=digest,
+        model_factory=ClassAwareTinyFDRInferenceModel,
+    )
+
+    assert ClassAwareTinyFDRInferenceModel.received_nc == [10]
 
 
 @pytest.mark.parametrize(
