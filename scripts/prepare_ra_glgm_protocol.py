@@ -111,20 +111,6 @@ def prepare_manifest(
         "label_manifest_sha256": selected["label_manifest_sha256"],
         "report": selection_report,
     }
-    screen30_selected = selection_report["screen30_selection"]
-    screen30_selected_list = screen30_selected["absolute_list"]
-    screen30_selection_authority = {
-        "path": screen30_selected_list["path"],
-        "sha256": screen30_selected_list["sha256"],
-        "images": screen30_selected_list["count"],
-        "objects": screen30_selected["objects"],
-        "relative_subset_sha256": screen30_selected["relative_path_sha256"],
-        "image_manifest_sha256": screen30_selected["image_manifest_sha256"],
-        "label_manifest_sha256": screen30_selected["label_manifest_sha256"],
-        "report_sha256": hashlib.sha256(
-            canonical_json_bytes(selection_report)
-        ).hexdigest().upper(),
-    }
     source_sha = public_state_sha256(source)
     identities = {}
     for stage in RA_STAGES:
@@ -159,7 +145,6 @@ def prepare_manifest(
             "positive": positive_signature,
             "ignore": ignore_signature,
             "selection_set": selection_authority,
-            "screen30_selection_set": screen30_selection_authority,
         },
         "run_identities": identities,
     }

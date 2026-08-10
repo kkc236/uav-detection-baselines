@@ -12,7 +12,9 @@ from src.ra_glgm import RAGLGM
 from src.ra_glgm_head import RAFDRRTDETRDecoder
 from src.ra_glgm_loss import (
     ResidualDifficultyTargets,
+    SCALE_LOG_AREA_KNOTS,
     build_residual_difficulty_targets,
+    log_area_to_empirical_cdf,
     residual_support_focal_loss,
     scale_conditioning_loss,
     scale_prediction_diagnostics,
@@ -72,7 +74,7 @@ def test_initial_output_routes_and_public_gradient_are_exactly_baseline() -> Non
     assert torch.equal(output, public)
     assert routes.shape == (2, 2, 4, 9, 11)
     assert torch.equal(routes, torch.full_like(routes, 0.5))
-    torch.testing.assert_close(scales, torch.full_like(scales, 1.0 / 3.0))
+    assert torch.equal(scales, torch.full_like(scales, 0.5))
     assert torch.equal(public.grad, baseline.grad)
     assert module.alpha.grad is not None and module.alpha.grad.abs().sum() > 0
     assert module.support_head.weight.grad is not None
@@ -85,6 +87,8 @@ def test_initial_output_routes_and_public_gradient_are_exactly_baseline() -> Non
     assert torch.count_nonzero(module.output_projection.weight.grad) == 0
     assert module.scale_head.weight.grad is not None
     assert torch.count_nonzero(module.scale_head.weight.grad) == 0
+    assert module.scale_expert_slopes.grad is not None
+    assert torch.count_nonzero(module.scale_expert_slopes.grad) == 0
     assert all(
         parameter.grad is not None and torch.isfinite(parameter.grad).all()
         for parameter in module.parameters()
@@ -109,21 +113,50 @@ def test_second_step_opens_output_projection_gradient_and_residual_is_bounded() 
     assert (output - x).abs().max() <= module.max_residual_scale + 1e-7
 
 
-def test_scale_gate_is_initially_one_and_residual_remains_bounded() -> None:
+def test_scale_supervision_opens_zero_initialized_expert_slopes_on_next_step() -> None:
+    module = _tiny_module().train()
+    x = torch.randn(1, 32, 8, 8)
+    targets = ResidualDifficultyTargets(
+        heatmap=torch.ones(1, 1, 8, 8),
+        valid_mask=torch.ones(1, 1, 8, 8, dtype=torch.bool),
+        difficulty=torch.ones(1),
+        scale_boxes=torch.tensor([[0.5, 0.5, 0.1, 0.1]]),
+        scale_batch_idx=torch.zeros(1, dtype=torch.long),
+        scale_values=torch.ones(1),
+    )
+    _, _, _, scale = module.forward_with_diagnostics(x)
+    scale_conditioning_loss(scale, targets).backward()
+    assert module.scale_head.bias.grad is not None
+    assert module.scale_head.bias.grad.abs().sum() > 0
+    with torch.no_grad():
+        module.scale_head.bias.sub_(module.scale_head.bias.grad)
+    module.zero_grad(set_to_none=True)
+
+    _, _, support, opened_scale = module.forward_with_diagnostics(x)
+    assert not torch.equal(opened_scale, torch.full_like(opened_scale, 0.5))
+    support.mean().backward()
+    assert module.scale_expert_slopes.grad is not None
+    assert module.scale_expert_slopes.grad.abs().sum() > 0
+
+
+def test_continuous_scale_modulation_is_bounded_and_residual_remains_bounded() -> None:
     module = RAGLGM(channels=32, hidden_channels=24, route_groups=4, private_seed=91)
     x = torch.randn(2, 32, 8, 10)
 
-    output, _, _, scales = module.forward_with_diagnostics(x)
-    gate = (scales * module.scale_factors).sum(dim=1, keepdim=True)
+    output, routes, _, scales = module.forward_with_diagnostics(x)
     assert torch.equal(output, x)
-    assert torch.equal(gate, torch.ones_like(gate))
+    assert torch.equal(scales, torch.full_like(scales, 0.5))
+    assert torch.equal(routes, torch.full_like(routes, 0.5))
 
     with torch.no_grad():
         module.alpha.fill_(10.0)
-        module.scale_head.bias.copy_(torch.tensor([20.0, -20.0, -20.0]))
-    opened = module(x)
-    maximum = module.max_residual_scale * float(module.scale_factors.max())
-    assert (opened - x).abs().max() <= maximum + 1e-7
+        module.scale_head.bias.fill_(20.0)
+        module.scale_expert_slopes.fill_(20.0)
+    opened, opened_routes, _, opened_scales = module.forward_with_diagnostics(x)
+    assert torch.all(opened_scales > 0.999)
+    assert torch.all(opened_routes[:, 1] < torch.sigmoid(torch.tensor(2.0)) + 1e-6)
+    assert torch.all(opened_routes[:, 1] > 0.5)
+    assert (opened - x).abs().max() <= module.max_residual_scale + 1e-7
 
 
 @pytest.mark.parametrize("shape", [(1, 32, 7, 13), (2, 32, 16, 9)])
@@ -136,7 +169,7 @@ def test_dynamic_shapes_and_cpu_amp_remain_finite(shape: tuple[int, ...]) -> Non
     assert output.shape == x.shape
     assert routes.shape[-2:] == x.shape[-2:]
     assert support.shape == (shape[0], 1, shape[2], shape[3])
-    assert scales.shape == (shape[0], 3, shape[2], shape[3])
+    assert scales.shape == (shape[0], 1, shape[2], shape[3])
     assert torch.isfinite(output).all()
     torch.testing.assert_close(
         routes.float().sum(dim=1),
@@ -162,9 +195,9 @@ def test_private_initialization_does_not_advance_public_rng() -> None:
 def test_parameter_budget_and_depthwise_large_kernels_are_frozen() -> None:
     module = RAGLGM()
 
-    assert module.private_parameter_count == 813_396
+    assert module.private_parameter_count == 813_018
     assert module.private_parameter_count / BASELINE_PARAMETERS == pytest.approx(
-        0.0245319380
+        0.0245205368
     )
     assert module.private_parameter_count <= 0.10 * BASELINE_PARAMETERS
     assert module.global_large[0].groups == 192
@@ -178,7 +211,7 @@ def test_parameter_budget_and_depthwise_large_kernels_are_frozen() -> None:
     assert torch.count_nonzero(module.router.bias) == 0
     assert torch.count_nonzero(module.scale_head.weight) == 0
     assert torch.count_nonzero(module.scale_head.bias) == 0
-    assert torch.equal(module.scale_factors.flatten(), torch.tensor([1.25, 1.0, 0.75]))
+    assert torch.count_nonzero(module.scale_expert_slopes) == 0
     assert torch.count_nonzero(module.output_projection.weight) > 0
     assert torch.count_nonzero(module.support_head.weight) > 0
 
@@ -192,7 +225,8 @@ def test_grouped_router_preserves_each_groups_two_expert_channel_order() -> None
     local = torch.zeros(1, 24, 2, 3)
     context = torch.zeros_like(local)
 
-    _, routes = module._route(torch.zeros_like(local), local, context)
+    scale = torch.full((1, 1, 2, 3), 0.5)
+    _, routes = module._route(torch.zeros_like(local), local, context, scale)
 
     expected_local = torch.tensor([1.0, 2.0, 3.0, 4.0]).mul(2).sigmoid()
     torch.testing.assert_close(routes[0, 0, :, 0, 0], expected_local)
@@ -211,7 +245,8 @@ def test_router_reads_shared_reduced_feature_not_expert_sum() -> None:
     local = torch.zeros_like(reduced)
     context = torch.zeros_like(reduced)
 
-    fused, routes = module._route(reduced, local, context)
+    scale = torch.full((1, 1, 2, 3), 0.5)
+    fused, routes = module._route(reduced, local, context, scale)
 
     assert torch.count_nonzero(fused) == 0
     assert torch.all(routes[:, 0] > 0.73)
@@ -256,7 +291,7 @@ def test_full_graph_preserves_layer28_public_state_and_isolates_only_ra_state() 
     assert private and all(name.startswith(RA_GLGM_PRIVATE_PREFIX) for name in private)
     assert sum(parameter.numel() for parameter in method.parameters()) - sum(
         parameter.numel() for parameter in control.parameters()
-    ) == 813_396
+    ) == 813_018
 
     artifact = build_ra_glgm_initial_state(
         control.state_dict(), method.state_dict(), metadata={"seed": 0}
@@ -410,14 +445,20 @@ def test_matched_difficulty_uses_target_class_probability_and_aligned_iou() -> N
     assert targets.heatmap[0, 0, 12, 12] == pytest.approx(0.65)
 
 
-def test_scale_targets_use_frozen_640_thresholds_and_train_feature_gate() -> None:
-    boxes = torch.tensor(
-        [
-            [0.25, 0.25, 8.0 / 640.0, 8.0 / 640.0],
-            [0.50, 0.50, 24.0 / 640.0, 24.0 / 640.0],
-            [0.75, 0.75, 32.0 / 640.0, 32.0 / 640.0],
-        ]
+def test_scale_targets_use_frozen_empirical_cdf_and_train_feature_gate() -> None:
+    knots = torch.tensor(SCALE_LOG_AREA_KNOTS)
+    torch.testing.assert_close(
+        log_area_to_empirical_cdf(knots),
+        torch.linspace(0.0, 1.0, len(SCALE_LOG_AREA_KNOTS)),
+        rtol=0,
+        atol=2e-7,
     )
+    assert log_area_to_empirical_cdf(torch.tensor([-10.0])).item() == 0.0
+    assert log_area_to_empirical_cdf(torch.tensor([20.0])).item() == 1.0
+
+    side_lengths = torch.tensor([8.0, 24.0, 32.0]) / 640.0
+    boxes = torch.tensor([[0.25, 0.25], [0.50, 0.50], [0.75, 0.75]])
+    boxes = torch.cat((boxes, side_lengths[:, None].expand(-1, 2)), dim=1)
     targets = build_residual_difficulty_targets(
         pred_bboxes=boxes.unsqueeze(0),
         pred_scores=torch.full((1, 3, 3), 8.0),
@@ -435,79 +476,112 @@ def test_scale_targets_use_frozen_640_thresholds_and_train_feature_gate() -> Non
     assert targets.difficulty[0] == pytest.approx(0.25)
     assert targets.difficulty[1] == pytest.approx(0.25)
     assert targets.difficulty[2] == pytest.approx(0.25)
-    assert targets.scale_distribution is not None
-    assert targets.scale_mask is not None
-    for index, coordinate in enumerate((20, 40, 60)):
-        expected = torch.zeros(3)
-        expected[index] = 1
-        torch.testing.assert_close(
-            targets.scale_distribution[0, :, coordinate, coordinate], expected
-        )
+    assert targets.scale_values is not None
+    expected = log_area_to_empirical_cdf(
+        torch.tensor([64.0, 576.0, 1024.0]).log()
+    )
+    torch.testing.assert_close(targets.scale_values, expected)
 
-    logits = torch.zeros(1, 3, 80, 80, requires_grad=True)
-    probabilities = logits.softmax(dim=1)
-    loss = scale_conditioning_loss(probabilities, targets)
+    logits = torch.zeros(1, 1, 80, 80, requires_grad=True)
+    predictions = logits.sigmoid()
+    loss = scale_conditioning_loss(predictions, targets)
     loss.backward()
-    assert float(loss.detach()) == pytest.approx(torch.log(torch.tensor(3.0)).item())
+    assert torch.isfinite(loss) and loss > 0
     assert logits.grad is not None and logits.grad.abs().sum() > 0
-    diagnostics = scale_prediction_diagnostics(probabilities.detach(), targets)
-    assert diagnostics["scale_positive_pixels"] > 0
-    assert diagnostics["scale_entropy"] == pytest.approx(torch.log(torch.tensor(3.0)).item())
+    routes = torch.full((1, 2, 8, 80, 80), 0.5)
+    diagnostics = scale_prediction_diagnostics(predictions.detach(), targets, routes)
+    assert diagnostics["scale_instances"] == 3
+    assert diagnostics["scale_prediction_mean"] == pytest.approx(0.5)
+    assert diagnostics["route_entropy"] == pytest.approx(torch.log(torch.tensor(2.0)).item())
 
 
-def _scale_targets(class_indices: list[int]) -> ResidualDifficultyTargets:
-    pixels = len(class_indices)
-    distribution = torch.zeros(1, 3, 1, pixels)
-    for pixel, class_index in enumerate(class_indices):
-        distribution[0, class_index, 0, pixel] = 1.0
-    mask = torch.ones(1, 1, 1, pixels, dtype=torch.bool)
+def _scale_targets(values: list[float]) -> ResidualDifficultyTargets:
+    instances = len(values)
+    mask = torch.ones(1, 1, 1, 1, dtype=torch.bool)
     return ResidualDifficultyTargets(
         heatmap=torch.ones_like(mask, dtype=torch.float32),
         valid_mask=mask,
-        difficulty=torch.ones(pixels),
-        scale_distribution=distribution,
-        scale_mask=mask,
+        difficulty=torch.ones(instances),
+        scale_boxes=torch.tensor([[0.5, 0.5, 0.1, 0.1]]).repeat(instances, 1),
+        scale_batch_idx=torch.zeros(instances, dtype=torch.long),
+        scale_values=torch.tensor(values),
     )
 
 
-def test_epoch_scale_statistics_are_pixel_weighted_not_last_batch() -> None:
+def test_scale_loss_is_instance_balanced_instead_of_support_area_weighted() -> None:
+    targets = ResidualDifficultyTargets(
+        heatmap=torch.ones(1, 1, 16, 16),
+        valid_mask=torch.ones(1, 1, 16, 16, dtype=torch.bool),
+        difficulty=torch.ones(2),
+        scale_boxes=torch.tensor(
+            [[0.25, 0.5, 0.02, 0.02], [0.75, 0.5, 0.75, 0.75]]
+        ),
+        scale_batch_idx=torch.zeros(2, dtype=torch.long),
+        scale_values=torch.tensor([0.0, 1.0]),
+    )
+    predictions = torch.zeros(1, 1, 16, 16, requires_grad=True)
+    loss = scale_conditioning_loss(predictions, targets)
+    loss.backward()
+
+    # SmoothL1 errors are 0 and 0.5; per-instance normalization yields 0.25
+    # even though the second target covers much more of the feature map.
+    assert float(loss.detach()) == pytest.approx(0.25)
+    assert predictions.grad is not None and predictions.grad.abs().sum() > 0
+
+
+def test_epoch_scale_statistics_are_instance_weighted_not_last_batch() -> None:
     statistics = _RAEpochScaleStatistics()
-    first = torch.tensor([[[[0.8]], [[0.1]], [[0.1]]]])
-    second = torch.tensor(
-        [[[[0.1, 0.1, 0.1]], [[0.1, 0.1, 0.1]], [[0.8, 0.8, 0.8]]]]
+    first = torch.full((1, 1, 1, 1), 0.2)
+    second = torch.full((1, 1, 1, 1), 0.8)
+    routes = torch.full((1, 2, 4, 1, 1), 0.5)
+    slopes = torch.zeros(1, 4, 1, 1)
+    statistics.update(first, _scale_targets([0.1]), torch.tensor(0.2), routes, slopes)
+    statistics.update(
+        second, _scale_targets([0.9, 0.9, 0.9]), torch.tensor(0.6), routes, slopes
     )
-    statistics.update(first, _scale_targets([0]), torch.tensor(0.2))
-    statistics.update(second, _scale_targets([2, 2, 2]), torch.tensor(0.6))
 
     values = statistics.values()
-    assert values["scale_positive_pixels"] == 4
+    assert values["scale_instances"] == 4
     assert values["loss_ra_scale"] == pytest.approx(0.5)
-    assert values["scale_tiny_fraction"] == pytest.approx(0.25)
-    assert values["scale_regular_fraction"] == pytest.approx(0.75)
-    assert values["scale_tiny_recall"] == pytest.approx(1.0)
-    assert values["scale_regular_recall"] == pytest.approx(1.0)
+    assert values["scale_prediction_mean"] == pytest.approx(0.65)
+    assert values["scale_target_mean"] == pytest.approx(0.70)
+    assert values["scale_mae"] == pytest.approx(0.10)
+    assert values["scale_pearson"] == pytest.approx(1.0)
+    assert values["scale_spearman"] == pytest.approx(1.0)
 
 
-def test_epoch_scale_gate_amplitude_is_zero_for_uniform_and_positive_when_nontrivial() -> None:
+def test_epoch_route_statistics_detect_balanced_and_noncollapsed_loads() -> None:
     uniform = _RAEpochScaleStatistics()
+    uniform_routes = torch.full((1, 2, 4, 1, 1), 0.5)
     uniform.update(
-        torch.full((1, 3, 1, 3), 1.0 / 3.0),
-        _scale_targets([0, 1, 2]),
-        torch.log(torch.tensor(3.0)),
+        torch.full((1, 1, 1, 1), 0.5),
+        _scale_targets([0.2, 0.5, 0.8]),
+        torch.tensor(0.1),
+        uniform_routes,
+        torch.zeros(1, 4, 1, 1),
     )
     uniform_values = uniform.values()
-    assert uniform_values["scale_gate_mean_abs_deviation"] == pytest.approx(0.0, abs=1e-7)
-    assert uniform_values["scale_gate_std"] == pytest.approx(0.0, abs=1e-7)
+    assert uniform_values["route_global_mean"] == pytest.approx(0.5)
+    assert uniform_values["route_load_min"] == pytest.approx(0.5)
+    assert uniform_values["route_load_max"] == pytest.approx(0.5)
+    assert uniform_values["route_entropy"] == pytest.approx(torch.log(torch.tensor(2.0)).item())
 
     nontrivial = _RAEpochScaleStatistics()
+    route_loads = torch.tensor([0.1, 0.3, 0.7, 0.9]).view(1, 1, 4, 1, 1)
+    nontrivial_routes = torch.cat((1.0 - route_loads, route_loads), dim=1)
     nontrivial.update(
-        torch.tensor([[[[1.0, 0.0]], [[0.0, 0.0]], [[0.0, 1.0]]]]),
-        _scale_targets([0, 2]),
-        torch.tensor(0.0),
+        torch.full((1, 1, 1, 1), 0.8),
+        _scale_targets([0.2, 0.8]),
+        torch.tensor(0.1),
+        nontrivial_routes,
+        torch.full((1, 4, 1, 1), 0.5),
     )
     nontrivial_values = nontrivial.values()
-    assert nontrivial_values["scale_gate_mean_abs_deviation"] > 0
-    assert nontrivial_values["scale_gate_std"] > 0
+    assert nontrivial_values["route_load_min"] == pytest.approx(0.1)
+    assert nontrivial_values["route_load_max"] == pytest.approx(0.9)
+    assert nontrivial_values["route_global_std"] > 0
+    assert nontrivial_values["scale_slope_rms"] > 0
+    assert nontrivial_values["scale_modulation_route_delta_mean"] > 0
 
 
 def test_epoch_evidence_uses_aggregated_scale_statistics() -> None:
@@ -515,31 +589,44 @@ def test_epoch_evidence_uses_aggregated_scale_statistics() -> None:
         last_fdr_losses: dict[str, torch.Tensor] = {}
         last_ra_glgm_losses = {
             "loss_ra_scale": torch.tensor(99.0),
-            "scale_tiny_fraction": torch.tensor(1.0),
+            "scale_pearson": torch.tensor(-1.0),
         }
 
         @staticmethod
         def ra_glgm_epoch_statistics() -> dict[str, torch.Tensor]:
             return {
                 "loss_ra_scale": torch.tensor(0.4),
-                "scale_entropy": torch.tensor(0.8),
-                "scale_positive_pixels": torch.tensor(40.0),
-                "scale_tiny_fraction": torch.tensor(0.25),
-                "scale_small_fraction": torch.tensor(0.25),
-                "scale_regular_fraction": torch.tensor(0.5),
-                "scale_tiny_recall": torch.tensor(0.5),
-                "scale_small_recall": torch.tensor(0.5),
-                "scale_regular_recall": torch.tensor(1.0),
-                "scale_gate_mean_abs_deviation": torch.tensor(0.1),
-                "scale_gate_std": torch.tensor(0.2),
+                "scale_instances": torch.tensor(40.0),
+                "scale_mae": torch.tensor(0.1),
+                "scale_rmse": torch.tensor(0.2),
+                "scale_prediction_mean": torch.tensor(0.45),
+                "scale_prediction_std": torch.tensor(0.25),
+                "scale_target_mean": torch.tensor(0.5),
+                "scale_target_std": torch.tensor(0.3),
+                "scale_pearson": torch.tensor(0.6),
+                "scale_spearman": torch.tensor(0.55),
+                "route_entropy": torch.tensor(0.65),
+                "route_global_mean": torch.tensor(0.5),
+                "route_global_std": torch.tensor(0.1),
+                "route_load_min": torch.tensor(0.3),
+                "route_load_max": torch.tensor(0.7),
+                "scale_route_correlation_mean_abs": torch.tensor(0.2),
+                "scale_route_correlation_max_abs": torch.tensor(0.4),
+                "scale_slope_rms": torch.tensor(0.1),
+                "scale_slope_max_abs": torch.tensor(0.2),
+                "scale_modulation_route_delta_mean": torch.tensor(0.01),
+                "scale_modulation_route_delta_max": torch.tensor(0.03),
             }
 
     losses = _private_losses(type("Trainer", (), {"model": FakeModel()})(), "ra_glgm")
     assert losses["loss_ra_scale"] == pytest.approx(0.4)
-    assert losses["ra_scale_tiny_fraction"] == pytest.approx(0.25)
-    assert losses["ra_scale_positive_pixels"] == pytest.approx(40.0)
-    assert losses["ra_scale_gate_mean_abs_deviation"] == pytest.approx(0.1)
-    assert losses["ra_scale_gate_std"] == pytest.approx(0.2)
+    assert losses["scale_instances"] == pytest.approx(40.0)
+    assert losses["scale_pearson"] == pytest.approx(0.6)
+    assert losses["scale_spearman"] == pytest.approx(0.55)
+    assert losses["route_load_min"] == pytest.approx(0.3)
+    assert losses["route_load_max"] == pytest.approx(0.7)
+    assert losses["scale_slope_rms"] == pytest.approx(0.1)
+    assert losses["scale_modulation_route_delta_mean"] == pytest.approx(0.01)
 
 
 def test_ignored_boxes_are_neither_targets_nor_negative_support_pixels() -> None:

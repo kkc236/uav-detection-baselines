@@ -545,7 +545,6 @@ def evaluate(
     if identity != manifest["run_identities"].get(f"{variant}_{stage}"):
         raise ValueError("RA run identity differs from protocol authority")
     expected_epochs = {
-        "screen10": RA_EXPERIMENT_PROTOCOL["evaluation"]["screen10_evaluated_epochs"],
         "screen": RA_EXPERIMENT_PROTOCOL["evaluation"]["screen_evaluated_epochs"],
         "formal": RA_EXPERIMENT_PROTOCOL["evaluation"]["formal_evaluated_epochs"],
         "explore50": RA_EXPERIMENT_PROTOCOL["evaluation"]["explore50_evaluated_epochs"],
@@ -557,12 +556,10 @@ def evaluate(
     if not isinstance(dataset_authority, Mapping):
         raise ValueError("locked evaluator dataset authority is missing")
     selection_name = {
-        "screen10": "selection_set",
-        "screen": "screen30_selection_set",
         "explore50": "selection_set",
     }.get(stage)
     selection = dataset_authority.get(selection_name) if selection_name else None
-    if stage in {"screen10", "screen", "explore50"}:
+    if stage == "explore50":
         if not isinstance(selection, Mapping):
             raise ValueError(f"{stage} selection-set authority is missing")
         expected_images = int(selection.get("images", -1))
@@ -579,13 +576,13 @@ def evaluate(
         raise ValueError("locked evaluator positive dataset differs from authority")
     if ignore_sidecar_signature(dataset_root) != dataset_authority.get("ignore"):
         raise ValueError("locked evaluator ignore sidecars differ from authority")
-    if stage in {"screen10", "screen", "explore50"}:
+    if stage == "explore50":
         if validation_source != Path(str(selection.get("path", ""))).resolve():
             raise ValueError(f"{stage} validation list path differs from authority")
         if file_sha256(validation_source) != str(selection.get("sha256", "")).upper():
             raise ValueError(f"{stage} validation list SHA256 differs from authority")
     elif validation_source != (dataset_root / "images" / "val").resolve():
-        raise ValueError("Formal100 must use the authoritative official val split")
+        raise ValueError(f"{stage} must use the authoritative official val split")
     ground_truth, image_ids, geometries, ignored = _coco_ground_truth(
         images, names, expected_objects=expected_objects
     )

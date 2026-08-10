@@ -122,7 +122,7 @@ class RAGLGM(nn.Module):
             )
             self.scale_head = nn.Conv2d(
                 self.hidden_channels,
-                3,
+                1,
                 1,
                 bias=True,
             )
@@ -137,20 +137,17 @@ class RAGLGM(nn.Module):
         # initialization side effect.
         nn.init.zeros_(self.router.weight)
         nn.init.zeros_(self.router.bias)
-        # Uniform scale probabilities yield an exact unit gate because the
-        # frozen tiny/small/regular factors average to one.
+        # The continuous scale field starts at the training-prior median.  It
+        # cannot affect routing until the separately bounded group slopes open.
         nn.init.zeros_(self.scale_head.weight)
         nn.init.zeros_(self.scale_head.bias)
-        self.register_buffer(
-            "scale_factors",
-            torch.tensor([1.25, 1.0, 0.75]).view(1, 3, 1, 1),
-            persistent=True,
+        self.scale_expert_slopes = nn.Parameter(
+            torch.zeros(1, self.route_groups, 1, 1)
         )
         self.alpha = nn.Parameter(torch.zeros(1, self.channels, 1, 1))
         self.last_support_map: Tensor | None = None
         self.last_route_weights: Tensor | None = None
-        self.last_scale_probabilities: Tensor | None = None
-        self.last_scale_gate: Tensor | None = None
+        self.last_scale_values: Tensor | None = None
 
     @property
     def private_parameter_count(self) -> int:
@@ -161,12 +158,14 @@ class RAGLGM(nn.Module):
         routing_feature: Tensor,
         local: Tensor,
         global_feature: Tensor,
+        scale_values: Tensor,
     ) -> tuple[Tensor, Tensor]:
         batch, channels, height, width = local.shape
         if (
             routing_feature.shape != local.shape
             or global_feature.shape != local.shape
             or channels != self.hidden_channels
+            or scale_values.shape != (batch, 1, height, width)
         ):
             raise ValueError("RA-GLGM expert feature shapes do not match")
         # Grouped-convolution channels are ordered [g0-local, g0-global,
@@ -178,6 +177,9 @@ class RAGLGM(nn.Module):
             height,
             width,
         ).transpose(1, 2)
+        centered_scale = scale_values.sub(0.5).mul(2.0)
+        scale_bias = self.scale_expert_slopes.tanh() * centered_scale
+        logits = logits + torch.stack((-scale_bias, scale_bias), dim=1)
         weights = logits.softmax(dim=1)
         channels_per_group = channels // self.route_groups
         channel_weights = weights.repeat_interleave(channels_per_group, dim=2)
@@ -190,7 +192,7 @@ class RAGLGM(nn.Module):
     def forward_with_diagnostics(
         self, x: Tensor
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Return refined P3, expert routes, support, and scale probabilities."""
+        """Return refined P3, expert routes, support, and continuous scale field."""
 
         if x.ndim != 4 or x.shape[1] != self.channels:
             raise ValueError(
@@ -203,27 +205,22 @@ class RAGLGM(nn.Module):
         global_feature = global_feature + self.global_pool_projection(
             F.adaptive_avg_pool2d(reduced, 1)
         )
-        fused, weights = self._route(reduced, local, global_feature)
+        scale_values = self.scale_head(reduced).sigmoid()
+        fused, weights = self._route(reduced, local, global_feature, scale_values)
         support = self.support_head(fused).sigmoid()
-        scale_probabilities = self.scale_head(fused).softmax(dim=1)
-        scale_gate = (scale_probabilities * self.scale_factors).sum(dim=1, keepdim=True)
         residual = (
             self.max_residual_scale
             * self.alpha.tanh()
             * support
-            * scale_gate
             * self.output_projection(fused).tanh()
         )
-        return x + residual, weights, support, scale_probabilities
+        return x + residual, weights, support, scale_values
 
     def forward(self, x: Tensor) -> Tensor:
-        output, weights, support, scale_probabilities = self.forward_with_diagnostics(x)
+        output, weights, support, scale_values = self.forward_with_diagnostics(x)
         self.last_support_map = support
         self.last_route_weights = weights.detach()
-        self.last_scale_probabilities = scale_probabilities
-        self.last_scale_gate = (
-            scale_probabilities.detach() * self.scale_factors
-        ).sum(dim=1, keepdim=True)
+        self.last_scale_values = scale_values
         return output
 
 

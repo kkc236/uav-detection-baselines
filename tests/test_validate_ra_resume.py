@@ -41,11 +41,6 @@ def _stub_learnability_validation(monkeypatch: pytest.MonkeyPatch) -> None:
         "current_source_identity",
         lambda _root: dict(TEST_SOURCE),
     )
-    monkeypatch.setattr(
-        resume_module,
-        "_load_screen10_gate",
-        lambda _path: ({"screen30_eligible": True}, "F" * 64),
-    )
 
 
 def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, Path]:
@@ -82,10 +77,6 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
     protocol = tmp_path / "protocol.json"
     selection_list = tmp_path / "selection-dev.txt"
     selection_list.write_text("/dataset/images/train/selection.jpg\n", encoding="utf-8")
-    screen30_selection_list = tmp_path / "screen30-dev.txt"
-    screen30_selection_list.write_text(
-        "/dataset/images/train/screen30-selection.jpg\n", encoding="utf-8"
-    )
     dataset_authority = {
         "root": str((tmp_path / "VisDrone").resolve()),
         "positive": {"sha256": "D" * 64},
@@ -93,12 +84,6 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         "selection_set": {
             "path": str(selection_list.resolve()),
             "sha256": file_sha256(selection_list),
-            "images": 548,
-            "objects": 1,
-        },
-        "screen30_selection_set": {
-            "path": str(screen30_selection_list.resolve()),
-            "sha256": file_sha256(screen30_selection_list),
             "images": 548,
             "objects": 1,
         },
@@ -125,7 +110,6 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         "gpu_uuid": "GPU-fixed",
         "schedule_epochs": 50,
         "cutoff_epoch": 30,
-        "screen10_gate_sha256": "F" * 64,
         "screen_gate_sha256": None,
         "initialization_mode": "fresh_paired_scratch",
         "parent_checkpoint": None,
@@ -559,6 +543,7 @@ def test_recovery_generation_persists_discarded_attempts_after_replayed_epoch(
     )
     assert authorized["trailing_uncommitted_optimizer_attempts"] == 0
     assert authorized["discarded_optimizer_attempts"] == 2
+    assert authorized["discarded_optimizer_attempt_numbers"] == [4, 5]
     assert authorized["recovery_generation"] == 1
 
     replay = dict(rows[-1])
@@ -600,6 +585,7 @@ def test_recovery_generation_persists_discarded_attempts_after_replayed_epoch(
     )
     assert completed["completed_epoch"] == 4
     assert completed["discarded_optimizer_attempts"] == 2
+    assert completed["discarded_optimizer_attempt_numbers"] == [4, 5]
     assert completed["active_optimizer_attempts"] == 4
     assert completed["trailing_uncommitted_optimizer_attempts"] == 0
 

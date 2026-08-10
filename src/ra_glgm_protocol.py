@@ -15,8 +15,8 @@ from src.fdr_protocol import (
 
 
 RA_GLGM_PRIVATE_PREFIX = "model.28.ra_glgm."
-RA_GLGM_PRIVATE_PARAMETERS = 813_396
-RA_GLGM_PRIVATE_STATE_ELEMENTS = 815_324
+RA_GLGM_PRIVATE_PARAMETERS = 813_018
+RA_GLGM_PRIVATE_STATE_ELEMENTS = 814_943
 
 
 def partition_ra_glgm_state_dicts(

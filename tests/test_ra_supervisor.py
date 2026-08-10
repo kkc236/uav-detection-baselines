@@ -27,12 +27,10 @@ from scripts.supervise_ra_glgm import (
 )
 
 
-def test_supervisor_order_is_sequential_and_screen10_precedes_screen30() -> None:
+def test_supervisor_order_is_sequential_smoke_then_screen_then_formal() -> None:
     assert TRAIN_STEPS == (
         ("smoke", "baseline"),
         ("smoke", "ra_glgm"),
-        ("screen10", "baseline"),
-        ("screen10", "ra_glgm"),
         ("screen", "baseline"),
         ("screen", "ra_glgm"),
         ("formal", "baseline"),
@@ -54,7 +52,6 @@ def test_train_command_exposes_no_scientific_overrides_and_formal_requires_gate(
         "output_root": tmp_path / "runs",
         "stage": "screen",
         "variant": "ra_glgm",
-        "screen10_gate": tmp_path / "screen10-gate.json",
     }
     command = build_train_command(**common)
     assert command[:2] == [str(Path("/venv/bin/python")), "scripts/train_rtdetr_ra_glgm.py"]
@@ -75,25 +72,25 @@ def test_train_command_exposes_no_scientific_overrides_and_formal_requires_gate(
         build_train_command(**{**common, "stage": "formal"})
 
 
-def test_screen10_evaluator_and_gate_commands_use_frozen_stage(tmp_path: Path) -> None:
+def test_screen30_evaluator_and_gate_commands_use_frozen_tail5(tmp_path: Path) -> None:
     evaluator = build_evaluator_command(
         python=Path("/venv/bin/python"),
         evaluator_script=tmp_path / "evaluator.py",
-        run=tmp_path / "screen10-run",
+        run=tmp_path / "screen-run",
         protocol_manifest=tmp_path / "protocol.json",
-        stage="screen10",
+        stage="screen",
     )
-    assert evaluator[evaluator.index("--epochs") + 1] == "8,9,10"
+    assert evaluator[evaluator.index("--epochs") + 1] == "26,27,28,29,30"
 
     gate = build_gate_command(
         python=Path("/venv/bin/python"),
         output_root=tmp_path / "runs",
-        gate_output=tmp_path / "screen10-gate.json",
-        stage="screen10",
+        gate_output=tmp_path / "screen-gate.json",
+        stage="screen",
     )
-    assert gate[gate.index("--stage") + 1] == "screen10"
-    assert run_name("screen10", "baseline") in gate[gate.index("--baseline-run") + 1]
-    assert run_name("screen10", "ra_glgm") in gate[gate.index("--ra-run") + 1]
+    assert gate[gate.index("--stage") + 1] == "screen"
+    assert run_name("screen", "baseline") in gate[gate.index("--baseline-run") + 1]
+    assert run_name("screen", "ra_glgm") in gate[gate.index("--ra-run") + 1]
 
     explore = build_evaluator_command(
         python=Path("/venv/bin/python"),
@@ -103,15 +100,15 @@ def test_screen10_evaluator_and_gate_commands_use_frozen_stage(tmp_path: Path) -
         stage="explore50",
     )
     assert explore[explore.index("--epochs") + 1] == "5,10,15,20,25,30,35,40,45,50"
-    assert run_name("explore50", "baseline").endswith("ra-glgm-v1.1-long50")
+    assert run_name("explore50", "baseline").endswith("ra-glgm-v1.2-long50")
 
 
-def test_supervisor_accepts_only_v11_formal_report(
+def test_supervisor_accepts_only_v12_formal_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     expected = {
         "protocol_sha256": supervisor_module.RA_EXPERIMENT_PROTOCOL_SHA256,
-        "report_name": "RA-GLGM-Formal100-v1.1",
+        "report_name": "RA-GLGM-Formal100-v1.2",
         "primary_evidence": ["epoch100", "tail3_mean"],
         "engineering": {"complete": True},
         "formal_success": False,
@@ -322,7 +319,7 @@ def test_supervisor_rejects_a_live_pid_start_identity(
 def test_fresh_orphan_run_is_atomically_quarantined_before_exact_fresh_launch(
     tmp_path: Path,
 ) -> None:
-    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.1"
+    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.2"
     run.mkdir()
     (run / "partial.txt").write_text("preserve me", encoding="utf-8")
     quarantine = ensure_fresh_run_slot(run)
@@ -333,7 +330,7 @@ def test_fresh_orphan_run_is_atomically_quarantined_before_exact_fresh_launch(
 
 
 def test_fresh_slot_never_quarantines_a_runtime_manifest(tmp_path: Path) -> None:
-    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.1"
+    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.2"
     run.mkdir()
     (run / "ra-run.json").write_text("{}", encoding="utf-8")
     with pytest.raises(RuntimeError, match="must use recovery"):

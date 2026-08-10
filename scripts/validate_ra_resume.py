@@ -29,7 +29,7 @@ from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 
 
-STAGE_LIMITS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+STAGE_LIMITS = {"smoke": 2, "screen": 30, "formal": 100, "explore50": 50}
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall", "cuda_peak_mib")
 FIXED_AMP_SCALE = 128.0
 COMMON_GRADIENT_FIELDS = ("gradient_norm", "fdr_gradient_norm")
@@ -282,6 +282,7 @@ def validate_optimizer_evidence(
         "public_gradient_nonzero": True,
         "fdr_gradient_nonzero": True,
         "ra_private_gradient_nonzero": True if variant == "ra_glgm" else None,
+        "discarded_optimizer_attempt_numbers": sorted(discarded),
         **{key: value for key, value in lineage.items() if key != "discarded_optimizer_attempt_numbers" and key != "recovery_lineage_records"},
     }
 
@@ -365,22 +366,8 @@ def _load_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
     root = path.resolve().parent
     gate = validate_screen_gate_report(
         path,
-        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1.1",
-        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1.1",
-    )
-    return gate, file_sha256(path)
-
-
-def _load_screen10_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
-    if path is None:
-        return None, None
-    from scripts.evaluate_ra_glgm_gate import validate_screen10_gate_report
-
-    root = path.resolve().parent
-    gate = validate_screen10_gate_report(
-        path,
-        baseline_run=root / "screen10-seed0-baseline-ra-glgm-v1.1",
-        method_run=root / "screen10-seed0-ra_glgm-ra-glgm-v1.1",
+        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1.2",
+        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1.2",
     )
     return gate, file_sha256(path)
 
@@ -540,7 +527,6 @@ def validate_resume(
     protocol_manifest: str | Path,
     learnability_report: str | Path,
     screen_gate: str | Path | None = None,
-    screen10_gate: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return an audited resume decision; never search another experiment authority."""
     if variant not in RA_VARIANTS or stage not in RA_STAGES:
@@ -576,28 +562,21 @@ def validate_resume(
     if str(runtime.get("gpu_uuid", "")) != str(authority.get("gpu_uuid", "")):
         raise ValueError("runtime physical GPU differs from paired authority")
     if int(runtime.get("schedule_epochs", -1)) != (
-        50 if stage in {"screen10", "screen", "explore50"} else STAGE_LIMITS[stage]
+        50 if stage in {"screen", "explore50"} else STAGE_LIMITS[stage]
     ):
         raise ValueError("runtime scheduler length differs from frozen protocol")
     expected_cutoff = (
-        10 if stage == "screen10" else 30 if stage == "screen" else 50 if stage == "explore50" else None
+        30 if stage == "screen" else 50 if stage == "explore50" else None
     )
     if runtime.get("cutoff_epoch") != expected_cutoff:
         raise ValueError("runtime cutoff differs from frozen protocol")
 
     gate, gate_sha = _load_gate(Path(screen_gate).resolve() if screen_gate else None)
-    screen10, screen10_sha = _load_screen10_gate(
-        Path(screen10_gate).resolve() if screen10_gate else None
-    )
     if stage == "screen":
-        if screen10 is None:
-            raise ValueError("Screen30 recovery requires the passing Screen10 gate")
-        if runtime.get("screen10_gate_sha256") != screen10_sha:
-            raise ValueError("Screen30 runtime is not bound to the supplied Screen10 gate")
         if runtime.get("initialization_mode") != "fresh_paired_scratch":
             raise ValueError("Screen30 was not launched from fresh paired scratch initialization")
         if runtime.get("parent_checkpoint") is not None:
-            raise ValueError("Screen30 may not inherit a Smoke or Screen10 checkpoint")
+            raise ValueError("Screen30 may not inherit a Smoke2 checkpoint")
         if runtime.get("screen_gate_sha256") is not None:
             raise ValueError("Screen30 may not inherit a Screen30 gate")
     if stage == "formal":
@@ -609,12 +588,9 @@ def validate_resume(
             raise ValueError("Formal100 was not launched from fresh paired scratch initialization")
         if runtime.get("parent_checkpoint") is not None:
             raise ValueError("Formal100 may not inherit a Smoke or Screen checkpoint")
-        if runtime.get("screen10_gate_sha256") is not None:
-            raise ValueError("Formal100 must be bound only to the Screen30 gate")
-    if stage in {"smoke", "screen10", "explore50"} and (
-        runtime.get("screen_gate_sha256") is not None
-        or runtime.get("screen10_gate_sha256") is not None
-    ):
+    if stage in {"smoke", "screen", "explore50"} and runtime.get(
+        "screen_gate_sha256"
+    ) is not None:
         raise ValueError(f"{stage} may not inherit an upstream gate")
 
     reconciliation = reconcile_epoch_artifacts(
@@ -690,7 +666,6 @@ def validate_resume(
         "checkpoint": str(latest),
         "checkpoint_sha256": file_sha256(latest),
         "screen_gate_sha256": gate_sha,
-        "screen10_gate_sha256": screen10_sha,
         "learnability_report_sha256": learnability_sha,
         "authority": "same-run exact-epoch only",
         "artifact_reconciliation": reconciliation,
@@ -723,7 +698,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--protocol-manifest", type=Path, required=True)
     parser.add_argument("--learnability-report", type=Path, required=True)
     parser.add_argument("--screen-gate", type=Path)
-    parser.add_argument("--screen10-gate", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -737,7 +711,6 @@ def main() -> None:
         protocol_manifest=args.protocol_manifest,
         learnability_report=args.learnability_report,
         screen_gate=args.screen_gate,
-        screen10_gate=args.screen10_gate,
     )
     write_create_only(args.output, decision)
     print(json.dumps(decision, indent=2, sort_keys=True))

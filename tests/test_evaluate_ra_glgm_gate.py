@@ -30,6 +30,17 @@ ROOT = Path(__file__).resolve().parents[1]
 REAL_BUILD_PREDICTION_CONTEXT = gate_module._build_prediction_metric_context
 
 
+def test_gradient_p99_excludes_recovery_lineage_discarded_attempts() -> None:
+    rows = [
+        {"optimizer_attempt": 1, "gradient_norm": 1.0},
+        {"optimizer_attempt": 2, "gradient_norm": 1000.0},
+        {"optimizer_attempt": 3, "gradient_norm": 2.0},
+    ]
+    optimizer = {"discarded_optimizer_attempt_numbers": [2]}
+
+    assert gate_module._active_gradient_p99(rows, optimizer) == pytest.approx(1.99)
+
+
 @pytest.fixture(autouse=True)
 def _stub_expensive_prediction_rederivation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gate_module, "_build_prediction_metric_context", lambda *_a, **_k: ())
@@ -42,31 +53,22 @@ def _stub_expensive_prediction_rederivation(monkeypatch: pytest.MonkeyPatch) -> 
         gate_module,
         "_recompute_upstream_report",
         lambda root, *, stage: json.loads(
-            (
-                root
-                / (
-                    "RA_GLGM_SCREEN10_GATE.json"
-                    if stage == "screen"
-                    else "RA_GLGM_SCREEN30_GATE.json"
-                )
-            ).read_text(encoding="utf-8")
+            (root / "RA_GLGM_SCREEN30_GATE.json").read_text(encoding="utf-8")
         ),
     )
 
 
-def test_screen30_metric_rederivation_uses_its_frozen_selection_set(
+def test_screen30_metric_rederivation_uses_official_val(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import scripts.evaluate_ra_glgm_checkpoints as evaluator_module
 
-    selection = tmp_path / "screen30-selection.txt"
-    selection.write_text("selected.jpg\n", encoding="utf-8")
     dataset_root = tmp_path / "VisDrone"
     observed: dict[str, object] = {}
 
     def fake_dataset(_data: Path, *, expected_images: int):
         observed["expected_images"] = expected_images
-        return dataset_root.resolve(), [], [], selection.resolve()
+        return dataset_root.resolve(), [], [], (dataset_root / "images" / "val").resolve()
 
     monkeypatch.setattr(evaluator_module, "_dataset", fake_dataset)
     monkeypatch.setattr(
@@ -83,18 +85,12 @@ def test_screen30_metric_rederivation_uses_its_frozen_selection_set(
         "data": str(tmp_path / "screen-data.yaml"),
         "dataset_authority": {
             "root": str(dataset_root.resolve()),
-            "screen30_selection_set": {
-                "path": str(selection.resolve()),
-                "sha256": file_sha256(selection),
-                "images": 431,
-                "objects": 12_345,
-            },
         },
     }
 
     REAL_BUILD_PREDICTION_CONTEXT(manifest, stage="screen")
 
-    assert observed == {"expected_images": 431, "expected_objects": 12_345}
+    assert observed == {"expected_images": 548, "expected_objects": 38_759}
 
 
 def _manifest(
@@ -126,35 +122,24 @@ def _manifest(
         },
         "learnability_report_sha256": "L" * 64,
         "gpu_uuid": "GPU-fixed",
-        "schedule_epochs": 50 if stage in {"screen10", "screen"} else 100,
-        "cutoff_epoch": 10 if stage == "screen10" else 30 if stage == "screen" else None,
+        "schedule_epochs": 50 if stage == "screen" else 100,
+        "cutoff_epoch": 30 if stage == "screen" else None,
         "locked_evaluator_sha256": file_sha256(
             ROOT / "scripts" / "evaluate_ra_glgm_checkpoints.py"
         ),
         "initialization_mode": "fresh_paired_scratch",
         "parent_checkpoint": None,
-        "screen10_gate_sha256": upstream_sha256 if stage == "screen" else None,
         "screen_gate_sha256": upstream_sha256 if stage == "formal" else None,
         "model_parameters": parameters,
     }
 
 
 def _upstream_gate(root: Path, stage: str) -> str | None:
-    if stage == "screen":
-        path = root / "RA_GLGM_SCREEN10_GATE.json"
-        payload = {
-            "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-            "gate_name": "RA-GLGM-Screen10-v1.1",
-            "screen30_eligible": True,
-            "instruction": "start_fresh_paired_screen30",
-            "engineering": {"complete": True},
-            "gate": {"passed": True},
-        }
-    elif stage == "formal":
+    if stage == "formal":
         path = root / "RA_GLGM_SCREEN30_GATE.json"
         payload = {
             "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-            "gate_name": "RA-GLGM-Screen30-v1.1",
+            "gate_name": "RA-GLGM-Screen30-v1.2",
             "formal_eligible": True,
             "formal_instruction": "start_fresh_from_paired_scratch_initial_state",
             "engineering": {"complete": True},
@@ -194,7 +179,7 @@ def _write_arm(
     optimizer = []
     queue = []
     completed_epochs = 30 if stage == "screen" else 100
-    tail_epochs = (28, 29, 30) if stage == "screen" else (98, 99, 100)
+    tail_epochs = (26, 27, 28, 29, 30) if stage == "screen" else (98, 99, 100)
     for epoch in range(1, completed_epochs + 1):
         checkpoint = weights / f"epoch{epoch - 1}.pt"
         checkpoint.write_bytes(f"checkpoint-{variant}-{epoch}".encode())
@@ -210,6 +195,26 @@ def _write_arm(
                 "precision": 0.30 + epoch / 1000 + delta,
                 "recall": 0.40 + epoch / 1000 + delta,
                 "cuda_peak_mib": 15_000 + epoch,
+                "scale_instances": 100.0,
+                "scale_mae": 0.10,
+                "scale_rmse": 0.12,
+                "scale_prediction_mean": 0.50,
+                "scale_prediction_std": 0.20,
+                "scale_target_mean": 0.50,
+                "scale_target_std": 0.25,
+                "scale_pearson": 0.60,
+                "scale_spearman": 0.60,
+                "route_entropy": 0.69,
+                "route_global_mean": 0.50,
+                "route_global_std": 0.10,
+                "route_load_min": 0.25,
+                "route_load_max": 0.75,
+                "scale_route_correlation_mean_abs": 0.20,
+                "scale_route_correlation_max_abs": 0.30,
+                "scale_slope_rms": 0.10,
+                "scale_slope_max_abs": 0.20,
+                "scale_modulation_route_delta_mean": 0.01,
+                "scale_modulation_route_delta_max": 0.03,
             }
         )
         queue.append(
@@ -271,7 +276,9 @@ def _write_arm(
                 "ap_tiny": 0.05 + epoch / 1000 + delta,
                 "ap_small": 0.10 + epoch / 1000 + delta,
                 "class_ap": [
-                    0.10 + index / 100 + (delta if index < class_wins else -delta)
+                    0.10
+                    + index / 100
+                    + (delta if index < class_wins else -min(delta, 0.002))
                     for index in range(10)
                 ],
             }
@@ -335,10 +342,41 @@ def test_complete_positive_screen_pair_passes_all_frozen_gates(tmp_path: Path) -
     assert report["formal_eligible"] is True
     assert all(report["gate"]["checks"].values())
     assert report["metrics"]["final_delta"]["map"] == pytest.approx(0.006)
-    assert report["metrics"]["class_wins"] == 8
+    assert report["metrics"]["class_non_decreasing"] == 8
 
 
-def test_0_5_pp_boundary_passes_but_missing_small_or_class_wins_fails(tmp_path: Path) -> None:
+def test_accurate_scale_head_with_inactive_scale_router_fails_closed(
+    tmp_path: Path,
+) -> None:
+    baseline = _write_arm(tmp_path, "baseline")
+    method = _write_arm(
+        tmp_path,
+        "ra_glgm",
+        delta=0.006,
+        parameters=BASELINE_PARAMETERS
+        + int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"]),
+    )
+    evidence_path = method / "ra-epochs.jsonl"
+    rows = [json.loads(line) for line in evidence_path.read_text().splitlines()]
+    for row in rows:
+        row["scale_slope_rms"] = 0.0
+        row["scale_slope_max_abs"] = 0.0
+        row["scale_modulation_route_delta_mean"] = 0.0
+        row["scale_modulation_route_delta_max"] = 0.0
+    evidence_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    report = evaluate_gate(baseline, method)
+
+    assert report["engineering"]["complete"] is True
+    assert report["gate"]["checks"]["tail5_scale_pearson_at_least_0_40"] is True
+    assert report["gate"]["checks"]["scale_slopes_nontrivial"] is False
+    assert report["gate"]["checks"]["scale_modulation_changes_routes"] is False
+    assert report["formal_eligible"] is False
+
+
+def test_tail5_small_and_class_coverage_fail_closed(tmp_path: Path) -> None:
     baseline = _write_arm(tmp_path, "baseline")
     method = _write_arm(
         tmp_path,
@@ -349,14 +387,15 @@ def test_0_5_pp_boundary_passes_but_missing_small_or_class_wins_fails(tmp_path: 
         + int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"]),
     )
     rows = [json.loads(line) for line in (method / "locked-evaluation.jsonl").read_text().splitlines()]
-    rows[-1]["ap_small"] -= 0.005
+    for row in rows:
+        row["ap_small"] -= 0.005
     _rewrite_evaluation_with_valid_chain(method / "locked-evaluation.jsonl", rows)
 
     report = evaluate_gate(baseline, method)
 
-    assert report["gate"]["checks"]["epoch30_map_delta_at_least_0_005"] is True
-    assert report["gate"]["checks"]["epoch30_ap_small_delta_positive"] is False
-    assert report["gate"]["checks"]["at_least_7_of_10_classes_improve"] is False
+    assert report["gate"]["checks"]["tail5_map_delta_at_least_0_002"] is True
+    assert report["gate"]["checks"]["tail5_ap_small_delta_at_least_0_0015"] is False
+    assert report["gate"]["checks"]["at_least_7_of_10_classes_non_decreasing"] is False
     assert report["formal_eligible"] is False
 
 

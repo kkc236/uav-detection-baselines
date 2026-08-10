@@ -54,7 +54,7 @@ def build_initial_state(output: str | Path) -> dict:
         control.state_dict(),
         method.state_dict(),
         metadata={
-            "design": "ra-glgm-on-fdr-v1.1-scale-gate",
+            "design": "ra-glgm-on-fdr-v1.2-continuous-scale-modulation",
             "seed": 0,
             "initialization": "fresh_scratch",
             "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,

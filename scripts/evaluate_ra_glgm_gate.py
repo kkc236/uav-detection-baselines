@@ -34,9 +34,7 @@ from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 
 
 EXPECTED_EPOCHS = 30
-TAIL_EPOCHS = (28, 29, 30)
-SCREEN10_EXPECTED_EPOCHS = 10
-SCREEN10_TAIL_EPOCHS = (8, 9, 10)
+TAIL_EPOCHS = (26, 27, 28, 29, 30)
 FORMAL_EXPECTED_EPOCHS = 100
 FORMAL_TAIL_EPOCHS = (98, 99, 100)
 EXPLORE50_EXPECTED_EPOCHS = 50
@@ -68,12 +66,10 @@ def _build_prediction_metric_context(
     if not isinstance(authority, Mapping):
         raise ValueError("runtime dataset authority is missing")
     selection_name = {
-        "screen10": "selection_set",
-        "screen": "screen30_selection_set",
         "explore50": "selection_set",
     }.get(stage)
     selection = authority.get(selection_name) if selection_name else None
-    if stage in {"screen10", "screen", "explore50"}:
+    if stage == "explore50":
         if not isinstance(selection, Mapping):
             raise ValueError(f"{stage} selection authority is missing")
         expected_images = int(selection.get("images", -1))
@@ -87,7 +83,7 @@ def _build_prediction_metric_context(
     )
     if root != Path(str(authority.get("root", ""))).resolve():
         raise ValueError("metric rederivation dataset root differs from runtime authority")
-    if stage in {"screen10", "screen", "explore50"}:
+    if stage == "explore50":
         selection_path = Path(str(selection.get("path", ""))).resolve()
         if (
             validation_source != selection_path
@@ -95,7 +91,7 @@ def _build_prediction_metric_context(
         ):
             raise ValueError("metric rederivation selection list differs from authority")
     elif validation_source != (root / "images" / "val").resolve():
-        raise ValueError("metric rederivation must use official validation split")
+        raise ValueError(f"{stage} metric rederivation must use official validation split")
     ground_truth, image_ids, geometries, ignored = _coco_ground_truth(
         images, names, expected_objects=expected_objects
     )
@@ -342,9 +338,11 @@ def _load_arm(
             stage=stage,
             completed_epochs=expected_epochs,
         )
+        optimizer_rows = read_jsonl(run / "optimizer-evidence.jsonl")
         optimizer_valid = True
     except ValueError as error:
         optimizer = None
+        optimizer_rows = []
         optimizer_valid = False
         errors.append(f"{variant} optimizer evidence is invalid: {error}")
     checks = {
@@ -364,6 +362,7 @@ def _load_arm(
         "detailed": detailed,
         "parameter_count": parameter_count,
         "optimizer": optimizer,
+        "optimizer_rows": optimizer_rows,
         "checks": checks,
         "errors": errors,
     }
@@ -374,13 +373,9 @@ def _upstream_gate_integrity(
 ) -> tuple[bool, list[str]]:
     """Bind a stage pair to the exact passing upstream gate beside its run directories."""
 
-    if stage == "screen10":
+    if stage == "screen":
         return True, []
-    field, filename = (
-        ("screen10_gate_sha256", "RA_GLGM_SCREEN10_GATE.json")
-        if stage == "screen"
-        else ("screen_gate_sha256", "RA_GLGM_SCREEN30_GATE.json")
-    )
+    field, filename = "screen_gate_sha256", "RA_GLGM_SCREEN30_GATE.json"
     base_run = Path(str(baseline.get("run_dir", ""))).resolve()
     method_run = Path(str(method.get("run_dir", ""))).resolve()
     errors: list[str] = []
@@ -405,25 +400,15 @@ def _upstream_gate_integrity(
         report = read_json(gate_path)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return False, [f"upstream gate is unreadable: {error}"]
-    if stage == "screen":
-        valid = (
-            report.get("protocol_sha256") == RA_EXPERIMENT_PROTOCOL_SHA256
-            and report.get("gate_name") == "RA-GLGM-Screen10-v1.1"
-            and report.get("screen30_eligible") is True
-            and report.get("instruction") == "start_fresh_paired_screen30"
-            and report.get("engineering", {}).get("complete") is True
-            and report.get("gate", {}).get("passed") is True
-        )
-    else:
-        valid = (
-            report.get("protocol_sha256") == RA_EXPERIMENT_PROTOCOL_SHA256
-            and report.get("gate_name") == "RA-GLGM-Screen30-v1.1"
-            and report.get("formal_eligible") is True
-            and report.get("formal_instruction")
-            == "start_fresh_from_paired_scratch_initial_state"
-            and report.get("engineering", {}).get("complete") is True
-            and report.get("gate", {}).get("passed") is True
-        )
+    valid = (
+        report.get("protocol_sha256") == RA_EXPERIMENT_PROTOCOL_SHA256
+        and report.get("gate_name") == "RA-GLGM-Screen30-v1.2"
+        and report.get("formal_eligible") is True
+        and report.get("formal_instruction")
+        == "start_fresh_from_paired_scratch_initial_state"
+        and report.get("engineering", {}).get("complete") is True
+        and report.get("gate", {}).get("passed") is True
+    )
     if not valid:
         errors.append(f"{filename} is not a complete passing upstream gate")
     else:
@@ -438,26 +423,47 @@ def _upstream_gate_integrity(
 
 
 def _recompute_upstream_report(root: Path, *, stage: str) -> dict[str, Any]:
-    if stage == "screen":
-        return evaluate_screen10_gate(
-            root / "screen10-seed0-baseline-ra-glgm-v1.1",
-            root / "screen10-seed0-ra_glgm-ra-glgm-v1.1",
-        )
     if stage == "formal":
         return evaluate_gate(
-            root / "screen-seed0-baseline-ra-glgm-v1.1",
-            root / "screen-seed0-ra_glgm-ra-glgm-v1.1",
+            root / "screen-seed0-baseline-ra-glgm-v1.2",
+            root / "screen-seed0-ra_glgm-ra-glgm-v1.2",
         )
     raise ValueError(f"stage has no upstream gate: {stage}")
 
 
 def _metric_window(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     final = {name: float(rows[-1][name]) for name in DETAILED_METRICS}
-    tail3 = {
+    tail = {
         name: _mean([float(row[name]) for row in rows])
         for name in DETAILED_METRICS
     }
-    return {"final": final, "tail3": tail3}
+    return {"final": final, f"tail{len(rows)}": tail}
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("percentile requires at least one value")
+    position = (len(ordered) - 1) * quantile
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _active_gradient_p99(
+    rows: Sequence[Mapping[str, Any]], optimizer: Mapping[str, Any]
+) -> float:
+    discarded = set(optimizer.get("discarded_optimizer_attempt_numbers", []))
+    gradients = [
+        float(row["gradient_norm"])
+        for row in rows
+        if finite_number(row.get("gradient_norm"))
+        and int(row.get("optimizer_attempt", -1)) not in discarded
+    ]
+    return _percentile(gradients, 0.99)
 
 
 def evaluate_gate(
@@ -483,17 +489,27 @@ def evaluate_gate(
         "upstream_gate": upstream_valid,
     }
     engineering_complete = all(engineering.values())
+    thresholds = RA_EXPERIMENT_PROTOCOL["screen_gate"]
 
     metrics: dict[str, Any] | None = None
     checks: dict[str, bool] = {
-        "epoch30_map_delta_at_least_0_005": False,
-        "tail3_map_delta_positive": False,
-        "epoch30_recall_delta_positive": False,
-        "epoch30_ap50_delta_positive": False,
-        "epoch30_ap75_non_degrading": False,
-        "epoch30_ap_tiny_delta_positive": False,
-        "epoch30_ap_small_delta_positive": False,
-        "at_least_7_of_10_classes_improve": False,
+        "tail5_map_delta_at_least_0_002": False,
+        "tail5_ap_tiny_delta_at_least_0_0015": False,
+        "tail5_ap_small_delta_at_least_0_0015": False,
+        "positive_map_delta_in_at_least_4_of_5_epochs": False,
+        "tail5_ap75_non_degrading": False,
+        "tail5_precision_not_below_minus_0_003": False,
+        "tail5_recall_not_below_minus_0_003": False,
+        "at_least_7_of_10_classes_non_decreasing": False,
+        "no_class_below_minus_0_0025": False,
+        "tail5_scale_pearson_at_least_0_40": False,
+        "tail5_scale_spearman_at_least_0_40": False,
+        "route_load_not_collapsed": False,
+        "route_entropy_finite": False,
+        "scale_slopes_nontrivial": False,
+        "scale_modulation_changes_routes": False,
+        "amp_skipped_steps_zero": False,
+        "gradient_p99_ratio_at_most_1_5": False,
         "parameter_increase_at_most_10_percent": False,
         "peak_vram_below_22_gib": False,
     }
@@ -504,16 +520,77 @@ def evaluate_gate(
             name: method_metrics["final"][name] - baseline_metrics["final"][name]
             for name in DETAILED_METRICS
         }
-        tail3_delta = {
-            name: method_metrics["tail3"][name] - baseline_metrics["tail3"][name]
+        tail5_delta = {
+            name: method_metrics["tail5"][name] - baseline_metrics["tail5"][name]
             for name in DETAILED_METRICS
         }
+        same_epoch_map_delta = [
+            float(method_row["map"]) - float(baseline_row["map"])
+            for baseline_row, method_row in zip(baseline["detailed"], method["detailed"], strict=True)
+        ]
         class_delta = [
-            float(method["detailed"][-1]["class_ap"][index])
-            - float(baseline["detailed"][-1]["class_ap"][index])
+            _mean([float(row["class_ap"][index]) for row in method["detailed"]])
+            - _mean([float(row["class_ap"][index]) for row in baseline["detailed"]])
             for index in range(10)
         ]
-        class_wins = sum(delta > 0 for delta in class_delta)
+        class_non_decreasing = sum(delta >= 0 for delta in class_delta)
+        method_tail = [
+            row for row in method["evidence"]
+            if int(row["completed_epoch"]) in TAIL_EPOCHS
+        ]
+        diagnostic_names = (
+            "scale_instances",
+            "scale_mae",
+            "scale_rmse",
+            "scale_prediction_mean",
+            "scale_prediction_std",
+            "scale_target_mean",
+            "scale_target_std",
+            "scale_pearson",
+            "scale_spearman",
+            "route_entropy",
+            "route_global_mean",
+            "route_global_std",
+            "route_load_min",
+            "route_load_max",
+            "scale_route_correlation_mean_abs",
+            "scale_route_correlation_max_abs",
+            "scale_slope_rms",
+            "scale_slope_max_abs",
+            "scale_modulation_route_delta_mean",
+            "scale_modulation_route_delta_max",
+        )
+        diagnostics_valid = len(method_tail) == len(TAIL_EPOCHS) and all(
+            finite_number(row.get(name))
+            for row in method_tail
+            for name in diagnostic_names
+        )
+        diagnostics = (
+            {
+                name: _mean([float(row[name]) for row in method_tail])
+                for name in diagnostic_names
+            }
+            if diagnostics_valid
+            else {}
+        )
+        if diagnostics_valid:
+            diagnostics["route_load_min_observed"] = min(
+                float(row["route_load_min"]) for row in method_tail
+            )
+            diagnostics["route_load_max_observed"] = max(
+                float(row["route_load_max"]) for row in method_tail
+            )
+        baseline_gradient_p99 = _active_gradient_p99(
+            baseline["optimizer_rows"], baseline["optimizer"]
+        )
+        method_gradient_p99 = _active_gradient_p99(
+            method["optimizer_rows"], method["optimizer"]
+        )
+        gradient_p99_ratio = (
+            method_gradient_p99 / baseline_gradient_p99
+            if baseline_gradient_p99 > 0
+            else math.inf
+        )
         baseline_parameters = int(baseline["parameter_count"])
         method_parameters = int(method["parameter_count"])
         parameter_ratio = (method_parameters - baseline_parameters) / baseline_parameters
@@ -522,9 +599,16 @@ def evaluate_gate(
             "baseline": baseline_metrics,
             "ra_glgm": method_metrics,
             "final_delta": final_delta,
-            "tail3_delta": tail3_delta,
+            "tail5_delta": tail5_delta,
+            "same_epoch_map_delta": same_epoch_map_delta,
             "class_ap_delta": class_delta,
-            "class_wins": class_wins,
+            "class_non_decreasing": class_non_decreasing,
+            "continuous_scale_tail5": diagnostics,
+            "gradient_p99": {
+                "baseline": baseline_gradient_p99,
+                "ra_glgm": method_gradient_p99,
+                "ratio": gradient_p99_ratio,
+            },
             "parameters": {
                 "frozen_expected_baseline": BASELINE_PARAMETERS,
                 "baseline": baseline_parameters,
@@ -534,14 +618,52 @@ def evaluate_gate(
             "ra_glgm_peak_vram_mib": peak_vram,
         }
         checks = {
-            "epoch30_map_delta_at_least_0_005": final_delta["map"] >= 0.005,
-            "tail3_map_delta_positive": tail3_delta["map"] > 0,
-            "epoch30_recall_delta_positive": final_delta["recall"] > 0,
-            "epoch30_ap50_delta_positive": final_delta["map50"] > 0,
-            "epoch30_ap75_non_degrading": final_delta["map75"] >= 0,
-            "epoch30_ap_tiny_delta_positive": final_delta["ap_tiny"] > 0,
-            "epoch30_ap_small_delta_positive": final_delta["ap_small"] > 0,
-            "at_least_7_of_10_classes_improve": class_wins >= 7,
+            "tail5_map_delta_at_least_0_002": tail5_delta["map"]
+            >= float(thresholds["tail5_map_delta_min"]),
+            "tail5_ap_tiny_delta_at_least_0_0015": tail5_delta["ap_tiny"]
+            >= float(thresholds["tail5_ap_tiny_delta_min"]),
+            "tail5_ap_small_delta_at_least_0_0015": tail5_delta["ap_small"]
+            >= float(thresholds["tail5_ap_small_delta_min"]),
+            "positive_map_delta_in_at_least_4_of_5_epochs": sum(
+                delta > 0 for delta in same_epoch_map_delta
+            ) >= int(thresholds["positive_same_epoch_map_deltas_min"]),
+            "tail5_ap75_non_degrading": tail5_delta["map75"]
+            >= float(thresholds["tail5_ap75_delta_min"]),
+            "tail5_precision_not_below_minus_0_003": tail5_delta["precision"]
+            >= float(thresholds["precision_delta_floor"]),
+            "tail5_recall_not_below_minus_0_003": tail5_delta["recall"]
+            >= float(thresholds["recall_delta_floor"]),
+            "at_least_7_of_10_classes_non_decreasing": class_non_decreasing
+            >= int(thresholds["class_ap_non_decreasing_min"]),
+            "no_class_below_minus_0_0025": min(class_delta)
+            >= float(thresholds["class_ap_delta_floor"]),
+            "tail5_scale_pearson_at_least_0_40": diagnostics.get(
+                "scale_pearson", -math.inf
+            ) >= float(thresholds["scale_pearson_min"]),
+            "tail5_scale_spearman_at_least_0_40": diagnostics.get(
+                "scale_spearman", -math.inf
+            ) >= float(thresholds["scale_spearman_min"]),
+            "route_load_not_collapsed": (
+                diagnostics.get("route_load_min_observed", -math.inf)
+                >= float(thresholds["route_group_load_min"])
+                and diagnostics.get("route_load_max_observed", math.inf)
+                <= float(thresholds["route_group_load_max"])
+            ),
+            "route_entropy_finite": finite_number(diagnostics.get("route_entropy")),
+            "scale_slopes_nontrivial": diagnostics.get(
+                "scale_slope_rms", -math.inf
+            ) >= float(thresholds["scale_slope_rms_min"]),
+            "scale_modulation_changes_routes": diagnostics.get(
+                "scale_modulation_route_delta_mean", -math.inf
+            ) >= float(thresholds["scale_modulation_route_delta_mean_min"]),
+            "amp_skipped_steps_zero": (
+                baseline["optimizer"].get("amp_skipped_steps")
+                <= int(thresholds["amp_skipped_steps_max"])
+                and method["optimizer"].get("amp_skipped_steps")
+                <= int(thresholds["amp_skipped_steps_max"])
+            ),
+            "gradient_p99_ratio_at_most_1_5": gradient_p99_ratio
+            <= float(thresholds["gradient_p99_ratio_max"]),
             "parameter_increase_at_most_10_percent": (
                 baseline_parameters == BASELINE_PARAMETERS
                 and method_parameters
@@ -554,7 +676,7 @@ def evaluate_gate(
     passed = engineering_complete and all(checks.values())
     return {
         "format_version": 1,
-        "gate_name": "RA-GLGM-Screen30-v1.1",
+        "gate_name": "RA-GLGM-Screen30-v1.2",
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
         "engineering": {
             "complete": engineering_complete,
@@ -572,163 +694,6 @@ def evaluate_gate(
             "start_fresh_from_paired_scratch_initial_state"
             if passed
             else "do_not_start_formal100"
-        ),
-    }
-
-
-def evaluate_screen10_gate(
-    baseline_run: str | Path,
-    method_run: str | Path,
-    *,
-    strict_checkpoint_hashes: bool = True,
-) -> dict[str, Any]:
-    """Apply the rejection-only Screen10 gate on the independent selection set."""
-
-    baseline = _load_arm(
-        baseline_run,
-        "baseline",
-        strict_hashes=strict_checkpoint_hashes,
-        stage="screen10",
-        expected_epochs=SCREEN10_EXPECTED_EPOCHS,
-        tail_epochs=SCREEN10_TAIL_EPOCHS,
-    )
-    method = _load_arm(
-        method_run,
-        "ra_glgm",
-        strict_hashes=strict_checkpoint_hashes,
-        stage="screen10",
-        expected_epochs=SCREEN10_EXPECTED_EPOCHS,
-        tail_epochs=SCREEN10_TAIL_EPOCHS,
-    )
-    pair_valid = paired_manifests(
-        baseline["manifest"], method["manifest"], stage="screen10"
-    )
-    upstream_valid, upstream_errors = _upstream_gate_integrity(
-        baseline, method, stage="screen10"
-    )
-    baseline["errors"].extend(upstream_errors)
-    engineering = {
-        "baseline_complete": all(baseline["checks"].values()),
-        "method_complete": all(method["checks"].values()),
-        "strict_pair": pair_valid,
-        "upstream_gate": upstream_valid,
-    }
-    engineering_complete = all(engineering.values())
-    thresholds = RA_EXPERIMENT_PROTOCOL["screen10_gate"]
-    checks = {
-        "selection_tail3_map_positive": False,
-        "selection_tail3_ap50_positive": False,
-        "selection_tail3_recall_positive": False,
-        "selection_tail3_ap_tiny_positive": False,
-        "selection_tail3_ap_small_positive": False,
-        "scale_ce_below_uniform": False,
-        "all_scale_fractions_present": False,
-        "tiny_scale_recall": False,
-        "small_scale_recall": False,
-        "regular_scale_recall": False,
-        "scale_gate_mean_abs_deviation": False,
-        "scale_gate_std": False,
-        "exact_frozen_parameter_delta": False,
-        "peak_vram_below_22_gib": False,
-    }
-    metrics: dict[str, Any] | None = None
-    if engineering_complete:
-        baseline_window = _metric_window(baseline["detailed"])
-        method_window = _metric_window(method["detailed"])
-        tail_delta = {
-            name: method_window["tail3"][name] - baseline_window["tail3"][name]
-            for name in DETAILED_METRICS
-        }
-        method_tail = [
-            row
-            for row in method["evidence"]
-            if int(row["completed_epoch"]) in SCREEN10_TAIL_EPOCHS
-        ]
-        diagnostic_names = (
-            "loss_ra_scale",
-            "ra_scale_tiny_fraction",
-            "ra_scale_small_fraction",
-            "ra_scale_regular_fraction",
-            "ra_scale_tiny_recall",
-            "ra_scale_small_recall",
-            "ra_scale_regular_recall",
-            "ra_scale_gate_mean_abs_deviation",
-            "ra_scale_gate_std",
-        )
-        diagnostics = {
-            name: _mean([float(row[name]) for row in method_tail])
-            for name in diagnostic_names
-            if len(method_tail) == 3
-            and all(finite_number(row.get(name)) for row in method_tail)
-        }
-        baseline_parameters = int(baseline["parameter_count"])
-        method_parameters = int(method["parameter_count"])
-        peak_vram = max(float(row["cuda_peak_mib"]) for row in method["evidence"])
-        metrics = {
-            "baseline": baseline_window,
-            "ra_glgm": method_window,
-            "selection_tail3_delta": tail_delta,
-            "scale_tail3": diagnostics,
-            "parameters": {
-                "baseline": baseline_parameters,
-                "ra_glgm": method_parameters,
-                "increase": method_parameters - baseline_parameters,
-            },
-            "ra_glgm_peak_vram_mib": peak_vram,
-        }
-        minimum_fraction = float(thresholds["scale_predicted_fraction_each_min"])
-        checks = {
-            "selection_tail3_map_positive": tail_delta["map"] > 0,
-            "selection_tail3_ap50_positive": tail_delta["map50"] > 0,
-            "selection_tail3_recall_positive": tail_delta["recall"] > 0,
-            "selection_tail3_ap_tiny_positive": tail_delta["ap_tiny"] > 0,
-            "selection_tail3_ap_small_positive": tail_delta["ap_small"] > 0,
-            "scale_ce_below_uniform": diagnostics.get("loss_ra_scale", math.inf)
-            < float(thresholds["scale_ce_tail3_max"]),
-            "all_scale_fractions_present": all(
-                diagnostics.get(f"ra_scale_{name}_fraction", -math.inf)
-                >= minimum_fraction
-                for name in ("tiny", "small", "regular")
-            ),
-            "tiny_scale_recall": diagnostics.get("ra_scale_tiny_recall", -math.inf)
-            >= float(thresholds["scale_tiny_recall_tail3_min"]),
-            "small_scale_recall": diagnostics.get("ra_scale_small_recall", -math.inf)
-            >= float(thresholds["scale_small_recall_tail3_min"]),
-            "regular_scale_recall": diagnostics.get("ra_scale_regular_recall", -math.inf)
-            >= float(thresholds["scale_regular_recall_tail3_min"]),
-            "scale_gate_mean_abs_deviation": diagnostics.get(
-                "ra_scale_gate_mean_abs_deviation", -math.inf
-            )
-            >= float(thresholds["scale_gate_mean_abs_deviation_tail3_min"]),
-            "scale_gate_std": diagnostics.get("ra_scale_gate_std", -math.inf)
-            >= float(thresholds["scale_gate_std_tail3_min"]),
-            "exact_frozen_parameter_delta": (
-                baseline_parameters == BASELINE_PARAMETERS
-                and method_parameters - baseline_parameters
-                == int(thresholds["parameter_increase_exact"])
-            ),
-            "peak_vram_below_22_gib": peak_vram < MAX_PEAK_VRAM_MIB,
-        }
-    passed = engineering_complete and all(checks.values())
-    return {
-        "format_version": 1,
-        "gate_name": "RA-GLGM-Screen10-v1.1",
-        "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-        "role": "rejection-only",
-        "engineering": {
-            "complete": engineering_complete,
-            "checks": engineering,
-            "arm_checks": {
-                "baseline": baseline["checks"],
-                "ra_glgm": method["checks"],
-            },
-            "errors": [*baseline["errors"], *method["errors"]],
-        },
-        "metrics": metrics,
-        "gate": {"checks": checks, "passed": passed},
-        "screen30_eligible": passed,
-        "instruction": (
-            "start_fresh_paired_screen30" if passed else "close_candidate_authority"
         ),
     }
 
@@ -839,7 +804,7 @@ def evaluate_formal_report(
     success = engineering_complete and all(checks.values())
     return {
         "format_version": 1,
-        "report_name": "RA-GLGM-Formal100-v1.1",
+        "report_name": "RA-GLGM-Formal100-v1.2",
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
         "primary_evidence": ["epoch100", "tail3_mean"],
         "engineering": {
@@ -863,9 +828,7 @@ def validate_evaluated_arm(
 ) -> dict[str, Any]:
     """Validate an existing create-only locked evaluation before reuse."""
 
-    if stage == "screen10":
-        expected_epochs, tail_epochs = SCREEN10_EXPECTED_EPOCHS, SCREEN10_TAIL_EPOCHS
-    elif stage == "screen":
+    if stage == "screen":
         expected_epochs, tail_epochs = EXPECTED_EPOCHS, TAIL_EPOCHS
     elif stage == "formal":
         expected_epochs, tail_epochs = FORMAL_EXPECTED_EPOCHS, FORMAL_TAIL_EPOCHS
@@ -910,26 +873,6 @@ def validate_screen_gate_report(
     return recorded
 
 
-def validate_screen10_gate_report(
-    path: str | Path,
-    *,
-    baseline_run: str | Path,
-    method_run: str | Path,
-) -> dict[str, Any]:
-    """Recompute Screen10 before allowing any fresh Screen30 launch."""
-
-    recorded = read_json(path)
-    expected = evaluate_screen10_gate(baseline_run, method_run)
-    if recorded != expected:
-        raise ValueError("Screen10 gate report differs from frozen recomputation")
-    if (
-        recorded.get("screen30_eligible") is not True
-        or recorded.get("instruction") != "start_fresh_paired_screen30"
-    ):
-        raise ValueError("Screen10 gate did not authorize Screen30")
-    return recorded
-
-
 def validate_formal_report(
     path: str | Path,
     *,
@@ -970,16 +913,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ra-run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--stage", choices=("screen10", "screen", "formal"), default="screen"
+        "--stage", choices=("screen", "formal"), default="screen"
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.stage == "screen10":
-        report = evaluate_screen10_gate(args.baseline_run, args.ra_run)
-    elif args.stage == "screen":
+    if args.stage == "screen":
         report = evaluate_gate(args.baseline_run, args.ra_run)
     else:
         report = evaluate_formal_report(args.baseline_run, args.ra_run)
@@ -987,8 +928,6 @@ def main() -> None:
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     if not report["engineering"]["complete"]:
         raise SystemExit(2)
-    if args.stage == "screen10" and not report["screen30_eligible"]:
-        raise SystemExit(3)
     if args.stage == "screen" and not report["formal_eligible"]:
         raise SystemExit(3)
 

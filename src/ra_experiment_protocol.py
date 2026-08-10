@@ -13,15 +13,16 @@ from src.fdr_protocol import FDR_PROTOCOL, canonical_json_bytes, public_state_sh
 
 
 RA_VARIANTS = ("baseline", "ra_glgm")
-RA_STAGES = ("smoke", "screen10", "screen", "formal", "explore50")
+RA_STAGES = ("smoke", "screen", "formal", "explore50")
 BASELINE_PARAMETERS = 33_156_614
 MAX_PARAMETER_INCREASE_RATIO = 0.10
 MAX_PEAK_VRAM_MIB = 22 * 1024
+SCALE_PRIOR_RELATIVE_PATH = Path("configs") / "ra-glgm-v12-scale-prior.json"
 
 RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
-    "design": "ra-glgm-on-fdr-v1.1-scale-gate",
+    "design": "ra-glgm-on-fdr-v1.2-continuous-scale-modulation",
     "baseline": "Ultralytics RT-DETR-L + FDR",
-    "method": "Ultralytics RT-DETR-L + FDR + RA-GLGM-v1.1(P3-only scale gate)",
+    "method": "Ultralytics RT-DETR-L + FDR + RA-GLGM-v1.2(P3-only continuous scale modulation)",
     "seed": 0,
     "device": "0",
     "pairing": {
@@ -34,6 +35,7 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
     },
     "dataset": {
         **FDR_PROTOCOL["dataset"],
+        "screen_train_images": 6471,
         "ignore_sidecar": {
             "files": {"train": 6471, "val": 548},
             "boxes": {"train": 10_343, "val": 1_410},
@@ -49,26 +51,20 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
             "images": 548,
             "algorithm": "ascending salted SHA-256 rank of dataset-relative paths",
             "salt": "ra-glgm-v1.1-selection-v1\\0",
-            "role": "Screen10 rejection-only validation",
+            "role": "Smoke2 and optional Explore50 diagnostic validation only",
             "official_val_used": False,
             "frozen_in_manifest": ["path_list", "path_list_sha256", "relative_subset_sha256"],
         },
-        "screen30_selection_set": {
-            "source": "VisDrone train images excluding Screen647 and the Screen10 selection set",
-            "images": 548,
-            "algorithm": "ascending salted SHA-256 rank of dataset-relative paths",
-            "salt": "ra-glgm-v1.1-screen30-selection-v1\\0",
-            "role": "Screen30 advancement validation",
-            "official_val_used": False,
-            "disjoint_from": ["Screen647", "selection_set", "official_val"],
-            "frozen_in_manifest": ["path_list", "path_list_sha256", "relative_subset_sha256"],
+        "screen30": {
+            "train": "all 6471 authoritative VisDrone train images",
+            "validation": "official VisDrone val (548 images, 38,759 objects)",
+            "official_val_used_for_exploratory_gate": True,
+            "confirmatory_status": "not pristine after Screen30 selection; Formal100 is fresh paired evidence",
         },
     },
     "training": {
         **FDR_PROTOCOL["training"],
         "smoke_epochs": 2,
-        "screen10_schedule_epochs": 50,
-        "screen10_cutoff_epoch": 10,
         "screen_schedule_epochs": 50,
         "screen_cutoff_epoch": 30,
         "explore50_schedule_epochs": 50,
@@ -78,7 +74,7 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
     },
     "augmentation": FDR_PROTOCOL["augmentation"],
     "module": {
-        "private_parameters": 813_396,
+        "private_parameters": 813_018,
         "input": {
             "source": "FDR decoder P3 only",
             "shape": "[B,256,H,W]",
@@ -128,15 +124,48 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
         },
         "scale_gate": {
             "operator": "1x1 Conv",
-            "channels": "192->3",
-            "classes": ["tiny", "small", "regular"],
-            "thresholds_on_640": [256.0, 1024.0],
-            "activation": "per-position softmax",
+            "channels": "192->1",
+            "condition": (
+                "continuous percentile of log(current post-augmentation 640-canvas box area), "
+                "calibrated by the frozen natural-image letterbox prior"
+            ),
+            "activation": "per-position sigmoid",
             "initialization": "zero weight and zero bias",
-            "factors": [1.25, 1.0, 0.75],
-            "initial_gate": 1.0,
-            "inference_inputs": ["fused_private_feature_U"],
+            "initial_value": 0.5,
+            "modulation": "zero-initialized per-router-group antisymmetric local/global logit bias",
+            "groups": 8,
+            "bounded_bias": "tanh(scale_expert_slopes[g])*(2*s-1)",
+            "inference_inputs": ["shared reduced feature"],
             "forbidden_inference_inputs": ["ground_truth", "IoU", "Hungarian_assignment"],
+        },
+        "scale_prior": {
+            "population": "343,204 valid unaugmented VisDrone train instances",
+            "area": "box area after centered aspect-preserving 640x640 source-image letterbox",
+            "role": (
+                "fixed natural-image reference calibration; training targets use the current "
+                "post-augmentation canvas area so perceived scale follows unchanged FDR augmentation"
+            ),
+            "quantiles": [
+                0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30,
+                0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65,
+                0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00,
+            ],
+            "log_area_knots": [
+                -1.0939053609460274, 2.407853606211777,
+                2.911793703975937, 3.2581411529031463,
+                3.5404331464502383, 3.7883982013862365,
+                4.025328833331064, 4.233540793865287,
+                4.433455103796916, 4.620838915786072,
+                4.812900798763111, 5.0039862478828026,
+                5.196857416822457, 5.400227674165377,
+                5.624407461981047, 5.872858322100196,
+                6.155378738116352, 6.482825175640593,
+                6.880816055611381, 7.4580074436281985,
+                11.153424678643981,
+            ],
+            "interpolation": "piecewise linear with endpoint clipping",
+            "supervision_balance": "each target instance contributes unit total Gaussian weight before averaging instances",
+            "audit_sha256": "598487AD96F59D1E4B01DE8AA026D4C9D90251785BFE9D98016CE8A5785A2454",
         },
         "output_projection": {
             "operator": "1x1 Conv",
@@ -147,7 +176,7 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
             "shape": "[1,256,1,1]",
             "initialization": "zeros",
         },
-        "output_equation": "X + 0.5*tanh(alpha)*O*(1.25*q_tiny+q_small+0.75*q_regular)*tanh(Wo(U))",
+        "output_equation": "X + 0.5*tanh(alpha)*O*tanh(Wo(U))",
         "residual_difficulty": {
             "prediction_source": "final ordinary decoder Query only",
             "excluded_predictions": ["encoder Query", "denoising Query"],
@@ -170,12 +199,39 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
             "weight": 0.05,
         },
         "auxiliary_scale": {
-            "objective": "soft three-class cross entropy",
-            "target": "per-scale max(d_i*Gaussian_i), normalized across scale channels",
-            "supervised_pixels": "positive residual-support pixels only",
+            "objective": "FP32 SmoothL1 continuous scale regression",
+            "target": (
+                "current post-augmentation 640-canvas log-area percentile interpolated "
+                "against frozen source-letterbox prior knots"
+            ),
+            "supervised_pixels": "per-instance Gaussian support",
+            "reduction": "unit-weight each instance, then mean over valid instances",
             "target_generation": "FP32 detached; no second matcher",
             "weight": 0.05,
         },
+        "epoch_diagnostics": [
+            "loss_ra_scale",
+            "scale_instances",
+            "scale_mae",
+            "scale_rmse",
+            "scale_prediction_mean",
+            "scale_prediction_std",
+            "scale_target_mean",
+            "scale_target_std",
+            "scale_pearson",
+            "scale_spearman",
+            "route_entropy",
+            "route_global_mean",
+            "route_global_std",
+            "route_load_min",
+            "route_load_max",
+            "scale_route_correlation_mean_abs",
+            "scale_route_correlation_max_abs",
+            "scale_slope_rms",
+            "scale_slope_max_abs",
+            "scale_modulation_route_delta_mean",
+            "scale_modulation_route_delta_max",
+        ],
         "ignore_boxes": {
             "class_id": -1,
             "detection": "excluded",
@@ -201,48 +257,42 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
             "rule": "exclude predictions with intersection-over-detection-area >= 0.5",
             "coordinate_system": "same centered 640x640 letterbox canvas as GT and predictions",
         },
-        "screen10_evaluated_epochs": [8, 9, 10],
-        "screen_evaluated_epochs": [28, 29, 30],
+        "screen_evaluated_epochs": [26, 27, 28, 29, 30],
         "formal_evaluated_epochs": [98, 99, 100],
         "explore50_evaluated_epochs": list(range(5, 51, 5)),
     },
-    "screen10_gate": {
-        "selection_tail3_map_delta": ">0",
-        "selection_tail3_ap50_delta": ">0",
-        "selection_tail3_recall_delta": ">0",
-        "selection_tail3_ap_tiny_delta": ">0",
-        "selection_tail3_ap_small_delta": ">0",
-        "scale_ce_tail3_max": 1.0986122886681098,
-        "scale_gate_mean_abs_deviation_tail3_min": 0.01,
-        "scale_gate_std_tail3_min": 0.01,
-        "scale_predicted_fraction_each_min": 0.05,
-        "scale_tiny_recall_tail3_min": 0.20,
-        "scale_small_recall_tail3_min": 0.20,
-        "scale_regular_recall_tail3_min": 0.20,
-        "parameter_increase_exact": 813_396,
-        "peak_vram_mib_max": MAX_PEAK_VRAM_MIB,
-        "decision_role": "rejection-only; never authorizes Formal100",
-    },
     "screen_gate": {
-        "epoch30_map_delta_min": 0.005,
-        "tail3_map_delta": ">0",
-        "epoch30_recall_delta": ">0",
-        "epoch30_ap50_delta": ">0",
-        "epoch30_ap75_delta": ">=0",
-        "epoch30_ap_tiny_delta": ">0",
-        "epoch30_ap_small_delta": ">0",
-        "class_ap_wins_min": 7,
+        "tail5_map_delta_min": 0.002,
+        "tail5_ap_tiny_delta_min": 0.0015,
+        "tail5_ap_small_delta_min": 0.0015,
+        "positive_same_epoch_map_deltas_min": 4,
+        "tail5_ap75_delta_min": 0.0,
+        "class_ap_non_decreasing_min": 7,
+        "class_ap_delta_floor": -0.0025,
+        "precision_delta_floor": -0.003,
+        "recall_delta_floor": -0.003,
+        "scale_pearson_min": 0.40,
+        "scale_spearman_min": 0.40,
+        "route_entropy": "finite mechanism evidence; not a performance threshold",
+        "route_group_load_min": 0.05,
+        "route_group_load_max": 0.95,
+        "scale_slope_rms_min": 0.0001,
+        "scale_modulation_route_delta_mean_min": 0.0001,
+        "amp_skipped_steps_max": 0,
+        "gradient_p99_ratio_max": 1.5,
         "classes": 10,
         "parameter_increase_ratio_max": MAX_PARAMETER_INCREASE_RATIO,
         "peak_vram_mib_max": MAX_PEAK_VRAM_MIB,
     },
     "advancement": {
-        "screen30_requires_screen10_gate": True,
-        "screen30_initialization": "fresh paired scratch artifact; never Screen10 checkpoint",
+        "screen30_requires_smoke2": True,
+        "screen30_requires_screen10_gate": False,
+        "screen30_initialization": "fresh paired scratch artifact; never Smoke2 checkpoint",
         "formal_requires_screen_gate": True,
         "formal_initialization": "fresh paired scratch artifact; never Screen checkpoint",
-        "screen30_validation": "frozen train-derived screen30_selection_set",
-        "formal_validation": "official val, untouched by Screen10 and Screen30 decisions",
+        "screen30_validation": "official val (exploratory advancement use)",
+        "formal_validation": "official val; fresh paired run but no longer pristine after Screen30 selection",
+        "formal_evidence_status": "selection-conditioned exploratory evidence; external untouched test evidence required for confirmation",
         "primary_formal_evidence": ["epoch100", "tail3_mean"],
         "best_checkpoint": "supplemental only",
     },
@@ -279,7 +329,7 @@ def build_ra_run_identity(
     if variant not in RA_VARIANTS:
         raise ValueError(f"unknown RA variant: {variant}")
     if seed != 0:
-        raise ValueError("RA-GLGM v1.1 is frozen to seed0")
+        raise ValueError("RA-GLGM v1.2 is frozen to seed0")
     if not pair_id or any(character.isspace() for character in pair_id):
         raise ValueError("pair_id must be a non-empty token")
     source_sha256 = public_state_sha256(source_identity)
@@ -393,8 +443,8 @@ def validate_runtime_authority(
     if file_sha256(initial_path) != str(initial_state.get("sha256", "")).upper():
         raise ValueError("RA runtime initial-state SHA256 mismatch")
 
-    schedule = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100, "explore50": 50}[stage]
-    cutoff = {"smoke": None, "screen10": 10, "screen": 30, "formal": None, "explore50": 50}[stage]
+    schedule = {"smoke": 2, "screen": 50, "formal": 100, "explore50": 50}[stage]
+    cutoff = {"smoke": None, "screen": 30, "formal": None, "explore50": 50}[stage]
     if manifest.get("schedule_epochs") != schedule or manifest.get("cutoff_epoch") != cutoff:
         raise ValueError("RA runtime schedule/cutoff differs from frozen stage authority")
     if manifest.get("initialization_mode") != "fresh_paired_scratch":
@@ -408,7 +458,6 @@ def validate_runtime_authority(
     if manifest.get("locked_evaluator_sha256") != file_sha256(evaluator):
         raise ValueError("RA runtime locked-evaluator SHA256 differs from current source")
 
-    screen10_sha = manifest.get("screen10_gate_sha256")
     screen_sha = manifest.get("screen_gate_sha256")
     hexadecimal = set("0123456789ABCDEF")
 
@@ -416,13 +465,10 @@ def validate_runtime_authority(
         normalized = str(value).upper()
         return len(normalized) == 64 and set(normalized) <= hexadecimal
 
-    if stage in {"smoke", "screen10", "explore50"}:
-        if screen10_sha is not None or screen_sha is not None:
+    if stage in {"smoke", "screen", "explore50"}:
+        if screen_sha is not None:
             raise ValueError(f"{stage} runtime may not inherit an upstream gate")
-    elif stage == "screen":
-        if not digest(screen10_sha) or screen_sha is not None:
-            raise ValueError("Screen30 runtime is not bound only to one Screen10 gate")
-    elif not digest(screen_sha) or screen10_sha is not None:
+    elif not digest(screen_sha):
         raise ValueError("Formal100 runtime is not bound only to one Screen30 gate")
     return identity
 
@@ -450,7 +496,6 @@ def paired_manifests(
         "locked_evaluator_sha256",
         "initialization_mode",
         "parent_checkpoint",
-        "screen10_gate_sha256",
         "screen_gate_sha256",
     )
     shared_identity_fields = ("source_sha256", "protocol_sha256", "stage", "seed", "pair_id")
@@ -467,6 +512,32 @@ def file_sha256(path: str | Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def validate_scale_prior_authority(repository_root: str | Path) -> dict[str, Any]:
+    """Verify the executable full-precision scale prior against the protocol."""
+
+    path = Path(repository_root).resolve() / SCALE_PRIOR_RELATIVE_PATH
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError("RA v1.2 scale-prior authority is missing")
+    payload = read_json(path)
+    recorded = str(payload.get("content_sha256", "")).upper()
+    unhashed = dict(payload)
+    unhashed.pop("content_sha256", None)
+    actual = hashlib.sha256(canonical_json_bytes(unhashed)).hexdigest().upper()
+    expected = RA_EXPERIMENT_PROTOCOL["module"]["scale_prior"]
+    if recorded != actual or recorded != expected["audit_sha256"]:
+        raise ValueError("RA v1.2 scale-prior content SHA256 mismatch")
+    if (
+        payload.get("format_version") != 1
+        or payload.get("images") != 6471
+        or payload.get("instances") != 343_204
+        or payload.get("letterbox_imgsz") != 640
+        or payload.get("log_area_knots") != expected["log_area_knots"]
+        or len(payload.get("quantile_probabilities", [])) != 21
+    ):
+        raise ValueError("RA v1.2 scale-prior payload differs from frozen protocol")
+    return payload
 
 
 def current_source_identity(
@@ -526,6 +597,7 @@ def load_ra_authority(
 ) -> dict[str, Any]:
     """Load and fully validate one immutable RA experiment authority."""
 
+    validate_scale_prior_authority(repository_root)
     manifest = read_json(Path(path).resolve())
     if manifest.get("format_version") != 1:
         raise ValueError("RA protocol manifest format must be 1")
@@ -577,26 +649,21 @@ def load_ra_authority(
         raise ValueError("locked evaluator SHA256 mismatch")
     dataset_authority = manifest.get("dataset_authority")
     if not isinstance(dataset_authority, Mapping):
-        raise ValueError("RA v1.1 dataset authority is missing")
-    selection_paths: list[Path] = []
-    for key in ("selection_set", "screen30_selection_set"):
-        selection = dataset_authority.get(key)
-        if not isinstance(selection, Mapping):
-            raise ValueError(f"RA v1.1 {key} authority is missing")
-        selection_path = Path(str(selection.get("path", ""))).resolve()
-        if selection_path.is_symlink() or not selection_path.is_file():
-            raise FileNotFoundError(f"RA v1.1 {key} list is missing")
-        if file_sha256(selection_path) != str(selection.get("sha256", "")).upper():
-            raise ValueError(f"RA v1.1 {key} SHA256 mismatch")
-        if int(selection.get("images", -1)) != int(
-            RA_EXPERIMENT_PROTOCOL["dataset"][key]["images"]
-        ):
-            raise ValueError(f"RA v1.1 {key} image count differs from authority")
-        if int(selection.get("objects", 0)) <= 0:
-            raise ValueError(f"RA v1.1 {key} object count is invalid")
-        selection_paths.append(selection_path)
-    if selection_paths[0] == selection_paths[1]:
-        raise ValueError("RA v1.1 Screen10 and Screen30 selection lists must differ")
+        raise ValueError("RA v1.2 dataset authority is missing")
+    selection = dataset_authority.get("selection_set")
+    if not isinstance(selection, Mapping):
+        raise ValueError("RA v1.2 diagnostic selection authority is missing")
+    selection_path = Path(str(selection.get("path", ""))).resolve()
+    if selection_path.is_symlink() or not selection_path.is_file():
+        raise FileNotFoundError("RA v1.2 diagnostic selection list is missing")
+    if file_sha256(selection_path) != str(selection.get("sha256", "")).upper():
+        raise ValueError("RA v1.2 diagnostic selection SHA256 mismatch")
+    if int(selection.get("images", -1)) != int(
+        RA_EXPERIMENT_PROTOCOL["dataset"]["selection_set"]["images"]
+    ):
+        raise ValueError("RA v1.2 diagnostic selection image count differs from authority")
+    if int(selection.get("objects", 0)) <= 0:
+        raise ValueError("RA v1.2 diagnostic selection object count is invalid")
     validate_ra_source_authority(manifest, repository_root=repository_root)
     return manifest
 
@@ -693,4 +760,5 @@ __all__ = [
     "read_json",
     "read_jsonl",
     "validate_runtime_identity",
+    "validate_scale_prior_authority",
 ]

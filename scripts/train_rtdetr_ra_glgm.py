@@ -36,7 +36,6 @@ from src.ra_experiment_protocol import (  # noqa: E402
 from src.ra_glgm_protocol import validate_ra_glgm_initial_state  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
-    validate_screen10_gate_report,
     validate_screen_gate_report,
 )
 from src.rtdetr_ra_glgm import (  # noqa: E402
@@ -47,8 +46,8 @@ from src.rtdetr_ra_glgm import (  # noqa: E402
 )
 
 
-STAGE_SCHEDULE = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100, "explore50": 50}
-STAGE_CUTOFF = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+STAGE_SCHEDULE = {"smoke": 2, "screen": 50, "formal": 100, "explore50": 50}
+STAGE_CUTOFF = {"smoke": 2, "screen": 30, "formal": 100, "explore50": 50}
 EVIDENCE_FIELDS = (
     "completed_epoch",
     "variant",
@@ -70,16 +69,26 @@ EVIDENCE_FIELDS = (
     "loss_ra_scale",
     "ra_target_mean",
     "ra_valid_fraction",
-    "ra_scale_entropy",
-    "ra_scale_tiny_fraction",
-    "ra_scale_small_fraction",
-    "ra_scale_regular_fraction",
-    "ra_scale_tiny_recall",
-    "ra_scale_small_recall",
-    "ra_scale_regular_recall",
-    "ra_scale_positive_pixels",
-    "ra_scale_gate_mean_abs_deviation",
-    "ra_scale_gate_std",
+    "scale_instances",
+    "scale_mae",
+    "scale_rmse",
+    "scale_prediction_mean",
+    "scale_prediction_std",
+    "scale_target_mean",
+    "scale_target_std",
+    "scale_pearson",
+    "scale_spearman",
+    "route_entropy",
+    "route_global_mean",
+    "route_global_std",
+    "route_load_min",
+    "route_load_max",
+    "scale_route_correlation_mean_abs",
+    "scale_route_correlation_max_abs",
+    "scale_slope_rms",
+    "scale_slope_max_abs",
+    "scale_modulation_route_delta_mean",
+    "scale_modulation_route_delta_max",
     "gradient_norm",
     "fdr_gradient_norm",
     "ra_glgm_gradient_norm",
@@ -133,7 +142,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--screen-gate", type=Path)
-    parser.add_argument("--screen10-gate", type=Path)
     parser.add_argument("--name")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -170,22 +178,8 @@ def _screen_gate(
     root = output_root.resolve()
     report = validate_screen_gate_report(
         path.resolve(),
-        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1.1",
-        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1.1",
-    )
-    return report, file_sha256(path)
-
-
-def _screen10_gate(
-    path: Path | None, output_root: Path
-) -> tuple[dict[str, Any] | None, str | None]:
-    if path is None:
-        return None, None
-    root = output_root.resolve()
-    report = validate_screen10_gate_report(
-        path.resolve(),
-        baseline_run=root / "screen10-seed0-baseline-ra-glgm-v1.1",
-        method_run=root / "screen10-seed0-ra_glgm-ra-glgm-v1.1",
+        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1.2",
+        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1.2",
     )
     return report, file_sha256(path)
 
@@ -207,18 +201,14 @@ def prepare_data(
     actual_ignore = ignore_sidecar_signature(dataset_root)
     if actual_ignore != dataset_authority.get("ignore"):
         raise ValueError("runtime ignore sidecar differs from RA authority")
-    subset_stage = "screen" if stage in {"smoke", "screen10", "screen", "explore50"} else "formal"
+    subset_stage = "screen" if stage in {"smoke", "explore50"} else "formal"
     source = fdr_train.prepare_data_yaml(dataset_root, subset_stage, authority_root)
-    if stage not in {"smoke", "screen10", "screen", "explore50"}:
+    if stage not in {"smoke", "explore50"}:
         return source
     destination = authority_root / f"{stage}-data.yaml"
     payload = json.loads(source.read_text(encoding="utf-8"))
-    if stage in {"smoke", "screen10", "screen", "explore50"}:
-        authority_name = (
-            "selection_set"
-            if stage in {"smoke", "screen10", "explore50"}
-            else "screen30_selection_set"
-        )
+    if stage in {"smoke", "explore50"}:
+        authority_name = "selection_set"
         selection = dataset_authority.get(authority_name)
         if not isinstance(selection, Mapping):
             raise ValueError(f"RA manifest is missing {stage} selection authority")
@@ -246,7 +236,7 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
         "epochs": STAGE_SCHEDULE[args.stage],
         "seed": 0,
         "project": str(args.output_root.resolve()),
-        "name": args.name or f"{args.stage}-seed0-{args.variant}-ra-glgm-v1.1",
+        "name": args.name or f"{args.stage}-seed0-{args.variant}-ra-glgm-v1.2",
         "exist_ok": False,
     }
     if args.resume is not None:
@@ -296,18 +286,31 @@ def _private_losses(trainer: Any, variant: str) -> dict[str, float | None]:
         "loss_ra_scale": fdr_train._number(ra.get("loss_ra_scale")),
         "ra_target_mean": fdr_train._number(ra.get("target_mean")),
         "ra_valid_fraction": fdr_train._number(ra.get("valid_fraction")),
-        "ra_scale_entropy": fdr_train._number(ra.get("scale_entropy")),
-        "ra_scale_tiny_fraction": fdr_train._number(ra.get("scale_tiny_fraction")),
-        "ra_scale_small_fraction": fdr_train._number(ra.get("scale_small_fraction")),
-        "ra_scale_regular_fraction": fdr_train._number(ra.get("scale_regular_fraction")),
-        "ra_scale_tiny_recall": fdr_train._number(ra.get("scale_tiny_recall")),
-        "ra_scale_small_recall": fdr_train._number(ra.get("scale_small_recall")),
-        "ra_scale_regular_recall": fdr_train._number(ra.get("scale_regular_recall")),
-        "ra_scale_positive_pixels": fdr_train._number(ra.get("scale_positive_pixels")),
-        "ra_scale_gate_mean_abs_deviation": fdr_train._number(
-            ra.get("scale_gate_mean_abs_deviation")
-        ),
-        "ra_scale_gate_std": fdr_train._number(ra.get("scale_gate_std")),
+        **{
+            name: fdr_train._number(ra.get(name))
+            for name in (
+                "scale_instances",
+                "scale_mae",
+                "scale_rmse",
+                "scale_prediction_mean",
+                "scale_prediction_std",
+                "scale_target_mean",
+                "scale_target_std",
+                "scale_pearson",
+                "scale_spearman",
+                "route_entropy",
+                "route_global_mean",
+                "route_global_std",
+                "route_load_min",
+                "route_load_max",
+                "scale_route_correlation_mean_abs",
+                "scale_route_correlation_max_abs",
+                "scale_slope_rms",
+                "scale_slope_max_abs",
+                "scale_modulation_route_delta_mean",
+                "scale_modulation_route_delta_max",
+            )
+        },
     }
 
 
@@ -403,7 +406,6 @@ def write_runtime_manifest(
     identity: Mapping[str, Any],
     data_yaml: Path,
     gate_sha256: str | None,
-    screen10_gate_sha256: str | None,
     learnability_sha256: str,
 ) -> None:
     actual_gpu = _gpu_uuid()
@@ -420,13 +422,12 @@ def write_runtime_manifest(
         "dataset_authority": manifest["dataset_authority"],
         "gpu_uuid": actual_gpu,
         "schedule_epochs": STAGE_SCHEDULE[args.stage],
-        "cutoff_epoch": STAGE_CUTOFF[args.stage] if args.stage in {"screen10", "screen", "explore50"} else None,
+        "cutoff_epoch": STAGE_CUTOFF[args.stage] if args.stage in {"screen", "explore50"} else None,
         "model_parameters": sum(parameter.numel() for parameter in _model(trainer).parameters()),
         "locked_evaluator_sha256": manifest["locked_evaluator"]["sha256"],
         "initialization_mode": "fresh_paired_scratch",
         "parent_checkpoint": None,
         "screen_gate_sha256": gate_sha256,
-        "screen10_gate_sha256": screen10_gate_sha256,
         "learnability_report_sha256": learnability_sha256,
     }
     if destination.exists():
@@ -449,23 +450,16 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         args.resume = args.resume.resolve()
     if args.screen_gate is not None:
         args.screen_gate = args.screen_gate.resolve()
-    if args.screen10_gate is not None:
-        args.screen10_gate = args.screen10_gate.resolve()
     if args.stage == "formal" and args.resume is None and args.screen_gate is None:
         raise ValueError("Formal100 requires the immutable passing Screen30 Gate")
     if args.stage != "formal" and args.screen_gate is not None:
         raise ValueError("Screen Gate may only authorize Formal100")
-    if args.stage == "screen" and args.resume is None and args.screen10_gate is None:
-        raise ValueError("Screen30 requires the immutable passing Screen10 Gate")
-    if args.stage != "screen" and args.screen10_gate is not None:
-        raise ValueError("Screen10 Gate may only authorize fresh or resumed Screen30")
     manifest = load_authority(args.protocol_manifest)
     validate_source(manifest)
     state = validate_initial_state(args.initial_state, manifest)
     validate_learnability_report(args.learnability_report, protocol_manifest=manifest)
     learnability_sha = file_sha256(args.learnability_report)
     _, gate_sha = _screen_gate(args.screen_gate, args.output_root)
-    _, screen10_gate_sha = _screen10_gate(args.screen10_gate, args.output_root)
     authority_root = args.output_root / "_ra-authority"
     data_yaml = prepare_data(args.dataset_root, args.stage, authority_root, manifest)
     identity = manifest["run_identities"][f"{args.variant}_{args.stage}"]
@@ -480,7 +474,6 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             protocol_manifest=args.protocol_manifest,
             learnability_report=args.learnability_report,
             screen_gate=args.screen_gate,
-            screen10_gate=args.screen10_gate,
         )
         if Path(decision["checkpoint"]).resolve() != args.resume:
             raise ValueError("resume path is not the audited latest exact checkpoint")
@@ -498,7 +491,6 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "initial_state": state,
         "settings": settings,
         "screen_gate_sha256": gate_sha,
-        "screen10_gate_sha256": screen10_gate_sha,
         "learnability_report_sha256": learnability_sha,
     }
     if args.dry_run:
@@ -525,7 +517,6 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             identity=identity,
             data_yaml=data_yaml,
             gate_sha256=gate_sha,
-            screen10_gate_sha256=screen10_gate_sha,
             learnability_sha256=learnability_sha,
         ),
     )

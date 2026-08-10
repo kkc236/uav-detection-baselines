@@ -32,7 +32,6 @@ from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
     validate_evaluated_arm,
     validate_formal_report,
-    validate_screen10_gate_report,
     validate_screen_gate_report,
 )
 
@@ -40,19 +39,17 @@ from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
 TRAIN_STEPS = (
     ("smoke", "baseline"),
     ("smoke", "ra_glgm"),
-    ("screen10", "baseline"),
-    ("screen10", "ra_glgm"),
     ("screen", "baseline"),
     ("screen", "ra_glgm"),
     ("formal", "baseline"),
     ("formal", "ra_glgm"),
 )
 EXPLORE50_TRAIN_STEPS = (("explore50", "baseline"), ("explore50", "ra_glgm"))
-STAGE_TARGETS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+STAGE_TARGETS = {"smoke": 2, "screen": 30, "formal": 100, "explore50": 50}
 
 
 def run_name(stage: str, variant: str) -> str:
-    suffix = "ra-glgm-v1.1-long50" if stage == "explore50" else "ra-glgm-v1.1"
+    suffix = "ra-glgm-v1.2-long50" if stage == "explore50" else "ra-glgm-v1.2"
     return f"{stage}-seed0-{variant}-{suffix}"
 
 
@@ -68,7 +65,6 @@ def build_train_command(
     learnability_report: Path,
     resume: Path | None = None,
     screen_gate: Path | None = None,
-    screen10_gate: Path | None = None,
 ) -> list[str]:
     command = [
         str(python),
@@ -95,10 +91,6 @@ def build_train_command(
         if screen_gate is None:
             raise ValueError("Formal100 launch requires the immutable passing Screen30 Gate")
         command.extend(("--screen-gate", str(screen_gate.resolve())))
-    if stage == "screen":
-        if screen10_gate is None:
-            raise ValueError("Screen30 launch requires the immutable passing Screen10 Gate")
-        command.extend(("--screen10-gate", str(screen10_gate.resolve())))
     return command
 
 
@@ -106,9 +98,7 @@ def build_evaluator_command(
     *, python: Path, evaluator_script: Path, run: Path, protocol_manifest: Path, stage: str
 ) -> list[str]:
     epochs = (
-        "8,9,10"
-        if stage == "screen10"
-        else "28,29,30"
+        "26,27,28,29,30"
         if stage == "screen"
         else "5,10,15,20,25,30,35,40,45,50"
         if stage == "explore50"
@@ -131,7 +121,7 @@ def build_evaluator_command(
 def build_gate_command(
     *, python: Path, output_root: Path, gate_output: Path, stage: str = "screen"
 ) -> list[str]:
-    if stage not in {"screen10", "screen", "formal"}:
+    if stage not in {"screen", "formal"}:
         raise ValueError(f"unknown RA comparison stage: {stage}")
     return [
         str(python),
@@ -545,17 +535,6 @@ def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
         raise RuntimeError("Screen30 gate did not authorize Formal100") from error
 
 
-def _validate_gate_for_screen(path: Path, output_root: Path) -> None:
-    try:
-        validate_screen10_gate_report(
-            path,
-            baseline_run=output_root / run_name("screen10", "baseline"),
-            method_run=output_root / run_name("screen10", "ra_glgm"),
-        )
-    except (OSError, ValueError) as error:
-        raise RuntimeError("Screen10 gate did not authorize Screen30") from error
-
-
 def _validate_formal_report(path: Path) -> dict[str, Any]:
     root = path.resolve().parent
     report = validate_formal_report(
@@ -565,7 +544,7 @@ def _validate_formal_report(path: Path) -> dict[str, Any]:
     )
     if (
         report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
-        or report.get("report_name") != "RA-GLGM-Formal100-v1.1"
+        or report.get("report_name") != "RA-GLGM-Formal100-v1.2"
         or report.get("primary_evidence") != ["epoch100", "tail3_mean"]
         or report.get("engineering", {}).get("complete") is not True
         or not isinstance(report.get("formal_success"), bool)
@@ -575,7 +554,7 @@ def _validate_formal_report(path: Path) -> dict[str, Any]:
 
 
 def validate_smoke_advancement(decision: Mapping[str, Any], *, variant: str) -> None:
-    """Fail closed before advancing from Smoke2 to any Screen10 arm."""
+    """Fail closed before advancing from Smoke2 to full-data Screen30."""
     valid = (
         decision.get("decision") == "complete"
         and decision.get("stage") == "smoke"
@@ -598,7 +577,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
     initial_state = args.initial_state.resolve()
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    screen10_gate_output = output_root / "RA_GLGM_SCREEN10_GATE.json"
     gate_output = output_root / "RA_GLGM_SCREEN30_GATE.json"
     formal_output = output_root / "RA_GLGM_FORMAL100_REPORT.json"
     audit = args.audit.resolve()
@@ -615,7 +593,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
     acquire_lock(lock)
     environment = _environment()
     explore50_only = bool(getattr(args, "explore50_only", False))
-    mode = "explore50" if explore50_only else "confirmatory_pipeline"
+    mode = "explore50" if explore50_only else "gated_exploratory_pipeline"
     append_audit_event(audit, {"event": "supervisor_start", "pid": os.getpid(), "mode": mode})
     active_stage = "startup"
     active_variant = "none"
@@ -623,8 +601,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
         train_steps = EXPLORE50_TRAIN_STEPS if explore50_only else TRAIN_STEPS
         for stage, variant in train_steps:
             active_stage, active_variant = stage, variant
-            if stage == "screen":
-                _validate_gate_for_screen(screen10_gate_output, output_root)
             if stage == "formal":
                 _validate_gate_for_formal(gate_output, output_root)
             run = output_root / run_name(stage, variant)
@@ -641,7 +617,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
                         protocol_manifest=protocol,
                         learnability_report=args.learnability_report,
                         screen_gate=gate_output if stage == "formal" else None,
-                        screen10_gate=screen10_gate_output if stage == "screen" else None,
                     )
                     append_audit_event(audit, {"event": "recovery_audit", **decision})
                     if decision["decision"] == "complete":
@@ -705,7 +680,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     learnability_report=args.learnability_report,
                     resume=resume,
                     screen_gate=gate_output if stage == "formal" else None,
-                    screen10_gate=screen10_gate_output if stage == "screen" else None,
                 )
                 append_audit_event(
                     audit,
@@ -753,7 +727,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     return 128 + received_signal
                 # Success and failure both pass through the same strict recovery audit.
 
-            if stage in {"screen10", "screen", "formal", "explore50"}:
+            if stage in {"screen", "formal", "explore50"}:
                 ensure_locked_evaluation(
                     python=args.python,
                     evaluator_script=args.evaluator_script,
@@ -765,37 +739,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     audit=audit,
                     environment=environment,
                 )
-
-            if stage == "screen10" and variant == "ra_glgm":
-                revalidate_supervisor_authority(protocol, authority)
-                if screen10_gate_output.exists():
-                    _validate_gate_for_screen(screen10_gate_output, output_root)
-                    append_audit_event(
-                        audit,
-                        {"event": "screen10_gate_reused_after_recomputation"},
-                    )
-                else:
-                    result = subprocess.run(
-                        build_gate_command(
-                            python=args.python,
-                            output_root=output_root,
-                            gate_output=screen10_gate_output,
-                            stage="screen10",
-                        ),
-                        cwd=ROOT,
-                        env=environment,
-                        check=False,
-                    )
-                    append_audit_event(
-                        audit,
-                        {"event": "screen10_gate_exit", "returncode": result.returncode},
-                    )
-                    if result.returncode != 0:
-                        _validate_gate_for_screen(
-                            screen10_gate_output, output_root
-                        )  # Raises a precise failed-gate error.
-                revalidate_supervisor_authority(protocol, authority)
-                _validate_gate_for_screen(screen10_gate_output, output_root)
 
             if stage == "screen" and variant == "ra_glgm":
                 revalidate_supervisor_authority(protocol, authority)
@@ -890,7 +833,6 @@ def run_supervisor(args: argparse.Namespace) -> int:
             {
                 "time": _utc_now(),
                 "process_state": "complete",
-                "screen10_gate": str(screen10_gate_output),
                 "screen_gate": str(gate_output),
                 "formal_report": str(formal_output),
                 "formal_success": formal_report["formal_success"],
