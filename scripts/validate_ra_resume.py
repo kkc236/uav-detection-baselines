@@ -29,7 +29,7 @@ from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 
 
-STAGE_LIMITS = {"smoke": 2, "screen": 30, "formal": 100}
+STAGE_LIMITS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100}
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall", "cuda_peak_mib")
 FIXED_AMP_SCALE = 128.0
 COMMON_GRADIENT_FIELDS = ("gradient_norm", "fdr_gradient_norm")
@@ -365,10 +365,171 @@ def _load_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
     root = path.resolve().parent
     gate = validate_screen_gate_report(
         path,
-        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1",
-        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1",
+        baseline_run=root / "screen-seed0-baseline-ra-glgm-v1.1",
+        method_run=root / "screen-seed0-ra_glgm-ra-glgm-v1.1",
     )
     return gate, file_sha256(path)
+
+
+def _load_screen10_gate(path: Path | None) -> tuple[dict[str, Any] | None, str | None]:
+    if path is None:
+        return None, None
+    from scripts.evaluate_ra_glgm_gate import validate_screen10_gate_report
+
+    root = path.resolve().parent
+    gate = validate_screen10_gate_report(
+        path,
+        baseline_run=root / "screen10-seed0-baseline-ra-glgm-v1.1",
+        method_run=root / "screen10-seed0-ra_glgm-ra-glgm-v1.1",
+    )
+    return gate, file_sha256(path)
+
+
+def _atomic_jsonl(path: Path, rows: list[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".reconcile.tmp")
+    temporary.write_text(
+        "".join(
+            json.dumps(dict(row), sort_keys=True, separators=(",", ":"), allow_nan=False)
+            + "\n"
+            for row in rows
+        ),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _quarantine_checkpoint(run: Path, checkpoint: Path) -> str:
+    """Move one provably uncommitted checkpoint out of the authoritative weights set."""
+
+    digest = file_sha256(checkpoint)
+    quarantine = run / "recovery-quarantine"
+    quarantine.mkdir(parents=True, exist_ok=True)
+    destination = quarantine / f"{checkpoint.stem}.{digest[:16]}.uncommitted.pt"
+    if destination.exists():
+        if file_sha256(destination) != digest:
+            raise ValueError("checkpoint quarantine contains contradictory bytes")
+        checkpoint.unlink()
+    else:
+        os.replace(checkpoint, destination)
+    return str(destination)
+
+
+def reconcile_epoch_artifacts(
+    run: Path,
+    *,
+    run_id: str,
+    variant: str,
+    stage: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Repair only a single interrupted tail transaction; reject contradictory history."""
+
+    evidence_path = run / "ra-epochs.jsonl"
+    queue_path = run / "publication-queue.jsonl"
+    evidence = read_jsonl(evidence_path) if evidence_path.exists() else []
+    queue = read_jsonl(queue_path) if queue_path.exists() else []
+    repairs: list[dict[str, Any]] = []
+
+    def sequential(rows: list[dict[str, Any]], name: str) -> None:
+        epochs = [int(row.get("completed_epoch", -1)) for row in rows]
+        if epochs != list(range(1, len(rows) + 1)) or len(rows) > limit:
+            raise ValueError(f"{name} is not a continuous in-range epoch prefix")
+
+    sequential(evidence, "epoch evidence")
+    sequential(queue, "publication queue")
+    if abs(len(evidence) - len(queue)) > 1:
+        raise ValueError("epoch evidence/publication queue differ by more than one tail record")
+    for epoch in range(1, min(len(evidence), len(queue)) + 1):
+        evidence_row = evidence[epoch - 1]
+        queue_row = queue[epoch - 1]
+        checkpoint = (run / "weights" / f"epoch{epoch - 1}.pt").resolve()
+        if (
+            evidence_row.get("run_id") != run_id
+            or evidence_row.get("variant") != variant
+            or evidence_row.get("stage") != stage
+            or queue_row.get("run_id") != run_id
+            or queue_row.get("variant") != variant
+            or queue_row.get("stage") != stage
+            or queue_row.get("status") != "pending"
+            or Path(str(queue_row.get("checkpoint", ""))).resolve() != checkpoint
+            or not checkpoint.is_file()
+            or str(queue_row.get("checkpoint_sha256", "")).upper()
+            != file_sha256(checkpoint)
+        ):
+            raise ValueError(f"checkpoint/queue contradictory committed artifact prefix at epoch {epoch}")
+
+    if len(evidence) == len(queue) + 1:
+        epoch = len(evidence)
+        row = evidence[-1]
+        checkpoint = (run / "weights" / f"epoch{epoch - 1}.pt").resolve()
+        if (
+            row.get("run_id") != run_id
+            or row.get("variant") != variant
+            or row.get("stage") != stage
+        ):
+            raise ValueError("unpaired epoch evidence tail has foreign authority")
+        if checkpoint.is_file():
+            valid, reason = validate_checkpoint(checkpoint)
+            if not valid or int(reason.split("=", 1)[1]) != epoch - 1:
+                raise ValueError("unpaired epoch evidence tail has a contradictory checkpoint")
+            queue.append(
+                {
+                    "run_id": run_id,
+                    "variant": variant,
+                    "stage": stage,
+                    "completed_epoch": epoch,
+                    "status": "pending",
+                    "checkpoint": str(checkpoint),
+                    "checkpoint_sha256": file_sha256(checkpoint),
+                    "artifacts": [
+                        str(evidence_path),
+                        str(run / "ra-epochs.csv"),
+                        str(run / "ra-run.json"),
+                    ],
+                }
+            )
+            _atomic_jsonl(queue_path, queue)
+            repairs.append({"action": "backfill_queue", "completed_epoch": epoch})
+        else:
+            evidence.pop()
+            _atomic_jsonl(evidence_path, evidence)
+            repairs.append({"action": "rollback_evidence", "completed_epoch": epoch})
+    elif len(queue) == len(evidence) + 1:
+        epoch = len(queue)
+        row = queue[-1]
+        checkpoint = (run / "weights" / f"epoch{epoch - 1}.pt").resolve()
+        if (
+            row.get("run_id") != run_id
+            or row.get("variant") != variant
+            or row.get("stage") != stage
+            or Path(str(row.get("checkpoint", ""))).resolve() != checkpoint
+            or not checkpoint.is_file()
+            or str(row.get("checkpoint_sha256", "")).upper() != file_sha256(checkpoint)
+        ):
+            raise ValueError("unpaired publication queue tail is contradictory")
+        queue.pop()
+        _atomic_jsonl(queue_path, queue)
+        moved = _quarantine_checkpoint(run, checkpoint)
+        repairs.append(
+            {"action": "rollback_queue_and_quarantine_checkpoint", "completed_epoch": epoch, "moved_to": moved}
+        )
+
+    completed = len(evidence)
+    extras = sorted(
+        path
+        for path in (run / "weights").glob("epoch*.pt")
+        if path.name not in {f"epoch{epoch}.pt" for epoch in range(completed)}
+    )
+    if extras:
+        permitted = run / "weights" / f"epoch{completed}.pt"
+        if len(extras) != 1 or extras[0].resolve() != permitted.resolve():
+            raise ValueError("checkpoint directory contains contradictory future snapshots")
+        moved = _quarantine_checkpoint(run, extras[0])
+        repairs.append(
+            {"action": "quarantine_uncommitted_checkpoint", "completed_epoch": completed + 1, "moved_to": moved}
+        )
+    return repairs
 
 
 def validate_resume(
@@ -379,6 +540,7 @@ def validate_resume(
     protocol_manifest: str | Path,
     learnability_report: str | Path,
     screen_gate: str | Path | None = None,
+    screen10_gate: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return an audited resume decision; never search another experiment authority."""
     if variant not in RA_VARIANTS or stage not in RA_STAGES:
@@ -390,12 +552,22 @@ def validate_resume(
     expected_identity = authority.get("run_identities", {}).get(f"{variant}_{stage}")
     if identity != expected_identity:
         raise ValueError("runtime identity does not match the selected RA authority")
+    if runtime.get("protocol_sha256") != authority.get("protocol_sha256"):
+        raise ValueError("runtime protocol differs from RA authority")
     if runtime.get("initial_state") != authority.get("initial_state"):
         raise ValueError("runtime paired initialization differs from RA authority")
     if runtime.get("source") != authority.get("source"):
         raise ValueError("runtime source differs from RA authority")
     if runtime.get("dataset_authority") != authority.get("dataset_authority"):
         raise ValueError("runtime dataset authority differs from RA authority")
+    if runtime.get("locked_evaluator_sha256") != authority.get("locked_evaluator", {}).get(
+        "sha256"
+    ):
+        raise ValueError("runtime locked evaluator differs from RA authority")
+    if runtime.get("initialization_mode") != "fresh_paired_scratch":
+        raise ValueError("runtime was not launched from fresh paired scratch initialization")
+    if runtime.get("parent_checkpoint") is not None:
+        raise ValueError("runtime illegally inherits a parent checkpoint")
     learnability_path = Path(learnability_report).resolve()
     validate_learnability_report(learnability_path, protocol_manifest=authority)
     learnability_sha = file_sha256(learnability_path)
@@ -404,13 +576,28 @@ def validate_resume(
     if str(runtime.get("gpu_uuid", "")) != str(authority.get("gpu_uuid", "")):
         raise ValueError("runtime physical GPU differs from paired authority")
     if int(runtime.get("schedule_epochs", -1)) != (
-        50 if stage == "screen" else STAGE_LIMITS[stage]
+        50 if stage in {"screen10", "screen"} else STAGE_LIMITS[stage]
     ):
         raise ValueError("runtime scheduler length differs from frozen protocol")
-    if runtime.get("cutoff_epoch") != (30 if stage == "screen" else None):
+    expected_cutoff = 10 if stage == "screen10" else 30 if stage == "screen" else None
+    if runtime.get("cutoff_epoch") != expected_cutoff:
         raise ValueError("runtime cutoff differs from frozen protocol")
 
     gate, gate_sha = _load_gate(Path(screen_gate).resolve() if screen_gate else None)
+    screen10, screen10_sha = _load_screen10_gate(
+        Path(screen10_gate).resolve() if screen10_gate else None
+    )
+    if stage == "screen":
+        if screen10 is None:
+            raise ValueError("Screen30 recovery requires the passing Screen10 gate")
+        if runtime.get("screen10_gate_sha256") != screen10_sha:
+            raise ValueError("Screen30 runtime is not bound to the supplied Screen10 gate")
+        if runtime.get("initialization_mode") != "fresh_paired_scratch":
+            raise ValueError("Screen30 was not launched from fresh paired scratch initialization")
+        if runtime.get("parent_checkpoint") is not None:
+            raise ValueError("Screen30 may not inherit a Smoke or Screen10 checkpoint")
+        if runtime.get("screen_gate_sha256") is not None:
+            raise ValueError("Screen30 may not inherit a Screen30 gate")
     if stage == "formal":
         if gate is None:
             raise ValueError("Formal100 recovery requires the passing Screen30 gate")
@@ -420,7 +607,21 @@ def validate_resume(
             raise ValueError("Formal100 was not launched from fresh paired scratch initialization")
         if runtime.get("parent_checkpoint") is not None:
             raise ValueError("Formal100 may not inherit a Smoke or Screen checkpoint")
+        if runtime.get("screen10_gate_sha256") is not None:
+            raise ValueError("Formal100 must be bound only to the Screen30 gate")
+    if stage in {"smoke", "screen10"} and (
+        runtime.get("screen_gate_sha256") is not None
+        or runtime.get("screen10_gate_sha256") is not None
+    ):
+        raise ValueError(f"{stage} may not inherit an upstream gate")
 
+    reconciliation = reconcile_epoch_artifacts(
+        run,
+        run_id=str(identity["run_id"]),
+        variant=variant,
+        stage=stage,
+        limit=STAGE_LIMITS[stage],
+    )
     evidence = read_jsonl(run / "ra-epochs.jsonl")
     completed = len(evidence)
     limit = STAGE_LIMITS[stage]
@@ -487,8 +688,10 @@ def validate_resume(
         "checkpoint": str(latest),
         "checkpoint_sha256": file_sha256(latest),
         "screen_gate_sha256": gate_sha,
+        "screen10_gate_sha256": screen10_sha,
         "learnability_report_sha256": learnability_sha,
         "authority": "same-run exact-epoch only",
+        "artifact_reconciliation": reconciliation,
         **optimizer,
     }
 
@@ -518,6 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--protocol-manifest", type=Path, required=True)
     parser.add_argument("--learnability-report", type=Path, required=True)
     parser.add_argument("--screen-gate", type=Path)
+    parser.add_argument("--screen10-gate", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -531,6 +735,7 @@ def main() -> None:
         protocol_manifest=args.protocol_manifest,
         learnability_report=args.learnability_report,
         screen_gate=args.screen_gate,
+        screen10_gate=args.screen10_gate,
     )
     write_create_only(args.output, decision)
     print(json.dumps(decision, indent=2, sort_keys=True))

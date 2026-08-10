@@ -246,6 +246,7 @@ def test_freeze_exposes_only_support_private_path() -> None:
     assert all(name.startswith(RA_GLGM_PRIVATE_PREFIX) for name in trainable)
     assert not any(name.endswith("alpha") for name in trainable)
     assert not any(name.endswith("output_projection.weight") for name in trainable)
+    assert not any("scale_head" in name for name in trainable)
     assert not model.public.weight.requires_grad
 
 

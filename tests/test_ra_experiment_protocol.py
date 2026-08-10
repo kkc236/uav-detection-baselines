@@ -3,6 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import scripts.train_rtdetr_ra_glgm as ra_train
+from types import SimpleNamespace
+
+import pytest
+import src.ra_experiment_protocol as protocol_module
+
 from src.fdr_protocol import canonical_json_bytes
 from src.ra_experiment_protocol import (
     BASELINE_PARAMETERS,
@@ -10,10 +16,23 @@ from src.ra_experiment_protocol import (
     RA_EXPERIMENT_PROTOCOL,
     RA_EXPERIMENT_PROTOCOL_SHA256,
     ignore_sidecar_signature,
+    current_source_identity,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_clean_source_identity_rejects_any_porcelain_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        protocol_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="?? src/foreign_runtime.py\n"),
+    )
+    with pytest.raises(ValueError, match="must be clean"):
+        current_source_identity(ROOT, require_clean=True)
 
 
 def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
@@ -29,6 +48,7 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     }
     assert protocol["training"]["screen_schedule_epochs"] == 50
     assert protocol["training"]["screen_cutoff_epoch"] == 30
+    assert protocol["training"]["screen10_cutoff_epoch"] == 10
     assert protocol["training"]["formal_schedule_epochs"] == 100
     assert protocol["training"]["save_period"] == 1
     assert protocol["dataset"]["screen_train_images"] == 647
@@ -48,7 +68,7 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
         "invalid_zero_area_rows_excluded"
     ] == {"train": 2, "val": 0}
     module = protocol["module"]
-    assert module["private_parameters"] == 812_817
+    assert module["private_parameters"] == 813_396
     assert module["input"] == {
         "source": "FDR decoder P3 only",
         "shape": "[B,256,H,W]",
@@ -56,7 +76,19 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     }
     assert module["router"]["input"] == "shared reduced feature"
     assert module["router"]["initialization"] == "zeros"
-    assert module["output_equation"] == "X + 0.5*tanh(alpha)*O*tanh(Wo(U))"
+    assert module["scale_gate"] == {
+        "operator": "1x1 Conv",
+        "channels": "192->3",
+        "classes": ["tiny", "small", "regular"],
+        "thresholds_on_640": [256.0, 1024.0],
+        "activation": "per-position softmax",
+        "initialization": "zero weight and zero bias",
+        "factors": [1.25, 1.0, 0.75],
+        "initial_gate": 1.0,
+        "inference_inputs": ["fused_private_feature_U"],
+        "forbidden_inference_inputs": ["ground_truth", "IoU", "Hungarian_assignment"],
+    }
+    assert "q_tiny" in module["output_equation"]
     assert module["residual_difficulty"]["prediction_source"] == (
         "final ordinary decoder Query only"
     )
@@ -75,18 +107,72 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     assert protocol["module"]["peak_vram_mib_limit"] == MAX_PEAK_VRAM_MIB
     assert protocol["screen_gate"]["epoch30_map_delta_min"] == 0.005
     assert protocol["screen_gate"]["class_ap_wins_min"] == 7
+    assert protocol["screen10_gate"]["decision_role"].startswith("rejection-only")
+    assert protocol["screen10_gate"]["scale_gate_mean_abs_deviation_tail3_min"] == 0.01
+    assert protocol["screen10_gate"]["scale_gate_std_tail3_min"] == 0.01
+    assert protocol["dataset"]["selection_set"]["official_val_used"] is False
+    assert protocol["dataset"]["screen30_selection_set"]["official_val_used"] is False
+    assert protocol["advancement"]["formal_validation"].startswith("official val")
     assert protocol["advancement"]["formal_initialization"].startswith("fresh paired scratch")
     assert protocol["publication"]["publish_pt"] is False
     assert BASELINE_PARAMETERS == 33_156_614
 
 
 def test_checked_in_preregistration_is_exact_protocol_payload() -> None:
-    path = ROOT / "research" / "ra_glgm" / "RA_GLGM_PREREGISTRATION.json"
+    path = ROOT / "research" / "ra_glgm" / "RA_GLGM_V11_PREREGISTRATION.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload == RA_EXPERIMENT_PROTOCOL
     import hashlib
 
     assert hashlib.sha256(canonical_json_bytes(payload)).hexdigest().upper() == RA_EXPERIMENT_PROTOCOL_SHA256
+
+
+def test_smoke_and_screen_stages_never_validate_on_official_val(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    dataset = (tmp_path / "VisDrone").resolve()
+    dataset.mkdir()
+    authority_root = tmp_path / "authority"
+    screen10 = tmp_path / "screen10.txt"
+    screen30 = tmp_path / "screen30.txt"
+    screen10.write_text("screen10.jpg\n", encoding="utf-8")
+    screen30.write_text("screen30.jpg\n", encoding="utf-8")
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps({"path": str(dataset), "train": "train", "val": "images/val"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ra_train, "ignore_sidecar_signature", lambda _root: {})
+    monkeypatch.setattr(
+        ra_train.fdr_train,
+        "prepare_data_yaml",
+        lambda *_args, **_kwargs: source,
+    )
+    manifest = {
+        "dataset_authority": {
+            "root": str(dataset),
+            "positive": {"sha256": RA_EXPERIMENT_PROTOCOL["dataset"]["sha256"]},
+            "ignore": {},
+            "selection_set": {
+                "path": str(screen10.resolve()),
+                "sha256": ra_train.file_sha256(screen10),
+            },
+            "screen30_selection_set": {
+                "path": str(screen30.resolve()),
+                "sha256": ra_train.file_sha256(screen30),
+            },
+        }
+    }
+
+    for stage, expected in (
+        ("smoke", screen10),
+        ("screen10", screen10),
+        ("screen", screen30),
+    ):
+        generated = ra_train.prepare_data(dataset, stage, authority_root, manifest)
+        assert json.loads(generated.read_text(encoding="utf-8"))["val"] == str(
+            expected.resolve()
+        )
 
 
 def test_ignore_sidecar_signature_freezes_split_and_empty_file_distribution(

@@ -17,6 +17,8 @@ class ResidualDifficultyTargets:
     heatmap: Tensor
     valid_mask: Tensor
     difficulty: Tensor
+    scale_distribution: Tensor | None = None
+    scale_mask: Tensor | None = None
 
 
 def _paired_iou_xywh(first: Tensor, second: Tensor, eps: float = 1e-7) -> Tensor:
@@ -131,6 +133,21 @@ def build_residual_difficulty_targets(
             device=device,
             dtype=torch.float32,
         )
+        scale_heatmap = torch.zeros(
+            (batch_size, 3, height, width),
+            device=device,
+            dtype=torch.float32,
+        )
+        area_640 = boxes[:, 2].clamp_min(0) * boxes[:, 3].clamp_min(0) * (640.0**2)
+        scale_indices = torch.where(
+            area_640 < 16.0**2,
+            torch.zeros_like(area_640, dtype=torch.long),
+            torch.where(
+                area_640 < 32.0**2,
+                torch.ones_like(area_640, dtype=torch.long),
+                torch.full_like(area_640, 2, dtype=torch.long),
+            ),
+        )
         grid_y = torch.arange(height, device=device, dtype=torch.float32).view(1, height, 1)
         grid_x = torch.arange(width, device=device, dtype=torch.float32).view(1, 1, width)
         for image in range(batch_size):
@@ -153,6 +170,14 @@ def build_residual_difficulty_targets(
                     heatmap[image, 0],
                     weighted.amax(dim=0),
                 )
+                chunk_scales = scale_indices[indices]
+                for scale_index in range(3):
+                    selected = chunk_scales == scale_index
+                    if bool(selected.any()):
+                        scale_heatmap[image, scale_index] = torch.maximum(
+                            scale_heatmap[image, scale_index],
+                            weighted[selected].amax(dim=0),
+                        )
 
         valid = torch.ones_like(heatmap, dtype=torch.bool)
         raw_boxes = all_bboxes.detach().to(device=device, dtype=torch.float32)
@@ -171,7 +196,20 @@ def build_residual_difficulty_targets(
         # Ignore regions suppress only negative supervision; a real positive
         # target remains valid if annotations overlap an ignored rectangle.
         valid |= heatmap > 0
-        return ResidualDifficultyTargets(heatmap, valid, difficulty)
+        scale_sum = scale_heatmap.sum(dim=1, keepdim=True)
+        scale_mask = scale_sum > 0
+        scale_distribution = torch.where(
+            scale_mask,
+            scale_heatmap / scale_sum.clamp_min(torch.finfo(torch.float32).tiny),
+            torch.zeros_like(scale_heatmap),
+        )
+        return ResidualDifficultyTargets(
+            heatmap,
+            valid,
+            difficulty,
+            scale_distribution,
+            scale_mask,
+        )
 
 
 def residual_support_focal_loss(
@@ -189,8 +227,78 @@ def residual_support_focal_loss(
     )
 
 
+def scale_conditioning_loss(
+    probabilities: Tensor,
+    targets: ResidualDifficultyTargets,
+) -> Tensor:
+    """Soft three-scale cross entropy on positive residual-support pixels only."""
+
+    distribution = targets.scale_distribution
+    mask = targets.scale_mask
+    if distribution is None or mask is None:
+        raise ValueError("scale targets are unavailable")
+    if probabilities.shape != distribution.shape or mask.shape != distribution[:, :1].shape:
+        raise ValueError("scale prediction and target shapes differ")
+    if not bool(torch.isfinite(probabilities).all()):
+        raise FloatingPointError("NONFINITE_RA_GLGM_SCALE_PROBABILITY")
+    with torch.autocast(device_type=probabilities.device.type, enabled=False):
+        predicted = probabilities.float().clamp_min(torch.finfo(torch.float32).tiny)
+        per_pixel = -(distribution.float() * predicted.log()).sum(dim=1, keepdim=True)
+        if not bool(mask.any()):
+            return probabilities.sum() * 0.0
+        return per_pixel.masked_select(mask).mean()
+
+
+@torch.no_grad()
+def scale_prediction_diagnostics(
+    probabilities: Tensor,
+    targets: ResidualDifficultyTargets,
+) -> dict[str, Tensor]:
+    """Return finite non-collapse evidence for the frozen Screen gates."""
+
+    distribution = targets.scale_distribution
+    mask = targets.scale_mask
+    if distribution is None or mask is None:
+        raise ValueError("scale targets are unavailable")
+    if probabilities.shape != distribution.shape:
+        raise ValueError("scale prediction and target shapes differ")
+    positive = mask[:, 0]
+    device = probabilities.device
+    zero = torch.zeros((), device=device, dtype=torch.float32)
+    if not bool(positive.any()):
+        return {
+            "scale_entropy": zero,
+            "scale_tiny_fraction": zero,
+            "scale_small_fraction": zero,
+            "scale_regular_fraction": zero,
+            "scale_tiny_recall": zero,
+            "scale_small_recall": zero,
+            "scale_regular_recall": zero,
+            "scale_positive_pixels": zero,
+        }
+    predicted = probabilities.float()
+    entropy = -(predicted.clamp_min(torch.finfo(torch.float32).tiny).log() * predicted).sum(dim=1)
+    predicted_class = predicted.argmax(dim=1)
+    target_class = distribution.argmax(dim=1)
+    values: dict[str, Tensor] = {
+        "scale_entropy": entropy[positive].mean(),
+        "scale_positive_pixels": positive.sum().float(),
+    }
+    for index, name in enumerate(("tiny", "small", "regular")):
+        values[f"scale_{name}_fraction"] = (predicted_class[positive] == index).float().mean()
+        target_pixels = positive & (target_class == index)
+        values[f"scale_{name}_recall"] = (
+            (predicted_class[target_pixels] == index).float().mean()
+            if bool(target_pixels.any())
+            else zero
+        )
+    return values
+
+
 __all__ = [
     "ResidualDifficultyTargets",
     "build_residual_difficulty_targets",
     "residual_support_focal_loss",
+    "scale_conditioning_loss",
+    "scale_prediction_diagnostics",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -26,13 +27,16 @@ from src.ra_experiment_protocol import (  # noqa: E402
     paired_manifests,
     read_json,
     read_jsonl,
-    validate_runtime_identity,
+    validate_runtime_authority,
 )
 from scripts.validate_ra_resume import validate_optimizer_evidence  # noqa: E402
+from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 
 
 EXPECTED_EPOCHS = 30
 TAIL_EPOCHS = (28, 29, 30)
+SCREEN10_EXPECTED_EPOCHS = 10
+SCREEN10_TAIL_EPOCHS = (8, 9, 10)
 FORMAL_EXPECTED_EPOCHS = 100
 FORMAL_TAIL_EPOCHS = (98, 99, 100)
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall")
@@ -45,6 +49,64 @@ def _mean(values: Sequence[float]) -> float:
 
 def _checkpoint_path(run: Path, completed_epoch: int) -> Path:
     return run / "weights" / f"epoch{completed_epoch - 1}.pt"
+
+
+def _build_prediction_metric_context(
+    manifest: Mapping[str, Any], *, stage: str
+) -> tuple[Any, ...]:
+    """Rebuild the locked ground-truth context used to derive independent metrics."""
+
+    from scripts.evaluate_ra_glgm_checkpoints import (
+        _coco_ground_truth,
+        _dataset,
+        _coco_metrics,
+    )
+
+    authority = manifest.get("dataset_authority")
+    if not isinstance(authority, Mapping):
+        raise ValueError("runtime dataset authority is missing")
+    selection_name = {
+        "screen10": "selection_set",
+        "screen": "screen30_selection_set",
+    }.get(stage)
+    selection = authority.get(selection_name) if selection_name else None
+    if stage in {"screen10", "screen"}:
+        if not isinstance(selection, Mapping):
+            raise ValueError(f"{stage} selection authority is missing")
+        expected_images = int(selection.get("images", -1))
+        expected_objects = int(selection.get("objects", -1))
+    else:
+        expected_images = int(RA_EXPERIMENT_PROTOCOL["dataset"]["val_images"])
+        expected_objects = 38_759
+    root, names, images, validation_source = _dataset(
+        Path(str(manifest.get("data", ""))).resolve(),
+        expected_images=expected_images,
+    )
+    if root != Path(str(authority.get("root", ""))).resolve():
+        raise ValueError("metric rederivation dataset root differs from runtime authority")
+    if stage in {"screen10", "screen"}:
+        selection_path = Path(str(selection.get("path", ""))).resolve()
+        if (
+            validation_source != selection_path
+            or file_sha256(selection_path) != str(selection.get("sha256", "")).upper()
+        ):
+            raise ValueError("metric rederivation selection list differs from authority")
+    elif validation_source != (root / "images" / "val").resolve():
+        raise ValueError("metric rederivation must use official validation split")
+    ground_truth, image_ids, geometries, ignored = _coco_ground_truth(
+        images, names, expected_objects=expected_objects
+    )
+    return ground_truth, image_ids, geometries, ignored, _coco_metrics
+
+
+def _recompute_prediction_metrics(
+    artifact: Path, context: tuple[Any, ...]
+) -> dict[str, Any]:
+    ground_truth, image_ids, geometries, ignored, coco_metrics = context
+    raw = json.loads(artifact.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("prediction artifact must be one JSON list")
+    return coco_metrics(raw, ground_truth, image_ids, geometries, ignored)
 
 
 def _queue_integrity(
@@ -109,8 +171,48 @@ def _detailed_integrity(
         for row in queue
         if isinstance(row.get("completed_epoch"), int)
     }
+    previous_row_sha = "0" * 64
+    try:
+        metric_context = _build_prediction_metric_context(identity and read_json(run / "ra-run.json"), stage=stage)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        metric_context = None
+        errors.append(f"locked prediction metric context is invalid: {error}")
     for row in rows:
         epoch = row.get("completed_epoch", "?")
+        payload = dict(row)
+        recorded_row_sha = payload.pop("evaluation_row_sha256", None)
+        expected_row_sha = hashlib.sha256(canonical_json_bytes(payload)).hexdigest().upper()
+        if (
+            row.get("previous_evaluation_row_sha256") != previous_row_sha
+            or recorded_row_sha != expected_row_sha
+        ):
+            errors.append(f"locked evaluation row hash chain mismatch at epoch {epoch}")
+        previous_row_sha = str(recorded_row_sha)
+        artifact = row.get("predictions_artifact")
+        if not isinstance(artifact, Mapping):
+            errors.append(f"prediction artifact authority is missing at epoch {epoch}")
+        else:
+            prediction_path = Path(str(artifact.get("path", ""))).resolve()
+            evaluation_root = (run / "locked-evaluator").resolve()
+            if (
+                not prediction_path.is_relative_to(evaluation_root)
+                or prediction_path.is_symlink()
+                or not prediction_path.is_file()
+                or file_sha256(prediction_path) != str(artifact.get("sha256", "")).upper()
+            ):
+                errors.append(f"prediction artifact SHA256/path mismatch at epoch {epoch}")
+            elif metric_context is not None:
+                try:
+                    recomputed = _recompute_prediction_metrics(prediction_path, metric_context)
+                except (OSError, ValueError, json.JSONDecodeError) as error:
+                    errors.append(f"prediction metric rederivation failed at epoch {epoch}: {error}")
+                else:
+                    if any(row.get(name) != recomputed.get(name) for name in DETAILED_METRICS) or row.get(
+                        "class_ap"
+                    ) != recomputed.get("class_ap"):
+                        errors.append(
+                            f"locked evaluation metrics differ from prediction rederivation at epoch {epoch}"
+                        )
         expected_checkpoint = (
             _checkpoint_path(run, int(epoch)).resolve()
             if isinstance(epoch, int) and epoch > 0
@@ -166,7 +268,12 @@ def _load_arm(
     errors: list[str] = []
     try:
         manifest = read_json(run / "ra-run.json")
-        identity = validate_runtime_identity(manifest, variant=variant, stage=stage)
+        identity = validate_runtime_authority(
+            manifest,
+            variant=variant,
+            stage=stage,
+            repository_root=ROOT,
+        )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         manifest, identity = {}, {}
         errors.append(f"invalid {variant} runtime manifest: {error}")
@@ -259,6 +366,88 @@ def _load_arm(
     }
 
 
+def _upstream_gate_integrity(
+    baseline: Mapping[str, Any], method: Mapping[str, Any], *, stage: str
+) -> tuple[bool, list[str]]:
+    """Bind a stage pair to the exact passing upstream gate beside its run directories."""
+
+    if stage == "screen10":
+        return True, []
+    field, filename = (
+        ("screen10_gate_sha256", "RA_GLGM_SCREEN10_GATE.json")
+        if stage == "screen"
+        else ("screen_gate_sha256", "RA_GLGM_SCREEN30_GATE.json")
+    )
+    base_run = Path(str(baseline.get("run_dir", ""))).resolve()
+    method_run = Path(str(method.get("run_dir", ""))).resolve()
+    errors: list[str] = []
+    if base_run.parent != method_run.parent:
+        return False, ["paired runs do not share one upstream-gate authority root"]
+    base_manifest = baseline.get("manifest", {})
+    method_manifest = method.get("manifest", {})
+    expected_sha = base_manifest.get(field) if isinstance(base_manifest, Mapping) else None
+    if (
+        not isinstance(method_manifest, Mapping)
+        or expected_sha is None
+        or expected_sha != method_manifest.get(field)
+    ):
+        errors.append(f"paired runtimes differ on {field}")
+        return False, errors
+    gate_path = base_run.parent / filename
+    if gate_path.is_symlink() or not gate_path.is_file():
+        return False, [f"upstream gate is missing: {gate_path}"]
+    if file_sha256(gate_path) != str(expected_sha).upper():
+        return False, [f"upstream gate SHA256 differs from runtime binding: {gate_path}"]
+    try:
+        report = read_json(gate_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return False, [f"upstream gate is unreadable: {error}"]
+    if stage == "screen":
+        valid = (
+            report.get("protocol_sha256") == RA_EXPERIMENT_PROTOCOL_SHA256
+            and report.get("gate_name") == "RA-GLGM-Screen10-v1.1"
+            and report.get("screen30_eligible") is True
+            and report.get("instruction") == "start_fresh_paired_screen30"
+            and report.get("engineering", {}).get("complete") is True
+            and report.get("gate", {}).get("passed") is True
+        )
+    else:
+        valid = (
+            report.get("protocol_sha256") == RA_EXPERIMENT_PROTOCOL_SHA256
+            and report.get("gate_name") == "RA-GLGM-Screen30-v1.1"
+            and report.get("formal_eligible") is True
+            and report.get("formal_instruction")
+            == "start_fresh_from_paired_scratch_initial_state"
+            and report.get("engineering", {}).get("complete") is True
+            and report.get("gate", {}).get("passed") is True
+        )
+    if not valid:
+        errors.append(f"{filename} is not a complete passing upstream gate")
+    else:
+        try:
+            recomputed = _recompute_upstream_report(base_run.parent, stage=stage)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            errors.append(f"{filename} upstream recomputation failed: {error}")
+        else:
+            if report != recomputed:
+                errors.append(f"{filename} differs from upstream artifact recomputation")
+    return not errors, errors
+
+
+def _recompute_upstream_report(root: Path, *, stage: str) -> dict[str, Any]:
+    if stage == "screen":
+        return evaluate_screen10_gate(
+            root / "screen10-seed0-baseline-ra-glgm-v1.1",
+            root / "screen10-seed0-ra_glgm-ra-glgm-v1.1",
+        )
+    if stage == "formal":
+        return evaluate_gate(
+            root / "screen-seed0-baseline-ra-glgm-v1.1",
+            root / "screen-seed0-ra_glgm-ra-glgm-v1.1",
+        )
+    raise ValueError(f"stage has no upstream gate: {stage}")
+
+
 def _metric_window(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     final = {name: float(rows[-1][name]) for name in DETAILED_METRICS}
     tail3 = {
@@ -278,12 +467,17 @@ def evaluate_gate(
     baseline = _load_arm(baseline_run, "baseline", strict_hashes=strict_checkpoint_hashes)
     method = _load_arm(method_run, "ra_glgm", strict_hashes=strict_checkpoint_hashes)
     pair_valid = paired_manifests(baseline["manifest"], method["manifest"], stage="screen")
+    upstream_valid, upstream_errors = _upstream_gate_integrity(
+        baseline, method, stage="screen"
+    )
+    baseline["errors"].extend(upstream_errors)
     if not pair_valid:
         baseline["errors"].append("baseline/RA manifests are not a strict same-GPU pair")
     engineering = {
         "baseline_complete": all(baseline["checks"].values()),
         "method_complete": all(method["checks"].values()),
         "strict_pair": pair_valid,
+        "upstream_gate": upstream_valid,
     }
     engineering_complete = all(engineering.values())
 
@@ -357,7 +551,7 @@ def evaluate_gate(
     passed = engineering_complete and all(checks.values())
     return {
         "format_version": 1,
-        "gate_name": "RA-GLGM-Screen30-v1",
+        "gate_name": "RA-GLGM-Screen30-v1.1",
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
         "engineering": {
             "complete": engineering_complete,
@@ -375,6 +569,163 @@ def evaluate_gate(
             "start_fresh_from_paired_scratch_initial_state"
             if passed
             else "do_not_start_formal100"
+        ),
+    }
+
+
+def evaluate_screen10_gate(
+    baseline_run: str | Path,
+    method_run: str | Path,
+    *,
+    strict_checkpoint_hashes: bool = True,
+) -> dict[str, Any]:
+    """Apply the rejection-only Screen10 gate on the independent selection set."""
+
+    baseline = _load_arm(
+        baseline_run,
+        "baseline",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="screen10",
+        expected_epochs=SCREEN10_EXPECTED_EPOCHS,
+        tail_epochs=SCREEN10_TAIL_EPOCHS,
+    )
+    method = _load_arm(
+        method_run,
+        "ra_glgm",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="screen10",
+        expected_epochs=SCREEN10_EXPECTED_EPOCHS,
+        tail_epochs=SCREEN10_TAIL_EPOCHS,
+    )
+    pair_valid = paired_manifests(
+        baseline["manifest"], method["manifest"], stage="screen10"
+    )
+    upstream_valid, upstream_errors = _upstream_gate_integrity(
+        baseline, method, stage="screen10"
+    )
+    baseline["errors"].extend(upstream_errors)
+    engineering = {
+        "baseline_complete": all(baseline["checks"].values()),
+        "method_complete": all(method["checks"].values()),
+        "strict_pair": pair_valid,
+        "upstream_gate": upstream_valid,
+    }
+    engineering_complete = all(engineering.values())
+    thresholds = RA_EXPERIMENT_PROTOCOL["screen10_gate"]
+    checks = {
+        "selection_tail3_map_positive": False,
+        "selection_tail3_ap50_positive": False,
+        "selection_tail3_recall_positive": False,
+        "selection_tail3_ap_tiny_positive": False,
+        "selection_tail3_ap_small_positive": False,
+        "scale_ce_below_uniform": False,
+        "all_scale_fractions_present": False,
+        "tiny_scale_recall": False,
+        "small_scale_recall": False,
+        "regular_scale_recall": False,
+        "scale_gate_mean_abs_deviation": False,
+        "scale_gate_std": False,
+        "exact_frozen_parameter_delta": False,
+        "peak_vram_below_22_gib": False,
+    }
+    metrics: dict[str, Any] | None = None
+    if engineering_complete:
+        baseline_window = _metric_window(baseline["detailed"])
+        method_window = _metric_window(method["detailed"])
+        tail_delta = {
+            name: method_window["tail3"][name] - baseline_window["tail3"][name]
+            for name in DETAILED_METRICS
+        }
+        method_tail = [
+            row
+            for row in method["evidence"]
+            if int(row["completed_epoch"]) in SCREEN10_TAIL_EPOCHS
+        ]
+        diagnostic_names = (
+            "loss_ra_scale",
+            "ra_scale_tiny_fraction",
+            "ra_scale_small_fraction",
+            "ra_scale_regular_fraction",
+            "ra_scale_tiny_recall",
+            "ra_scale_small_recall",
+            "ra_scale_regular_recall",
+            "ra_scale_gate_mean_abs_deviation",
+            "ra_scale_gate_std",
+        )
+        diagnostics = {
+            name: _mean([float(row[name]) for row in method_tail])
+            for name in diagnostic_names
+            if len(method_tail) == 3
+            and all(finite_number(row.get(name)) for row in method_tail)
+        }
+        baseline_parameters = int(baseline["parameter_count"])
+        method_parameters = int(method["parameter_count"])
+        peak_vram = max(float(row["cuda_peak_mib"]) for row in method["evidence"])
+        metrics = {
+            "baseline": baseline_window,
+            "ra_glgm": method_window,
+            "selection_tail3_delta": tail_delta,
+            "scale_tail3": diagnostics,
+            "parameters": {
+                "baseline": baseline_parameters,
+                "ra_glgm": method_parameters,
+                "increase": method_parameters - baseline_parameters,
+            },
+            "ra_glgm_peak_vram_mib": peak_vram,
+        }
+        minimum_fraction = float(thresholds["scale_predicted_fraction_each_min"])
+        checks = {
+            "selection_tail3_map_positive": tail_delta["map"] > 0,
+            "selection_tail3_ap50_positive": tail_delta["map50"] > 0,
+            "selection_tail3_recall_positive": tail_delta["recall"] > 0,
+            "selection_tail3_ap_tiny_positive": tail_delta["ap_tiny"] > 0,
+            "selection_tail3_ap_small_positive": tail_delta["ap_small"] > 0,
+            "scale_ce_below_uniform": diagnostics.get("loss_ra_scale", math.inf)
+            < float(thresholds["scale_ce_tail3_max"]),
+            "all_scale_fractions_present": all(
+                diagnostics.get(f"ra_scale_{name}_fraction", -math.inf)
+                >= minimum_fraction
+                for name in ("tiny", "small", "regular")
+            ),
+            "tiny_scale_recall": diagnostics.get("ra_scale_tiny_recall", -math.inf)
+            >= float(thresholds["scale_tiny_recall_tail3_min"]),
+            "small_scale_recall": diagnostics.get("ra_scale_small_recall", -math.inf)
+            >= float(thresholds["scale_small_recall_tail3_min"]),
+            "regular_scale_recall": diagnostics.get("ra_scale_regular_recall", -math.inf)
+            >= float(thresholds["scale_regular_recall_tail3_min"]),
+            "scale_gate_mean_abs_deviation": diagnostics.get(
+                "ra_scale_gate_mean_abs_deviation", -math.inf
+            )
+            >= float(thresholds["scale_gate_mean_abs_deviation_tail3_min"]),
+            "scale_gate_std": diagnostics.get("ra_scale_gate_std", -math.inf)
+            >= float(thresholds["scale_gate_std_tail3_min"]),
+            "exact_frozen_parameter_delta": (
+                baseline_parameters == BASELINE_PARAMETERS
+                and method_parameters - baseline_parameters
+                == int(thresholds["parameter_increase_exact"])
+            ),
+            "peak_vram_below_22_gib": peak_vram < MAX_PEAK_VRAM_MIB,
+        }
+    passed = engineering_complete and all(checks.values())
+    return {
+        "format_version": 1,
+        "gate_name": "RA-GLGM-Screen10-v1.1",
+        "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+        "role": "rejection-only",
+        "engineering": {
+            "complete": engineering_complete,
+            "checks": engineering,
+            "arm_checks": {
+                "baseline": baseline["checks"],
+                "ra_glgm": method["checks"],
+            },
+            "errors": [*baseline["errors"], *method["errors"]],
+        },
+        "metrics": metrics,
+        "gate": {"checks": checks, "passed": passed},
+        "screen30_eligible": passed,
+        "instruction": (
+            "start_fresh_paired_screen30" if passed else "close_candidate_authority"
         ),
     }
 
@@ -406,12 +757,17 @@ def evaluate_formal_report(
     pair_valid = paired_manifests(
         baseline["manifest"], method["manifest"], stage="formal"
     )
+    upstream_valid, upstream_errors = _upstream_gate_integrity(
+        baseline, method, stage="formal"
+    )
+    baseline["errors"].extend(upstream_errors)
     if not pair_valid:
         baseline["errors"].append("baseline/RA Formal100 manifests are not a strict same-GPU pair")
     engineering = {
         "baseline_complete": all(baseline["checks"].values()),
         "method_complete": all(method["checks"].values()),
         "strict_pair": pair_valid,
+        "upstream_gate": upstream_valid,
     }
     engineering_complete = all(engineering.values())
     metrics: dict[str, Any] | None = None
@@ -480,7 +836,7 @@ def evaluate_formal_report(
     success = engineering_complete and all(checks.values())
     return {
         "format_version": 1,
-        "report_name": "RA-GLGM-Formal100-v1",
+        "report_name": "RA-GLGM-Formal100-v1.1",
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
         "primary_evidence": ["epoch100", "tail3_mean"],
         "engineering": {
@@ -504,7 +860,9 @@ def validate_evaluated_arm(
 ) -> dict[str, Any]:
     """Validate an existing create-only locked evaluation before reuse."""
 
-    if stage == "screen":
+    if stage == "screen10":
+        expected_epochs, tail_epochs = SCREEN10_EXPECTED_EPOCHS, SCREEN10_TAIL_EPOCHS
+    elif stage == "screen":
         expected_epochs, tail_epochs = EXPECTED_EPOCHS, TAIL_EPOCHS
     elif stage == "formal":
         expected_epochs, tail_epochs = FORMAL_EXPECTED_EPOCHS, FORMAL_TAIL_EPOCHS
@@ -547,6 +905,26 @@ def validate_screen_gate_report(
     return recorded
 
 
+def validate_screen10_gate_report(
+    path: str | Path,
+    *,
+    baseline_run: str | Path,
+    method_run: str | Path,
+) -> dict[str, Any]:
+    """Recompute Screen10 before allowing any fresh Screen30 launch."""
+
+    recorded = read_json(path)
+    expected = evaluate_screen10_gate(baseline_run, method_run)
+    if recorded != expected:
+        raise ValueError("Screen10 gate report differs from frozen recomputation")
+    if (
+        recorded.get("screen30_eligible") is not True
+        or recorded.get("instruction") != "start_fresh_paired_screen30"
+    ):
+        raise ValueError("Screen10 gate did not authorize Screen30")
+    return recorded
+
+
 def validate_formal_report(
     path: str | Path,
     *,
@@ -586,21 +964,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-run", type=Path, required=True)
     parser.add_argument("--ra-run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--stage", choices=("screen", "formal"), default="screen")
+    parser.add_argument(
+        "--stage", choices=("screen10", "screen", "formal"), default="screen"
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    report = (
-        evaluate_gate(args.baseline_run, args.ra_run)
-        if args.stage == "screen"
-        else evaluate_formal_report(args.baseline_run, args.ra_run)
-    )
+    if args.stage == "screen10":
+        report = evaluate_screen10_gate(args.baseline_run, args.ra_run)
+    elif args.stage == "screen":
+        report = evaluate_gate(args.baseline_run, args.ra_run)
+    else:
+        report = evaluate_formal_report(args.baseline_run, args.ra_run)
     write_create_only_report(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     if not report["engineering"]["complete"]:
         raise SystemExit(2)
+    if args.stage == "screen10" and not report["screen30_eligible"]:
+        raise SystemExit(3)
     if args.stage == "screen" and not report["formal_eligible"]:
         raise SystemExit(3)
 

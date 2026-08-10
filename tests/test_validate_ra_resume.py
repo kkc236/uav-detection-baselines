@@ -41,6 +41,11 @@ def _stub_learnability_validation(monkeypatch: pytest.MonkeyPatch) -> None:
         "current_source_identity",
         lambda _root: dict(TEST_SOURCE),
     )
+    monkeypatch.setattr(
+        resume_module,
+        "_load_screen10_gate",
+        lambda _path: ({"screen30_eligible": True}, "F" * 64),
+    )
 
 
 def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, Path]:
@@ -75,10 +80,28 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         },
     }
     protocol = tmp_path / "protocol.json"
+    selection_list = tmp_path / "selection-dev.txt"
+    selection_list.write_text("/dataset/images/train/selection.jpg\n", encoding="utf-8")
+    screen30_selection_list = tmp_path / "screen30-dev.txt"
+    screen30_selection_list.write_text(
+        "/dataset/images/train/screen30-selection.jpg\n", encoding="utf-8"
+    )
     dataset_authority = {
         "root": str((tmp_path / "VisDrone").resolve()),
         "positive": {"sha256": "D" * 64},
         "ignore": {"sha256": "E" * 64},
+        "selection_set": {
+            "path": str(selection_list.resolve()),
+            "sha256": file_sha256(selection_list),
+            "images": 548,
+            "objects": 1,
+        },
+        "screen30_selection_set": {
+            "path": str(screen30_selection_list.resolve()),
+            "sha256": file_sha256(screen30_selection_list),
+            "images": 548,
+            "objects": 1,
+        },
     }
     authority["dataset_authority"] = dataset_authority
     authority["manifest_sha256"] = hashlib.sha256(
@@ -97,10 +120,15 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         "run_identity": identity,
         "initial_state": authority["initial_state"],
         "dataset_authority": dataset_authority,
+        "locked_evaluator_sha256": authority["locked_evaluator"]["sha256"],
         "learnability_report_sha256": file_sha256(learnability),
         "gpu_uuid": "GPU-fixed",
         "schedule_epochs": 50,
         "cutoff_epoch": 30,
+        "screen10_gate_sha256": "F" * 64,
+        "screen_gate_sha256": None,
+        "initialization_mode": "fresh_paired_scratch",
+        "parent_checkpoint": None,
     }
     (run / "ra-run.json").write_text(json.dumps(runtime), encoding="utf-8")
     evidence, optimizer, queue = [], [], []
@@ -144,6 +172,8 @@ def _write_partial_run(tmp_path: Path, completed: int = 3) -> tuple[Path, Path, 
         queue.append(
             {
                 "run_id": identity["run_id"],
+                "variant": "baseline",
+                "stage": "screen",
                 "completed_epoch": epoch,
                 "status": "pending",
                 "checkpoint": str(checkpoint.resolve()),
@@ -183,6 +213,55 @@ def test_resume_selects_only_latest_exact_epoch_checkpoint(tmp_path: Path) -> No
     assert decision["fdr_gradient_finite"] is True
     assert decision["public_gradient_nonzero"] is True
     assert decision["fdr_gradient_nonzero"] is True
+
+
+def test_resume_backfills_queue_after_interrupt_between_evidence_and_queue(
+    tmp_path: Path,
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    queue_path = run / "publication-queue.jsonl"
+    queue = [json.loads(line) for line in queue_path.read_text().splitlines()]
+    queue_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in queue[:-1]), encoding="utf-8"
+    )
+
+    decision = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+
+    assert decision["artifact_reconciliation"] == [
+        {"action": "backfill_queue", "completed_epoch": 3}
+    ]
+    assert len(queue_path.read_text().splitlines()) == 3
+
+
+def test_resume_rolls_back_unpaired_queue_and_quarantines_checkpoint(
+    tmp_path: Path,
+) -> None:
+    run, protocol, learnability = _write_partial_run(tmp_path)
+    evidence_path = run / "ra-epochs.jsonl"
+    evidence = [json.loads(line) for line in evidence_path.read_text().splitlines()]
+    evidence_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in evidence[:-1]), encoding="utf-8"
+    )
+
+    decision = validate_resume(
+        run,
+        variant="baseline",
+        stage="screen",
+        protocol_manifest=protocol,
+        learnability_report=learnability,
+    )
+
+    repair = decision["artifact_reconciliation"][0]
+    assert repair["action"] == "rollback_queue_and_quarantine_checkpoint"
+    assert decision["completed_epoch"] == 2
+    assert not (run / "weights" / "epoch2.pt").exists()
+    assert Path(repair["moved_to"]).is_file()
 
 
 def test_resume_rejects_queue_hash_drift(tmp_path: Path) -> None:

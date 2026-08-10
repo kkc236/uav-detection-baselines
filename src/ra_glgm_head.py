@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-
 from torch import Tensor
 
 from src.fdr_head import FDRRTDETRDecoder
@@ -35,6 +34,5 @@ class RAFDRRTDETRDecoder(FDRRTDETRDecoder):
         refined = list(x)
         refined[0] = self.ra_glgm(refined[0])
         return super().forward(refined, batch=batch)
-
 
 __all__ = ["RAFDRRTDETRDecoder"]

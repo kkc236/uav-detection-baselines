@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
+import scripts.evaluate_ra_glgm_gate as gate_module
 
 from scripts.evaluate_ra_glgm_gate import (
     evaluate_formal_report,
@@ -18,24 +20,104 @@ from src.ra_experiment_protocol import (
     RA_EXPERIMENT_PROTOCOL,
     RA_EXPERIMENT_PROTOCOL_SHA256,
     file_sha256,
+    build_ra_run_identity,
+    current_source_identity,
 )
+from src.fdr_protocol import canonical_json_bytes
 
 
-def _manifest(variant: str, parameters: int, *, stage: str = "screen") -> dict:
+ROOT = Path(__file__).resolve().parents[1]
+REAL_BUILD_PREDICTION_CONTEXT = gate_module._build_prediction_metric_context
+
+
+@pytest.fixture(autouse=True)
+def _stub_expensive_prediction_rederivation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gate_module, "_build_prediction_metric_context", lambda *_a, **_k: ())
+    monkeypatch.setattr(
+        gate_module,
+        "_recompute_prediction_metrics",
+        lambda artifact, _context: json.loads(artifact.read_text(encoding="utf-8"))["metrics"],
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "_recompute_upstream_report",
+        lambda root, *, stage: json.loads(
+            (
+                root
+                / (
+                    "RA_GLGM_SCREEN10_GATE.json"
+                    if stage == "screen"
+                    else "RA_GLGM_SCREEN30_GATE.json"
+                )
+            ).read_text(encoding="utf-8")
+        ),
+    )
+
+
+def test_screen30_metric_rederivation_uses_its_frozen_selection_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import scripts.evaluate_ra_glgm_checkpoints as evaluator_module
+
+    selection = tmp_path / "screen30-selection.txt"
+    selection.write_text("selected.jpg\n", encoding="utf-8")
+    dataset_root = tmp_path / "VisDrone"
+    observed: dict[str, object] = {}
+
+    def fake_dataset(_data: Path, *, expected_images: int):
+        observed["expected_images"] = expected_images
+        return dataset_root.resolve(), [], [], selection.resolve()
+
+    monkeypatch.setattr(evaluator_module, "_dataset", fake_dataset)
+    monkeypatch.setattr(
+        evaluator_module,
+        "_coco_ground_truth",
+        lambda _images, _names, *, expected_objects: (
+            observed.setdefault("expected_objects", expected_objects) or {},
+            {},
+            {},
+            {},
+        ),
+    )
+    manifest = {
+        "data": str(tmp_path / "screen-data.yaml"),
+        "dataset_authority": {
+            "root": str(dataset_root.resolve()),
+            "screen30_selection_set": {
+                "path": str(selection.resolve()),
+                "sha256": file_sha256(selection),
+                "images": 431,
+                "objects": 12_345,
+            },
+        },
+    }
+
+    REAL_BUILD_PREDICTION_CONTEXT(manifest, stage="screen")
+
+    assert observed == {"expected_images": 431, "expected_objects": 12_345}
+
+
+def _manifest(
+    variant: str,
+    parameters: int,
+    *,
+    initial_state: Path,
+    upstream_sha256: str | None,
+    stage: str = "screen",
+) -> dict:
+    source = current_source_identity(ROOT)
+    pair_id = f"paired-{stage}-seed0"
     return {
         "format_version": 1,
         "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-        "source": {"git_commit": "a" * 40, "tree_sha256": "B" * 64},
-        "run_identity": {
-            "source_sha256": "S" * 64,
-            "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
-            "stage": stage,
-            "variant": variant,
-            "seed": 0,
-            "pair_id": f"paired-{stage}-seed0",
-            "run_id": f"{variant}-{stage}-seed0",
+        "source": source,
+        "run_identity": build_ra_run_identity(
+            source, stage=stage, variant=variant, seed=0, pair_id=pair_id
+        ),
+        "initial_state": {
+            "path": str(initial_state.resolve()),
+            "sha256": file_sha256(initial_state),
         },
-        "initial_state": {"path": "/authority/initial.pt", "sha256": "I" * 64},
         "data": "/authority/screen.yaml",
         "dataset_authority": {
             "root": "/authority/VisDrone",
@@ -44,11 +126,45 @@ def _manifest(variant: str, parameters: int, *, stage: str = "screen") -> dict:
         },
         "learnability_report_sha256": "L" * 64,
         "gpu_uuid": "GPU-fixed",
-        "schedule_epochs": 50 if stage == "screen" else 100,
-        "cutoff_epoch": 30 if stage == "screen" else None,
-        "locked_evaluator_sha256": "E" * 64,
+        "schedule_epochs": 50 if stage in {"screen10", "screen"} else 100,
+        "cutoff_epoch": 10 if stage == "screen10" else 30 if stage == "screen" else None,
+        "locked_evaluator_sha256": file_sha256(
+            ROOT / "scripts" / "evaluate_ra_glgm_checkpoints.py"
+        ),
+        "initialization_mode": "fresh_paired_scratch",
+        "parent_checkpoint": None,
+        "screen10_gate_sha256": upstream_sha256 if stage == "screen" else None,
+        "screen_gate_sha256": upstream_sha256 if stage == "formal" else None,
         "model_parameters": parameters,
     }
+
+
+def _upstream_gate(root: Path, stage: str) -> str | None:
+    if stage == "screen":
+        path = root / "RA_GLGM_SCREEN10_GATE.json"
+        payload = {
+            "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+            "gate_name": "RA-GLGM-Screen10-v1.1",
+            "screen30_eligible": True,
+            "instruction": "start_fresh_paired_screen30",
+            "engineering": {"complete": True},
+            "gate": {"passed": True},
+        }
+    elif stage == "formal":
+        path = root / "RA_GLGM_SCREEN30_GATE.json"
+        payload = {
+            "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+            "gate_name": "RA-GLGM-Screen30-v1.1",
+            "formal_eligible": True,
+            "formal_instruction": "start_fresh_from_paired_scratch_initial_state",
+            "engineering": {"complete": True},
+            "gate": {"passed": True},
+        }
+    else:
+        return None
+    if not path.exists():
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    return file_sha256(path)
 
 
 def _write_arm(
@@ -63,7 +179,16 @@ def _write_arm(
     run = root / variant
     weights = run / "weights"
     weights.mkdir(parents=True)
-    manifest = _manifest(variant, parameters, stage=stage)
+    initial_state = root / "initial.pt"
+    if not initial_state.exists():
+        initial_state.write_bytes(b"paired-initial-state")
+    manifest = _manifest(
+        variant,
+        parameters,
+        stage=stage,
+        initial_state=initial_state,
+        upstream_sha256=_upstream_gate(root, stage),
+    )
     (run / "ra-run.json").write_text(json.dumps(manifest), encoding="utf-8")
     evidence = []
     optimizer = []
@@ -125,14 +250,16 @@ def _write_arm(
         "".join(json.dumps(row) + "\n" for row in optimizer), encoding="utf-8"
     )
     detailed = []
+    previous_row_sha = "0" * 64
     for epoch in tail_epochs:
-        detailed.append(
-            {
+        prediction = run / "locked-evaluator" / f"epoch{epoch:04d}" / "predictions.json"
+        prediction.parent.mkdir(parents=True, exist_ok=True)
+        row = {
                 "completed_epoch": epoch,
                 "variant": variant,
                 "stage": stage,
                 "run_id": manifest["run_identity"]["run_id"],
-                "evaluator_sha256": "E" * 64,
+                "evaluator_sha256": manifest["locked_evaluator_sha256"],
                 "checkpoint": queue[epoch - 1]["checkpoint"],
                 "checkpoint_sha256": queue[epoch - 1]["checkpoint_sha256"],
                 "model_parameters": parameters,
@@ -148,11 +275,47 @@ def _write_arm(
                     for index in range(10)
                 ],
             }
-        )
+        artifact_metrics = {
+            name: row[name]
+            for name in ("map", "map50", "map75", "precision", "recall", "ap_tiny", "ap_small", "class_ap")
+        }
+        prediction.write_text(json.dumps({"metrics": artifact_metrics}), encoding="utf-8")
+        row["predictions_artifact"] = {
+            "path": str(prediction.resolve()),
+            "sha256": file_sha256(prediction),
+        }
+        row["previous_evaluation_row_sha256"] = previous_row_sha
+        row["evaluation_row_sha256"] = hashlib.sha256(
+            canonical_json_bytes(row)
+        ).hexdigest().upper()
+        previous_row_sha = row["evaluation_row_sha256"]
+        detailed.append(row)
     (run / "locked-evaluation.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in detailed), encoding="utf-8"
     )
     return run
+
+
+def _rewrite_evaluation_with_valid_chain(
+    path: Path, rows: list[dict], *, sync_prediction_artifact: bool = True
+) -> None:
+    previous = "0" * 64
+    for row in rows:
+        if sync_prediction_artifact:
+            artifact = Path(row["predictions_artifact"]["path"])
+            metrics = {
+                name: row[name]
+                for name in ("map", "map50", "map75", "precision", "recall", "ap_tiny", "ap_small", "class_ap")
+            }
+            artifact.write_text(json.dumps({"metrics": metrics}), encoding="utf-8")
+            row["predictions_artifact"]["sha256"] = file_sha256(artifact)
+        row["previous_evaluation_row_sha256"] = previous
+        row.pop("evaluation_row_sha256", None)
+        row["evaluation_row_sha256"] = hashlib.sha256(
+            canonical_json_bytes(row)
+        ).hexdigest().upper()
+        previous = row["evaluation_row_sha256"]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
 def test_complete_positive_screen_pair_passes_all_frozen_gates(tmp_path: Path) -> None:
@@ -187,9 +350,7 @@ def test_0_5_pp_boundary_passes_but_missing_small_or_class_wins_fails(tmp_path: 
     )
     rows = [json.loads(line) for line in (method / "locked-evaluation.jsonl").read_text().splitlines()]
     rows[-1]["ap_small"] -= 0.005
-    (method / "locked-evaluation.jsonl").write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    _rewrite_evaluation_with_valid_chain(method / "locked-evaluation.jsonl", rows)
 
     report = evaluate_gate(baseline, method)
 
@@ -238,6 +399,29 @@ def test_locked_evaluation_cannot_be_copied_across_arms(tmp_path: Path) -> None:
     assert report["engineering"]["complete"] is False
     assert any(
         "run authority mismatch" in error
+        for error in report["engineering"]["errors"]
+    )
+
+
+def test_rehashed_metric_json_cannot_diverge_from_prediction_artifact(tmp_path: Path) -> None:
+    baseline = _write_arm(tmp_path, "baseline")
+    method = _write_arm(
+        tmp_path,
+        "ra_glgm",
+        delta=0.006,
+        parameters=BASELINE_PARAMETERS
+        + int(RA_EXPERIMENT_PROTOCOL["module"]["private_parameters"]),
+    )
+    path = method / "locked-evaluation.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[-1]["map"] = 0.999
+    _rewrite_evaluation_with_valid_chain(path, rows, sync_prediction_artifact=False)
+
+    report = evaluate_gate(baseline, method)
+
+    assert report["engineering"]["complete"] is False
+    assert any(
+        "differ from prediction rederivation" in error
         for error in report["engineering"]["errors"]
     )
 

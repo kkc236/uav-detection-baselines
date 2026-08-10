@@ -120,6 +120,12 @@ class RAGLGM(nn.Module):
                 1,
                 bias=True,
             )
+            self.scale_head = nn.Conv2d(
+                self.hidden_channels,
+                3,
+                1,
+                bias=True,
+            )
             self.output_projection = nn.Conv2d(
                 self.hidden_channels,
                 self.channels,
@@ -131,9 +137,20 @@ class RAGLGM(nn.Module):
         # initialization side effect.
         nn.init.zeros_(self.router.weight)
         nn.init.zeros_(self.router.bias)
+        # Uniform scale probabilities yield an exact unit gate because the
+        # frozen tiny/small/regular factors average to one.
+        nn.init.zeros_(self.scale_head.weight)
+        nn.init.zeros_(self.scale_head.bias)
+        self.register_buffer(
+            "scale_factors",
+            torch.tensor([1.25, 1.0, 0.75]).view(1, 3, 1, 1),
+            persistent=True,
+        )
         self.alpha = nn.Parameter(torch.zeros(1, self.channels, 1, 1))
         self.last_support_map: Tensor | None = None
         self.last_route_weights: Tensor | None = None
+        self.last_scale_probabilities: Tensor | None = None
+        self.last_scale_gate: Tensor | None = None
 
     @property
     def private_parameter_count(self) -> int:
@@ -170,8 +187,10 @@ class RAGLGM(nn.Module):
         )
         return fused, weights
 
-    def forward_with_diagnostics(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        """Return refined P3, two-expert route weights, and support probability."""
+    def forward_with_diagnostics(
+        self, x: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Return refined P3, expert routes, support, and scale probabilities."""
 
         if x.ndim != 4 or x.shape[1] != self.channels:
             raise ValueError(
@@ -186,18 +205,25 @@ class RAGLGM(nn.Module):
         )
         fused, weights = self._route(reduced, local, global_feature)
         support = self.support_head(fused).sigmoid()
+        scale_probabilities = self.scale_head(fused).softmax(dim=1)
+        scale_gate = (scale_probabilities * self.scale_factors).sum(dim=1, keepdim=True)
         residual = (
             self.max_residual_scale
             * self.alpha.tanh()
             * support
+            * scale_gate
             * self.output_projection(fused).tanh()
         )
-        return x + residual, weights, support
+        return x + residual, weights, support, scale_probabilities
 
     def forward(self, x: Tensor) -> Tensor:
-        output, weights, support = self.forward_with_diagnostics(x)
+        output, weights, support, scale_probabilities = self.forward_with_diagnostics(x)
         self.last_support_map = support
         self.last_route_weights = weights.detach()
+        self.last_scale_probabilities = scale_probabilities
+        self.last_scale_gate = (
+            scale_probabilities.detach() * self.scale_factors
+        ).sum(dim=1, keepdim=True)
         return output
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -10,8 +11,13 @@ import scripts.supervise_ra_glgm as supervisor_module
 from scripts.supervise_ra_glgm import (
     TRAIN_STEPS,
     append_audit_event,
+    acquire_lock,
+    build_evaluator_command,
+    build_gate_command,
     build_train_command,
     ensure_locked_evaluation,
+    ensure_fresh_run_slot,
+    release_lock,
     revalidate_supervisor_authority,
     run_name,
     validate_audit_chain,
@@ -20,10 +26,12 @@ from scripts.supervise_ra_glgm import (
 )
 
 
-def test_supervisor_order_is_sequential_and_formal_follows_screen() -> None:
+def test_supervisor_order_is_sequential_and_screen10_precedes_screen30() -> None:
     assert TRAIN_STEPS == (
         ("smoke", "baseline"),
         ("smoke", "ra_glgm"),
+        ("screen10", "baseline"),
+        ("screen10", "ra_glgm"),
         ("screen", "baseline"),
         ("screen", "ra_glgm"),
         ("formal", "baseline"),
@@ -41,6 +49,7 @@ def test_train_command_exposes_no_scientific_overrides_and_formal_requires_gate(
         "output_root": tmp_path / "runs",
         "stage": "screen",
         "variant": "ra_glgm",
+        "screen10_gate": tmp_path / "screen10-gate.json",
     }
     command = build_train_command(**common)
     assert command[:2] == [str(Path("/venv/bin/python")), "scripts/train_rtdetr_ra_glgm.py"]
@@ -59,6 +68,45 @@ def test_train_command_exposes_no_scientific_overrides_and_formal_requires_gate(
     }.intersection(command)
     with pytest.raises(ValueError, match="Gate"):
         build_train_command(**{**common, "stage": "formal"})
+
+
+def test_screen10_evaluator_and_gate_commands_use_frozen_stage(tmp_path: Path) -> None:
+    evaluator = build_evaluator_command(
+        python=Path("/venv/bin/python"),
+        evaluator_script=tmp_path / "evaluator.py",
+        run=tmp_path / "screen10-run",
+        protocol_manifest=tmp_path / "protocol.json",
+        stage="screen10",
+    )
+    assert evaluator[evaluator.index("--epochs") + 1] == "8,9,10"
+
+    gate = build_gate_command(
+        python=Path("/venv/bin/python"),
+        output_root=tmp_path / "runs",
+        gate_output=tmp_path / "screen10-gate.json",
+        stage="screen10",
+    )
+    assert gate[gate.index("--stage") + 1] == "screen10"
+    assert run_name("screen10", "baseline") in gate[gate.index("--baseline-run") + 1]
+    assert run_name("screen10", "ra_glgm") in gate[gate.index("--ra-run") + 1]
+
+
+def test_supervisor_accepts_only_v11_formal_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = {
+        "protocol_sha256": supervisor_module.RA_EXPERIMENT_PROTOCOL_SHA256,
+        "report_name": "RA-GLGM-Formal100-v1.1",
+        "primary_evidence": ["epoch100", "tail3_mean"],
+        "engineering": {"complete": True},
+        "formal_success": False,
+    }
+    monkeypatch.setattr(
+        supervisor_module,
+        "validate_formal_report",
+        lambda *_args, **_kwargs: dict(expected),
+    )
+    assert supervisor_module._validate_formal_report(tmp_path / "report.json") == expected
 
 
 def test_audit_events_are_hash_chained_and_tampering_is_detected(tmp_path: Path) -> None:
@@ -216,3 +264,148 @@ def test_supervisor_rejects_locked_evaluator_byte_drift(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="bytes differ"):
         validate_supervisor_evaluator(locked, authority)
+
+
+def test_supervisor_reclaims_only_a_proven_stale_pid_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = tmp_path / "supervisor.lock"
+    lock.write_text(
+        json.dumps({"pid": 999_999, "process_start_identity": "dead-start"}),
+        encoding="ascii",
+    )
+    current = os.getpid()
+    monkeypatch.setattr(
+        supervisor_module,
+        "_process_start_identity",
+        lambda pid: "current-start" if pid == current else None,
+    )
+    acquire_lock(lock)
+    owner = json.loads(lock.read_text(encoding="ascii"))
+    assert owner == {"pid": current, "process_start_identity": "current-start"}
+    release_lock(lock)
+    assert not lock.exists()
+
+
+def test_supervisor_rejects_a_live_pid_start_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = tmp_path / "supervisor.lock"
+    lock.write_text(
+        json.dumps({"pid": 123, "process_start_identity": "live-start"}),
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "_process_start_identity",
+        lambda pid: "live-start" if pid == 123 else "current-start",
+    )
+    with pytest.raises(RuntimeError, match="already exists"):
+        acquire_lock(lock)
+
+
+def test_fresh_orphan_run_is_atomically_quarantined_before_exact_fresh_launch(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.1"
+    run.mkdir()
+    (run / "partial.txt").write_text("preserve me", encoding="utf-8")
+    quarantine = ensure_fresh_run_slot(run)
+    assert quarantine is not None
+    assert not run.exists()
+    assert quarantine.parent == tmp_path.resolve()
+    assert (quarantine / "partial.txt").read_text(encoding="utf-8") == "preserve me"
+
+
+def test_fresh_slot_never_quarantines_a_runtime_manifest(tmp_path: Path) -> None:
+    run = tmp_path / "screen-seed0-baseline-ra-glgm-v1.1"
+    run.mkdir()
+    (run / "ra-run.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="must use recovery"):
+        ensure_fresh_run_slot(run)
+    assert run.is_dir()
+
+
+def _terminal_status_args(tmp_path: Path) -> SimpleNamespace:
+    initial = tmp_path / "initial.pt"
+    initial.write_bytes(b"initial")
+    protocol = tmp_path / "protocol.json"
+    protocol.write_text("{}", encoding="utf-8")
+    learnability = tmp_path / "learnability.json"
+    learnability.write_text("{}", encoding="utf-8")
+    evaluator = tmp_path / "evaluator.py"
+    evaluator.write_text("# evaluator", encoding="utf-8")
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    return SimpleNamespace(
+        protocol_manifest=protocol,
+        initial_state=initial,
+        learnability_report=learnability,
+        dataset_root=dataset,
+        output_root=tmp_path / "runs",
+        evaluator_script=evaluator,
+        python=Path("python"),
+        audit=tmp_path / "audit.jsonl",
+        status=tmp_path / "status.json",
+        log=tmp_path / "supervisor.log",
+        lock=tmp_path / "supervisor.lock",
+        poll_seconds=1,
+        max_attempts=1,
+    )
+
+
+def _stub_terminal_status_boundaries(
+    monkeypatch: pytest.MonkeyPatch, args: SimpleNamespace
+) -> None:
+    authority = {
+        "initial_state": {"sha256": supervisor_module.file_sha256(args.initial_state)}
+    }
+    monkeypatch.setattr(supervisor_module, "TRAIN_STEPS", (("smoke", "baseline"),))
+    monkeypatch.setattr(supervisor_module, "load_authority", lambda _path: authority)
+    monkeypatch.setattr(supervisor_module, "validate_learnability_report", lambda *_a, **_k: {})
+    monkeypatch.setattr(supervisor_module, "validate_supervisor_evaluator", lambda *_a, **_k: args.evaluator_script)
+    monkeypatch.setattr(supervisor_module, "revalidate_supervisor_authority", lambda *_a, **_k: authority)
+    monkeypatch.setattr(supervisor_module, "acquire_lock", lambda _path: None)
+    monkeypatch.setattr(supervisor_module, "release_lock", lambda _path: None)
+
+
+def test_supervisor_atomically_records_failed_terminal_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = _terminal_status_args(tmp_path)
+    _stub_terminal_status_boundaries(monkeypatch, args)
+    monkeypatch.setattr(
+        supervisor_module,
+        "_run_child",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("injected failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        supervisor_module.run_supervisor(args)
+    status = json.loads(args.status.read_text(encoding="utf-8"))
+    assert status["process_state"] == "failed"
+    assert status["error_type"] == "RuntimeError"
+    assert status["stage"] == "smoke"
+
+
+def test_supervisor_atomically_records_interrupted_terminal_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = _terminal_status_args(tmp_path)
+    _stub_terminal_status_boundaries(monkeypatch, args)
+    orphan = args.output_root / run_name("smoke", "baseline")
+    orphan.mkdir(parents=True)
+    (orphan / "partial.txt").write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(supervisor_module, "_run_child", lambda *_a, **_k: (143, 15))
+
+    assert supervisor_module.run_supervisor(args) == 143
+    status = json.loads(args.status.read_text(encoding="utf-8"))
+    assert status["process_state"] == "interrupted"
+    assert status["signal"] == 15
+    events = [json.loads(line) for line in args.audit.read_text(encoding="utf-8").splitlines()]
+    quarantine = next(
+        event["quarantine"]
+        for event in events
+        if event["event"] == "manifest_free_run_quarantined"
+    )
+    assert (Path(quarantine) / "partial.txt").read_text(encoding="utf-8") == "preserve"

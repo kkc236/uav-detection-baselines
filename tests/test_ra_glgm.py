@@ -7,12 +7,15 @@ import pytest
 import torch
 import yaml
 
+from scripts.train_rtdetr_ra_glgm import _private_losses
 from src.ra_glgm import RAGLGM
 from src.ra_glgm_head import RAFDRRTDETRDecoder
 from src.ra_glgm_loss import (
     ResidualDifficultyTargets,
     build_residual_difficulty_targets,
     residual_support_focal_loss,
+    scale_conditioning_loss,
+    scale_prediction_diagnostics,
 )
 from src.ra_glgm_protocol import (
     RA_GLGM_PRIVATE_PREFIX,
@@ -23,6 +26,7 @@ from src.ra_glgm_protocol import (
 )
 from src.rtdetr_btdse import filter_detection_batch
 from src.rtdetr_ra_glgm import (
+    _RAEpochScaleStatistics,
     RAGLGMControlDetectionModel,
     RAGLGMControlTrainer,
     RAGLGMDetectionModel,
@@ -52,7 +56,7 @@ def test_initial_output_routes_and_public_gradient_are_exactly_baseline() -> Non
     target = torch.zeros(2, 1, 9, 11)
     valid = torch.ones_like(target, dtype=torch.bool)
 
-    output, routes, support = module.forward_with_diagnostics(public)
+    output, routes, support, scales = module.forward_with_diagnostics(public)
     baseline_loss = baseline.square().mean()
     method_loss = output.square().mean() + 0.05 * residual_support_focal_loss(
         support,
@@ -68,6 +72,7 @@ def test_initial_output_routes_and_public_gradient_are_exactly_baseline() -> Non
     assert torch.equal(output, public)
     assert routes.shape == (2, 2, 4, 9, 11)
     assert torch.equal(routes, torch.full_like(routes, 0.5))
+    torch.testing.assert_close(scales, torch.full_like(scales, 1.0 / 3.0))
     assert torch.equal(public.grad, baseline.grad)
     assert module.alpha.grad is not None and module.alpha.grad.abs().sum() > 0
     assert module.support_head.weight.grad is not None
@@ -78,6 +83,8 @@ def test_initial_output_routes_and_public_gradient_are_exactly_baseline() -> Non
     assert module.local_one[0].weight.grad.abs().sum() > 0
     assert module.output_projection.weight.grad is not None
     assert torch.count_nonzero(module.output_projection.weight.grad) == 0
+    assert module.scale_head.weight.grad is not None
+    assert torch.count_nonzero(module.scale_head.weight.grad) == 0
     assert all(
         parameter.grad is not None and torch.isfinite(parameter.grad).all()
         for parameter in module.parameters()
@@ -102,16 +109,34 @@ def test_second_step_opens_output_projection_gradient_and_residual_is_bounded() 
     assert (output - x).abs().max() <= module.max_residual_scale + 1e-7
 
 
+def test_scale_gate_is_initially_one_and_residual_remains_bounded() -> None:
+    module = RAGLGM(channels=32, hidden_channels=24, route_groups=4, private_seed=91)
+    x = torch.randn(2, 32, 8, 10)
+
+    output, _, _, scales = module.forward_with_diagnostics(x)
+    gate = (scales * module.scale_factors).sum(dim=1, keepdim=True)
+    assert torch.equal(output, x)
+    assert torch.equal(gate, torch.ones_like(gate))
+
+    with torch.no_grad():
+        module.alpha.fill_(10.0)
+        module.scale_head.bias.copy_(torch.tensor([20.0, -20.0, -20.0]))
+    opened = module(x)
+    maximum = module.max_residual_scale * float(module.scale_factors.max())
+    assert (opened - x).abs().max() <= maximum + 1e-7
+
+
 @pytest.mark.parametrize("shape", [(1, 32, 7, 13), (2, 32, 16, 9)])
 def test_dynamic_shapes_and_cpu_amp_remain_finite(shape: tuple[int, ...]) -> None:
     module = _tiny_module().train()
     x = torch.randn(shape)
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-        output, routes, support = module.forward_with_diagnostics(x)
+        output, routes, support, scales = module.forward_with_diagnostics(x)
 
     assert output.shape == x.shape
     assert routes.shape[-2:] == x.shape[-2:]
     assert support.shape == (shape[0], 1, shape[2], shape[3])
+    assert scales.shape == (shape[0], 3, shape[2], shape[3])
     assert torch.isfinite(output).all()
     torch.testing.assert_close(
         routes.float().sum(dim=1),
@@ -137,9 +162,9 @@ def test_private_initialization_does_not_advance_public_rng() -> None:
 def test_parameter_budget_and_depthwise_large_kernels_are_frozen() -> None:
     module = RAGLGM()
 
-    assert module.private_parameter_count == 812_817
+    assert module.private_parameter_count == 813_396
     assert module.private_parameter_count / BASELINE_PARAMETERS == pytest.approx(
-        0.0245144755
+        0.0245319380
     )
     assert module.private_parameter_count <= 0.10 * BASELINE_PARAMETERS
     assert module.global_large[0].groups == 192
@@ -151,6 +176,9 @@ def test_parameter_budget_and_depthwise_large_kernels_are_frozen() -> None:
     assert module.router.groups == 8
     assert torch.count_nonzero(module.router.weight) == 0
     assert torch.count_nonzero(module.router.bias) == 0
+    assert torch.count_nonzero(module.scale_head.weight) == 0
+    assert torch.count_nonzero(module.scale_head.bias) == 0
+    assert torch.equal(module.scale_factors.flatten(), torch.tensor([1.25, 1.0, 0.75]))
     assert torch.count_nonzero(module.output_projection.weight) > 0
     assert torch.count_nonzero(module.support_head.weight) > 0
 
@@ -228,7 +256,7 @@ def test_full_graph_preserves_layer28_public_state_and_isolates_only_ra_state() 
     assert private and all(name.startswith(RA_GLGM_PRIVATE_PREFIX) for name in private)
     assert sum(parameter.numel() for parameter in method.parameters()) - sum(
         parameter.numel() for parameter in control.parameters()
-    ) == 812_817
+    ) == 813_396
 
     artifact = build_ra_glgm_initial_state(
         control.state_dict(), method.state_dict(), metadata={"seed": 0}
@@ -257,12 +285,15 @@ def test_real_training_loss_reuses_seven_stock_matches_and_opens_expected_gradie
     assert model.criterion.fgl_extra_match_calls == 0
     assert model.criterion.last_normal_decoder_assignment is not None
     assert model.last_ra_glgm_losses["loss_ra_support"] > 0
+    assert model.last_ra_glgm_losses["loss_ra_scale"] > 0
     assert model.ra_glgm.alpha.grad is not None
     assert model.ra_glgm.alpha.grad.abs().sum() > 0
     assert model.ra_glgm.support_head.weight.grad is not None
     assert model.ra_glgm.support_head.weight.grad.abs().sum() > 0
     assert model.ra_glgm.output_projection.weight.grad is not None
     assert torch.count_nonzero(model.ra_glgm.output_projection.weight.grad) == 0
+    assert model.ra_glgm.scale_head.weight.grad is not None
+    assert model.ra_glgm.scale_head.weight.grad.abs().sum() > 0
 
 
 def test_full_graph_first_step_public_gradients_match_control_within_fp_tolerance() -> None:
@@ -377,6 +408,138 @@ def test_matched_difficulty_uses_target_class_probability_and_aligned_iou() -> N
     # Target-class sigmoid(0)=0.5 and aligned IoU=0: 0.7*0.5 + 0.3*1.
     assert targets.difficulty[0] == pytest.approx(0.65)
     assert targets.heatmap[0, 0, 12, 12] == pytest.approx(0.65)
+
+
+def test_scale_targets_use_frozen_640_thresholds_and_train_feature_gate() -> None:
+    boxes = torch.tensor(
+        [
+            [0.25, 0.25, 8.0 / 640.0, 8.0 / 640.0],
+            [0.50, 0.50, 24.0 / 640.0, 24.0 / 640.0],
+            [0.75, 0.75, 32.0 / 640.0, 32.0 / 640.0],
+        ]
+    )
+    targets = build_residual_difficulty_targets(
+        pred_bboxes=boxes.unsqueeze(0),
+        pred_scores=torch.full((1, 3, 3), 8.0),
+        detection_bboxes=boxes,
+        detection_classes=torch.tensor([[0.0], [1.0], [2.0]]),
+        detection_batch_idx=torch.zeros(3),
+        match_indices=[(torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2]))],
+        all_bboxes=boxes,
+        all_classes=torch.tensor([[0.0], [1.0], [2.0]]),
+        all_batch_idx=torch.zeros(3),
+        height=80,
+        width=80,
+    )
+
+    assert targets.difficulty[0] == pytest.approx(0.25)
+    assert targets.difficulty[1] == pytest.approx(0.25)
+    assert targets.difficulty[2] == pytest.approx(0.25)
+    assert targets.scale_distribution is not None
+    assert targets.scale_mask is not None
+    for index, coordinate in enumerate((20, 40, 60)):
+        expected = torch.zeros(3)
+        expected[index] = 1
+        torch.testing.assert_close(
+            targets.scale_distribution[0, :, coordinate, coordinate], expected
+        )
+
+    logits = torch.zeros(1, 3, 80, 80, requires_grad=True)
+    probabilities = logits.softmax(dim=1)
+    loss = scale_conditioning_loss(probabilities, targets)
+    loss.backward()
+    assert float(loss.detach()) == pytest.approx(torch.log(torch.tensor(3.0)).item())
+    assert logits.grad is not None and logits.grad.abs().sum() > 0
+    diagnostics = scale_prediction_diagnostics(probabilities.detach(), targets)
+    assert diagnostics["scale_positive_pixels"] > 0
+    assert diagnostics["scale_entropy"] == pytest.approx(torch.log(torch.tensor(3.0)).item())
+
+
+def _scale_targets(class_indices: list[int]) -> ResidualDifficultyTargets:
+    pixels = len(class_indices)
+    distribution = torch.zeros(1, 3, 1, pixels)
+    for pixel, class_index in enumerate(class_indices):
+        distribution[0, class_index, 0, pixel] = 1.0
+    mask = torch.ones(1, 1, 1, pixels, dtype=torch.bool)
+    return ResidualDifficultyTargets(
+        heatmap=torch.ones_like(mask, dtype=torch.float32),
+        valid_mask=mask,
+        difficulty=torch.ones(pixels),
+        scale_distribution=distribution,
+        scale_mask=mask,
+    )
+
+
+def test_epoch_scale_statistics_are_pixel_weighted_not_last_batch() -> None:
+    statistics = _RAEpochScaleStatistics()
+    first = torch.tensor([[[[0.8]], [[0.1]], [[0.1]]]])
+    second = torch.tensor(
+        [[[[0.1, 0.1, 0.1]], [[0.1, 0.1, 0.1]], [[0.8, 0.8, 0.8]]]]
+    )
+    statistics.update(first, _scale_targets([0]), torch.tensor(0.2))
+    statistics.update(second, _scale_targets([2, 2, 2]), torch.tensor(0.6))
+
+    values = statistics.values()
+    assert values["scale_positive_pixels"] == 4
+    assert values["loss_ra_scale"] == pytest.approx(0.5)
+    assert values["scale_tiny_fraction"] == pytest.approx(0.25)
+    assert values["scale_regular_fraction"] == pytest.approx(0.75)
+    assert values["scale_tiny_recall"] == pytest.approx(1.0)
+    assert values["scale_regular_recall"] == pytest.approx(1.0)
+
+
+def test_epoch_scale_gate_amplitude_is_zero_for_uniform_and_positive_when_nontrivial() -> None:
+    uniform = _RAEpochScaleStatistics()
+    uniform.update(
+        torch.full((1, 3, 1, 3), 1.0 / 3.0),
+        _scale_targets([0, 1, 2]),
+        torch.log(torch.tensor(3.0)),
+    )
+    uniform_values = uniform.values()
+    assert uniform_values["scale_gate_mean_abs_deviation"] == pytest.approx(0.0, abs=1e-7)
+    assert uniform_values["scale_gate_std"] == pytest.approx(0.0, abs=1e-7)
+
+    nontrivial = _RAEpochScaleStatistics()
+    nontrivial.update(
+        torch.tensor([[[[1.0, 0.0]], [[0.0, 0.0]], [[0.0, 1.0]]]]),
+        _scale_targets([0, 2]),
+        torch.tensor(0.0),
+    )
+    nontrivial_values = nontrivial.values()
+    assert nontrivial_values["scale_gate_mean_abs_deviation"] > 0
+    assert nontrivial_values["scale_gate_std"] > 0
+
+
+def test_epoch_evidence_uses_aggregated_scale_statistics() -> None:
+    class FakeModel:
+        last_fdr_losses: dict[str, torch.Tensor] = {}
+        last_ra_glgm_losses = {
+            "loss_ra_scale": torch.tensor(99.0),
+            "scale_tiny_fraction": torch.tensor(1.0),
+        }
+
+        @staticmethod
+        def ra_glgm_epoch_statistics() -> dict[str, torch.Tensor]:
+            return {
+                "loss_ra_scale": torch.tensor(0.4),
+                "scale_entropy": torch.tensor(0.8),
+                "scale_positive_pixels": torch.tensor(40.0),
+                "scale_tiny_fraction": torch.tensor(0.25),
+                "scale_small_fraction": torch.tensor(0.25),
+                "scale_regular_fraction": torch.tensor(0.5),
+                "scale_tiny_recall": torch.tensor(0.5),
+                "scale_small_recall": torch.tensor(0.5),
+                "scale_regular_recall": torch.tensor(1.0),
+                "scale_gate_mean_abs_deviation": torch.tensor(0.1),
+                "scale_gate_std": torch.tensor(0.2),
+            }
+
+    losses = _private_losses(type("Trainer", (), {"model": FakeModel()})(), "ra_glgm")
+    assert losses["loss_ra_scale"] == pytest.approx(0.4)
+    assert losses["ra_scale_tiny_fraction"] == pytest.approx(0.25)
+    assert losses["ra_scale_positive_pixels"] == pytest.approx(40.0)
+    assert losses["ra_scale_gate_mean_abs_deviation"] == pytest.approx(0.1)
+    assert losses["ra_scale_gate_std"] == pytest.approx(0.2)
 
 
 def test_ignored_boxes_are_neither_targets_nor_negative_support_pixels() -> None:

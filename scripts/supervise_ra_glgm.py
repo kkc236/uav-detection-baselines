@@ -27,12 +27,12 @@ from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_experiment_protocol import (  # noqa: E402
     RA_EXPERIMENT_PROTOCOL_SHA256,
     file_sha256,
-    read_json,
 )
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
     validate_evaluated_arm,
     validate_formal_report,
+    validate_screen10_gate_report,
     validate_screen_gate_report,
 )
 
@@ -40,16 +40,18 @@ from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
 TRAIN_STEPS = (
     ("smoke", "baseline"),
     ("smoke", "ra_glgm"),
+    ("screen10", "baseline"),
+    ("screen10", "ra_glgm"),
     ("screen", "baseline"),
     ("screen", "ra_glgm"),
     ("formal", "baseline"),
     ("formal", "ra_glgm"),
 )
-STAGE_TARGETS = {"smoke": 2, "screen": 30, "formal": 100}
+STAGE_TARGETS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100}
 
 
 def run_name(stage: str, variant: str) -> str:
-    return f"{stage}-seed0-{variant}-ra-glgm-v1"
+    return f"{stage}-seed0-{variant}-ra-glgm-v1.1"
 
 
 def build_train_command(
@@ -64,6 +66,7 @@ def build_train_command(
     learnability_report: Path,
     resume: Path | None = None,
     screen_gate: Path | None = None,
+    screen10_gate: Path | None = None,
 ) -> list[str]:
     command = [
         str(python),
@@ -90,13 +93,23 @@ def build_train_command(
         if screen_gate is None:
             raise ValueError("Formal100 launch requires the immutable passing Screen30 Gate")
         command.extend(("--screen-gate", str(screen_gate.resolve())))
+    if stage == "screen":
+        if screen10_gate is None:
+            raise ValueError("Screen30 launch requires the immutable passing Screen10 Gate")
+        command.extend(("--screen10-gate", str(screen10_gate.resolve())))
     return command
 
 
 def build_evaluator_command(
     *, python: Path, evaluator_script: Path, run: Path, protocol_manifest: Path, stage: str
 ) -> list[str]:
-    epochs = "28,29,30" if stage == "screen" else "98,99,100"
+    epochs = (
+        "8,9,10"
+        if stage == "screen10"
+        else "28,29,30"
+        if stage == "screen"
+        else "98,99,100"
+    )
     return [
         str(python),
         str(evaluator_script.resolve()),
@@ -114,7 +127,7 @@ def build_evaluator_command(
 def build_gate_command(
     *, python: Path, output_root: Path, gate_output: Path, stage: str = "screen"
 ) -> list[str]:
-    if stage not in {"screen", "formal"}:
+    if stage not in {"screen10", "screen", "formal"}:
         raise ValueError(f"unknown RA comparison stage: {stage}")
     return [
         str(python),
@@ -183,27 +196,132 @@ def validate_audit_chain(path: Path) -> None:
 
 
 def acquire_lock(path: Path) -> None:
+    """Acquire one PID/start-identity lock, safely replacing only a proven stale owner."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    owner = {
+        "pid": os.getpid(),
+        "process_start_identity": _process_start_identity(os.getpid()),
+    }
+    if owner["process_start_identity"] is None:
+        raise RuntimeError("cannot determine RA supervisor process start identity")
+    payload = json.dumps(owner, sort_keys=True, separators=(",", ":")).encode("ascii")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _attempt in range(3):
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except FileExistsError as error:
+            if path.is_symlink():
+                raise RuntimeError(f"RA supervisor lock may not be a symlink: {path}") from error
+            observed = path.read_bytes()
+            try:
+                existing = json.loads(observed.decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                try:
+                    legacy_pid = int(observed.decode("ascii"))
+                except (UnicodeDecodeError, ValueError):
+                    legacy_pid = -1
+                if legacy_pid > 0 and _pid_exists(legacy_pid):
+                    raise RuntimeError(f"RA supervisor lock already exists: {path}") from error
+            else:
+                if isinstance(existing, Mapping):
+                    pid = existing.get("pid")
+                    identity = existing.get("process_start_identity")
+                    if (
+                        isinstance(pid, int)
+                        and isinstance(identity, str)
+                        and _process_start_identity(pid) == identity
+                    ):
+                        raise RuntimeError(f"RA supervisor lock already exists: {path}") from error
+                elif isinstance(existing, int) and existing > 0 and _pid_exists(existing):
+                    raise RuntimeError(f"RA supervisor lock already exists: {path}") from error
+            if not path.exists() or path.read_bytes() != observed:
+                continue
+            path.unlink()
+            continue
+        try:
+            os.write(descriptor, payload)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return
+    raise RuntimeError(f"RA supervisor lock changed during stale-owner takeover: {path}")
+
+
+def _pid_exists(pid: int) -> bool:
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError as error:
-        raise RuntimeError(f"RA supervisor lock already exists: {path}") from error
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _process_start_identity(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.is_file():
+        try:
+            fields = proc_stat.read_text(encoding="ascii").rsplit(") ", 1)[1].split()
+            start_ticks = fields[19]
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            return f"linux:{boot}:{start_ticks}"
+        except (OSError, IndexError):
+            return None
     try:
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
-    finally:
-        os.close(descriptor)
+        import psutil
+
+        return f"process:{pid}:{psutil.Process(pid).create_time():.6f}"
+    except Exception:
+        return None
 
 
 def release_lock(path: Path) -> None:
     if not path.exists():
         return
+    raw = path.read_text(encoding="ascii")
     try:
-        owner = int(path.read_text(encoding="ascii"))
-    except ValueError:
-        owner = -1
-    if owner in {-1, os.getpid()}:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            legacy_pid = int(raw)
+        except ValueError:
+            legacy_pid = -1
+        owned = legacy_pid == os.getpid()
+    else:
+        owned = isinstance(payload, Mapping) and (
+            payload.get("pid") == os.getpid()
+            and payload.get("process_start_identity") == _process_start_identity(os.getpid())
+        )
+    if owned:
         path.unlink(missing_ok=True)
+
+
+def ensure_fresh_run_slot(run: Path) -> Path | None:
+    """Atomically quarantine one manifest-free orphan before an exact-name fresh launch."""
+
+    if run.is_symlink():
+        raise RuntimeError(f"fresh RA run path may not be a symlink: {run}")
+    if not run.exists():
+        return None
+    if (run / "ra-run.json").exists():
+        raise RuntimeError(
+            f"fresh RA run path contains runtime authority and must use recovery: {run}"
+        )
+    for attempt in range(100):
+        destination = run.parent / (
+            f".{run.name}.orphan-{time.time_ns()}-{os.getpid()}-{attempt:02d}"
+        )
+        if destination.exists() or destination.is_symlink():
+            continue
+        try:
+            run.rename(destination)
+        except FileExistsError:
+            continue
+        return destination.resolve()
+    raise RuntimeError(f"cannot allocate a unique RA orphan quarantine path for {run}")
 
 
 def _gpu_snapshot() -> list[dict[str, Any]]:
@@ -423,6 +541,17 @@ def _validate_gate_for_formal(path: Path, output_root: Path) -> None:
         raise RuntimeError("Screen30 gate did not authorize Formal100") from error
 
 
+def _validate_gate_for_screen(path: Path, output_root: Path) -> None:
+    try:
+        validate_screen10_gate_report(
+            path,
+            baseline_run=output_root / run_name("screen10", "baseline"),
+            method_run=output_root / run_name("screen10", "ra_glgm"),
+        )
+    except (OSError, ValueError) as error:
+        raise RuntimeError("Screen10 gate did not authorize Screen30") from error
+
+
 def _validate_formal_report(path: Path) -> dict[str, Any]:
     root = path.resolve().parent
     report = validate_formal_report(
@@ -432,7 +561,7 @@ def _validate_formal_report(path: Path) -> dict[str, Any]:
     )
     if (
         report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
-        or report.get("report_name") != "RA-GLGM-Formal100-v1"
+        or report.get("report_name") != "RA-GLGM-Formal100-v1.1"
         or report.get("primary_evidence") != ["epoch100", "tail3_mean"]
         or report.get("engineering", {}).get("complete") is not True
         or not isinstance(report.get("formal_success"), bool)
@@ -442,7 +571,7 @@ def _validate_formal_report(path: Path) -> dict[str, Any]:
 
 
 def validate_smoke_advancement(decision: Mapping[str, Any], *, variant: str) -> None:
-    """Fail closed before advancing from Smoke2 to any Screen30 arm."""
+    """Fail closed before advancing from Smoke2 to any Screen10 arm."""
     valid = (
         decision.get("decision") == "complete"
         and decision.get("stage") == "smoke"
@@ -465,6 +594,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
     initial_state = args.initial_state.resolve()
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    screen10_gate_output = output_root / "RA_GLGM_SCREEN10_GATE.json"
     gate_output = output_root / "RA_GLGM_SCREEN30_GATE.json"
     formal_output = output_root / "RA_GLGM_FORMAL100_REPORT.json"
     audit = args.audit.resolve()
@@ -481,8 +611,13 @@ def run_supervisor(args: argparse.Namespace) -> int:
     acquire_lock(lock)
     environment = _environment()
     append_audit_event(audit, {"event": "supervisor_start", "pid": os.getpid()})
+    active_stage = "startup"
+    active_variant = "none"
     try:
         for stage, variant in TRAIN_STEPS:
+            active_stage, active_variant = stage, variant
+            if stage == "screen":
+                _validate_gate_for_screen(screen10_gate_output, output_root)
             if stage == "formal":
                 _validate_gate_for_formal(gate_output, output_root)
             run = output_root / run_name(stage, variant)
@@ -499,6 +634,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                         protocol_manifest=protocol,
                         learnability_report=args.learnability_report,
                         screen_gate=gate_output if stage == "formal" else None,
+                        screen10_gate=screen10_gate_output if stage == "screen" else None,
                     )
                     append_audit_event(audit, {"event": "recovery_audit", **decision})
                     if decision["decision"] == "complete":
@@ -537,6 +673,19 @@ def run_supervisor(args: argparse.Namespace) -> int:
                             "checkpoint_sha256": generation["checkpoint_sha256"],
                         },
                     )
+                else:
+                    orphan = ensure_fresh_run_slot(run)
+                    if orphan is not None:
+                        append_audit_event(
+                            audit,
+                            {
+                                "event": "manifest_free_run_quarantined",
+                                "stage": stage,
+                                "variant": variant,
+                                "original": str(run),
+                                "quarantine": str(orphan),
+                            },
+                        )
                 revalidate_supervisor_authority(protocol, authority)
                 command = build_train_command(
                     python=args.python,
@@ -549,6 +698,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     learnability_report=args.learnability_report,
                     resume=resume,
                     screen_gate=gate_output if stage == "formal" else None,
+                    screen10_gate=screen10_gate_output if stage == "screen" else None,
                 )
                 append_audit_event(
                     audit,
@@ -581,20 +731,22 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     },
                 )
                 if received_signal is not None:
+                    interrupted = _status_payload(
+                        output_root=output_root,
+                        stage=stage,
+                        variant=variant,
+                        process_state="interrupted",
+                        pid=None,
+                    )
+                    interrupted["signal"] = received_signal
                     _atomic_json(
                         status,
-                        _status_payload(
-                            output_root=output_root,
-                            stage=stage,
-                            variant=variant,
-                            process_state="paused_by_signal",
-                            pid=None,
-                        ),
+                        interrupted,
                     )
                     return 128 + received_signal
                 # Success and failure both pass through the same strict recovery audit.
 
-            if stage in {"screen", "formal"}:
+            if stage in {"screen10", "screen", "formal"}:
                 ensure_locked_evaluation(
                     python=args.python,
                     evaluator_script=args.evaluator_script,
@@ -606,6 +758,37 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     audit=audit,
                     environment=environment,
                 )
+
+            if stage == "screen10" and variant == "ra_glgm":
+                revalidate_supervisor_authority(protocol, authority)
+                if screen10_gate_output.exists():
+                    _validate_gate_for_screen(screen10_gate_output, output_root)
+                    append_audit_event(
+                        audit,
+                        {"event": "screen10_gate_reused_after_recomputation"},
+                    )
+                else:
+                    result = subprocess.run(
+                        build_gate_command(
+                            python=args.python,
+                            output_root=output_root,
+                            gate_output=screen10_gate_output,
+                            stage="screen10",
+                        ),
+                        cwd=ROOT,
+                        env=environment,
+                        check=False,
+                    )
+                    append_audit_event(
+                        audit,
+                        {"event": "screen10_gate_exit", "returncode": result.returncode},
+                    )
+                    if result.returncode != 0:
+                        _validate_gate_for_screen(
+                            screen10_gate_output, output_root
+                        )  # Raises a precise failed-gate error.
+                revalidate_supervisor_authority(protocol, authority)
+                _validate_gate_for_screen(screen10_gate_output, output_root)
 
             if stage == "screen" and variant == "ra_glgm":
                 revalidate_supervisor_authority(protocol, authority)
@@ -673,12 +856,41 @@ def run_supervisor(args: argparse.Namespace) -> int:
             {
                 "time": _utc_now(),
                 "process_state": "complete",
+                "screen10_gate": str(screen10_gate_output),
                 "screen_gate": str(gate_output),
                 "formal_report": str(formal_output),
                 "formal_success": formal_report["formal_success"],
             },
         )
         return 0
+    except BaseException as error:
+        failed: dict[str, Any] = {
+            "time": _utc_now(),
+            "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+            "process_state": "failed",
+            "stage": active_stage,
+            "variant": active_variant,
+            "pid": None,
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+        if active_stage in STAGE_TARGETS and active_variant in {"baseline", "ra_glgm"}:
+            failed = {
+                **_status_payload(
+                    output_root=output_root,
+                    stage=active_stage,
+                    variant=active_variant,
+                    process_state="failed",
+                    pid=None,
+                ),
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        try:
+            _atomic_json(status, failed)
+        except OSError:
+            pass
+        raise
     finally:
         release_lock(lock)
 

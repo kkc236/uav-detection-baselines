@@ -10,7 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import torch
 
-from src.fdr_protocol import canonical_json_bytes, public_state_sha256
+from src.fdr_protocol import canonical_json_bytes
 from src.lpr_protocol import EXPECTED_SUBSET_SHA256, subset_signature
 from src.ra_experiment_protocol import RA_EXPERIMENT_PROTOCOL_SHA256, file_sha256
 from src.ra_glgm_protocol import RA_GLGM_PRIVATE_PREFIX
@@ -29,7 +29,12 @@ PROBE_OPTIMIZER = {
     "weight_decay": 0.0001,
     "gradient_clip_norm": 5.0,
 }
-SUPPORT_EXCLUDED_SUFFIXES = ("alpha", "output_projection.weight")
+SUPPORT_EXCLUDED_SUFFIXES = (
+    "alpha",
+    "output_projection.weight",
+    "scale_head.weight",
+    "scale_head.bias",
+)
 
 LEARNABILITY_GATE = {
     "train_images": PROBE_TRAIN_IMAGES,
