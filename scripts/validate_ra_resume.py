@@ -29,7 +29,14 @@ from src.fdr_protocol import canonical_json_bytes  # noqa: E402
 from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 
 
-STAGE_LIMITS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+STAGE_LIMITS = {
+    "smoke": 2,
+    "screen10": 10,
+    "screen": 30,
+    "formal": 100,
+    "explore50": 50,
+    "full100": 100,
+}
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall", "cuda_peak_mib")
 FIXED_AMP_SCALE = 128.0
 COMMON_GRADIENT_FIELDS = ("gradient_norm", "fdr_gradient_norm")
@@ -580,7 +587,15 @@ def validate_resume(
     ):
         raise ValueError("runtime scheduler length differs from frozen protocol")
     expected_cutoff = (
-        10 if stage == "screen10" else 30 if stage == "screen" else 50 if stage == "explore50" else None
+        10
+        if stage == "screen10"
+        else 30
+        if stage == "screen"
+        else 50
+        if stage == "explore50"
+        else 100
+        if stage == "full100"
+        else None
     )
     if runtime.get("cutoff_epoch") != expected_cutoff:
         raise ValueError("runtime cutoff differs from frozen protocol")
@@ -611,7 +626,7 @@ def validate_resume(
             raise ValueError("Formal100 may not inherit a Smoke or Screen checkpoint")
         if runtime.get("screen10_gate_sha256") is not None:
             raise ValueError("Formal100 must be bound only to the Screen30 gate")
-    if stage in {"smoke", "screen10", "explore50"} and (
+    if stage in {"smoke", "screen10", "explore50", "full100"} and (
         runtime.get("screen_gate_sha256") is not None
         or runtime.get("screen10_gate_sha256") is not None
     ):

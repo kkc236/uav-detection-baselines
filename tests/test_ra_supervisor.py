@@ -10,6 +10,7 @@ import pytest
 import scripts.supervise_ra_glgm as supervisor_module
 from scripts.supervise_ra_glgm import (
     EXPLORE50_TRAIN_STEPS,
+    FULL100_TRAIN_STEPS,
     TRAIN_STEPS,
     append_audit_event,
     acquire_lock,
@@ -41,6 +42,12 @@ def test_supervisor_order_is_sequential_and_screen10_precedes_screen30() -> None
     assert EXPLORE50_TRAIN_STEPS == (
         ("explore50", "baseline"),
         ("explore50", "ra_glgm"),
+    )
+    assert FULL100_TRAIN_STEPS == (
+        ("smoke", "baseline"),
+        ("smoke", "ra_glgm"),
+        ("full100", "baseline"),
+        ("full100", "ra_glgm"),
     )
 
 
@@ -104,6 +111,18 @@ def test_screen10_evaluator_and_gate_commands_use_frozen_stage(tmp_path: Path) -
     )
     assert explore[explore.index("--epochs") + 1] == "5,10,15,20,25,30,35,40,45,50"
     assert run_name("explore50", "baseline").endswith("ra-glgm-v1.1-long50")
+
+    full100 = build_evaluator_command(
+        python=Path("/venv/bin/python"),
+        evaluator_script=tmp_path / "evaluator.py",
+        run=tmp_path / "full100-run",
+        protocol_manifest=tmp_path / "protocol.json",
+        stage="full100",
+    )
+    assert full100[full100.index("--epochs") + 1] == ",".join(
+        str(epoch) for epoch in range(5, 101, 5)
+    )
+    assert run_name("full100", "baseline").endswith("ra-glgm-v1.1-full100")
 
 
 def test_supervisor_accepts_only_v11_formal_report(

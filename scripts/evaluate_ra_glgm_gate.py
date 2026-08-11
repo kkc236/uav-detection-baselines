@@ -41,6 +41,8 @@ FORMAL_EXPECTED_EPOCHS = 100
 FORMAL_TAIL_EPOCHS = (98, 99, 100)
 EXPLORE50_EXPECTED_EPOCHS = 50
 EXPLORE50_EVALUATED_EPOCHS = tuple(range(5, 51, 5))
+FULL100_EXPECTED_EPOCHS = 100
+FULL100_EVALUATED_EPOCHS = tuple(range(5, 101, 5))
 STANDARD_METRICS = ("map", "map50", "map75", "precision", "recall")
 DETAILED_METRICS = (*STANDARD_METRICS, "ap_tiny", "ap_small")
 
@@ -871,6 +873,8 @@ def validate_evaluated_arm(
         expected_epochs, tail_epochs = FORMAL_EXPECTED_EPOCHS, FORMAL_TAIL_EPOCHS
     elif stage == "explore50":
         expected_epochs, tail_epochs = EXPLORE50_EXPECTED_EPOCHS, EXPLORE50_EVALUATED_EPOCHS
+    elif stage == "full100":
+        expected_epochs, tail_epochs = FULL100_EXPECTED_EPOCHS, FULL100_EVALUATED_EPOCHS
     else:
         raise ValueError(f"locked evaluation is unsupported for stage: {stage}")
     arm = _load_arm(
@@ -887,6 +891,112 @@ def validate_evaluated_arm(
             f"{arm['errors'][:3]}"
         )
     return arm
+
+
+def evaluate_full100_trajectory(
+    baseline_run: str | Path,
+    method_run: str | Path,
+    *,
+    strict_checkpoint_hashes: bool = True,
+) -> dict[str, Any]:
+    """Audit and compare every frozen five-epoch v1.1 Full100 checkpoint."""
+
+    baseline = _load_arm(
+        baseline_run,
+        "baseline",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="full100",
+        expected_epochs=FULL100_EXPECTED_EPOCHS,
+        tail_epochs=FULL100_EVALUATED_EPOCHS,
+    )
+    method = _load_arm(
+        method_run,
+        "ra_glgm",
+        strict_hashes=strict_checkpoint_hashes,
+        stage="full100",
+        expected_epochs=FULL100_EXPECTED_EPOCHS,
+        tail_epochs=FULL100_EVALUATED_EPOCHS,
+    )
+    pair_valid = paired_manifests(
+        baseline["manifest"], method["manifest"], stage="full100"
+    )
+    if not pair_valid:
+        baseline["errors"].append(
+            "baseline/RA Full100 manifests are not a strict same-GPU pair"
+        )
+    engineering = {
+        "baseline_complete": all(baseline["checks"].values()),
+        "method_complete": all(method["checks"].values()),
+        "strict_pair": pair_valid,
+        "no_upstream_gate": True,
+    }
+    complete = all(engineering.values())
+    trajectory: list[dict[str, Any]] = []
+    if complete:
+        for base_row, method_row in zip(
+            baseline["detailed"], method["detailed"], strict=True
+        ):
+            epoch = int(base_row["completed_epoch"])
+            if epoch != int(method_row["completed_epoch"]):
+                raise ValueError("Full100 paired evaluation epochs are misaligned")
+            base_metrics = {
+                name: float(base_row[name]) for name in DETAILED_METRICS
+            }
+            method_metrics = {
+                name: float(method_row[name]) for name in DETAILED_METRICS
+            }
+            trajectory.append(
+                {
+                    "completed_epoch": epoch,
+                    "baseline": base_metrics,
+                    "ra_glgm": method_metrics,
+                    "delta": {
+                        name: method_metrics[name] - base_metrics[name]
+                        for name in DETAILED_METRICS
+                    },
+                    "class_ap_delta": [
+                        float(method_row["class_ap"][index])
+                        - float(base_row["class_ap"][index])
+                        for index in range(10)
+                    ],
+                }
+            )
+    return {
+        "format_version": 1,
+        "report_name": "RA-GLGM-v1.1-Full100-Trajectory",
+        "protocol_sha256": RA_EXPERIMENT_PROTOCOL_SHA256,
+        "scientific_role": (
+            "exploratory full-data trajectory; official validation reused every five epochs"
+        ),
+        "engineering": {
+            "complete": complete,
+            "checks": engineering,
+            "arm_checks": {
+                "baseline": baseline["checks"],
+                "ra_glgm": method["checks"],
+            },
+            "errors": [*baseline["errors"], *method["errors"]],
+        },
+        "evaluated_epochs": list(FULL100_EVALUATED_EPOCHS),
+        "trajectory": trajectory,
+        "primary_epoch": 100,
+        "no_advancement_gate": True,
+    }
+
+
+def validate_full100_trajectory(
+    path: str | Path,
+    *,
+    baseline_run: str | Path,
+    method_run: str | Path,
+) -> dict[str, Any]:
+    recorded = read_json(path)
+    expected = evaluate_full100_trajectory(baseline_run, method_run)
+    if recorded != expected:
+        raise ValueError("Full100 trajectory report differs from frozen recomputation")
+    if recorded.get("engineering", {}).get("complete") is not True:
+        raise ValueError("Full100 trajectory report failed engineering audit")
+    return recorded
 
 
 def validate_screen_gate_report(
@@ -970,7 +1080,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ra-run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--stage", choices=("screen10", "screen", "formal"), default="screen"
+        "--stage",
+        choices=("screen10", "screen", "formal", "full100"),
+        default="screen",
     )
     return parser
 
@@ -981,8 +1093,10 @@ def main() -> None:
         report = evaluate_screen10_gate(args.baseline_run, args.ra_run)
     elif args.stage == "screen":
         report = evaluate_gate(args.baseline_run, args.ra_run)
-    else:
+    elif args.stage == "formal":
         report = evaluate_formal_report(args.baseline_run, args.ra_run)
+    else:
+        report = evaluate_full100_trajectory(args.baseline_run, args.ra_run)
     write_create_only_report(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     if not report["engineering"]["complete"]:

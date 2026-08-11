@@ -549,6 +549,7 @@ def evaluate(
         "screen": RA_EXPERIMENT_PROTOCOL["evaluation"]["screen_evaluated_epochs"],
         "formal": RA_EXPERIMENT_PROTOCOL["evaluation"]["formal_evaluated_epochs"],
         "explore50": RA_EXPERIMENT_PROTOCOL["evaluation"]["explore50_evaluated_epochs"],
+        "full100": RA_EXPERIMENT_PROTOCOL["evaluation"]["full100_evaluated_epochs"],
     }.get(stage)
     if expected_epochs is None or list(epochs) != list(expected_epochs):
         raise ValueError(f"locked evaluator epochs differ from frozen {stage} authority")
@@ -585,7 +586,7 @@ def evaluate(
         if file_sha256(validation_source) != str(selection.get("sha256", "")).upper():
             raise ValueError(f"{stage} validation list SHA256 differs from authority")
     elif validation_source != (dataset_root / "images" / "val").resolve():
-        raise ValueError("Formal100 must use the authoritative official val split")
+        raise ValueError("full-data evaluation must use the authoritative official val split")
     ground_truth, image_ids, geometries, ignored = _coco_ground_truth(
         images, names, expected_objects=expected_objects
     )

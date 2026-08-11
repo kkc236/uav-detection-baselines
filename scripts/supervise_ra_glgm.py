@@ -32,6 +32,7 @@ from src.ra_learnability_probe import validate_learnability_report  # noqa: E402
 from scripts.evaluate_ra_glgm_gate import (  # noqa: E402
     validate_evaluated_arm,
     validate_formal_report,
+    validate_full100_trajectory,
     validate_screen10_gate_report,
     validate_screen_gate_report,
 )
@@ -48,11 +49,30 @@ TRAIN_STEPS = (
     ("formal", "ra_glgm"),
 )
 EXPLORE50_TRAIN_STEPS = (("explore50", "baseline"), ("explore50", "ra_glgm"))
-STAGE_TARGETS = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+FULL100_TRAIN_STEPS = (
+    ("smoke", "baseline"),
+    ("smoke", "ra_glgm"),
+    ("full100", "baseline"),
+    ("full100", "ra_glgm"),
+)
+STAGE_TARGETS = {
+    "smoke": 2,
+    "screen10": 10,
+    "screen": 30,
+    "formal": 100,
+    "explore50": 50,
+    "full100": 100,
+}
 
 
 def run_name(stage: str, variant: str) -> str:
-    suffix = "ra-glgm-v1.1-long50" if stage == "explore50" else "ra-glgm-v1.1"
+    suffix = (
+        "ra-glgm-v1.1-long50"
+        if stage == "explore50"
+        else "ra-glgm-v1.1-full100"
+        if stage == "full100"
+        else "ra-glgm-v1.1"
+    )
     return f"{stage}-seed0-{variant}-{suffix}"
 
 
@@ -112,6 +132,8 @@ def build_evaluator_command(
         if stage == "screen"
         else "5,10,15,20,25,30,35,40,45,50"
         if stage == "explore50"
+        else ",".join(str(epoch) for epoch in range(5, 101, 5))
+        if stage == "full100"
         else "98,99,100"
     )
     return [
@@ -131,7 +153,7 @@ def build_evaluator_command(
 def build_gate_command(
     *, python: Path, output_root: Path, gate_output: Path, stage: str = "screen"
 ) -> list[str]:
-    if stage not in {"screen10", "screen", "formal"}:
+    if stage not in {"screen10", "screen", "formal", "full100"}:
         raise ValueError(f"unknown RA comparison stage: {stage}")
     return [
         str(python),
@@ -574,6 +596,23 @@ def _validate_formal_report(path: Path) -> dict[str, Any]:
     return report
 
 
+def _validate_full100_report(path: Path, output_root: Path) -> dict[str, Any]:
+    report = validate_full100_trajectory(
+        path,
+        baseline_run=output_root / run_name("full100", "baseline"),
+        method_run=output_root / run_name("full100", "ra_glgm"),
+    )
+    if (
+        report.get("protocol_sha256") != RA_EXPERIMENT_PROTOCOL_SHA256
+        or report.get("report_name") != "RA-GLGM-v1.1-Full100-Trajectory"
+        or report.get("primary_epoch") != 100
+        or report.get("no_advancement_gate") is not True
+        or report.get("engineering", {}).get("complete") is not True
+    ):
+        raise RuntimeError("Full100 trajectory report is absent, foreign, or incomplete")
+    return report
+
+
 def validate_smoke_advancement(decision: Mapping[str, Any], *, variant: str) -> None:
     """Fail closed before advancing from Smoke2 to any Screen10 arm."""
     valid = (
@@ -601,6 +640,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
     screen10_gate_output = output_root / "RA_GLGM_SCREEN10_GATE.json"
     gate_output = output_root / "RA_GLGM_SCREEN30_GATE.json"
     formal_output = output_root / "RA_GLGM_FORMAL100_REPORT.json"
+    full100_output = output_root / "RA_GLGM_V11_FULL100_TRAJECTORY.json"
     audit = args.audit.resolve()
     status = args.status.resolve()
     lock = args.lock.resolve()
@@ -615,12 +655,27 @@ def run_supervisor(args: argparse.Namespace) -> int:
     acquire_lock(lock)
     environment = _environment()
     explore50_only = bool(getattr(args, "explore50_only", False))
-    mode = "explore50" if explore50_only else "confirmatory_pipeline"
+    full100_only = bool(getattr(args, "full100_only", False))
+    if explore50_only and full100_only:
+        raise ValueError("explore50-only and full100-only are mutually exclusive")
+    mode = (
+        "explore50"
+        if explore50_only
+        else "full100"
+        if full100_only
+        else "confirmatory_pipeline"
+    )
     append_audit_event(audit, {"event": "supervisor_start", "pid": os.getpid(), "mode": mode})
     active_stage = "startup"
     active_variant = "none"
     try:
-        train_steps = EXPLORE50_TRAIN_STEPS if explore50_only else TRAIN_STEPS
+        train_steps = (
+            EXPLORE50_TRAIN_STEPS
+            if explore50_only
+            else FULL100_TRAIN_STEPS
+            if full100_only
+            else TRAIN_STEPS
+        )
         for stage, variant in train_steps:
             active_stage, active_variant = stage, variant
             if stage == "screen":
@@ -753,7 +808,7 @@ def run_supervisor(args: argparse.Namespace) -> int:
                     return 128 + received_signal
                 # Success and failure both pass through the same strict recovery audit.
 
-            if stage in {"screen10", "screen", "formal", "explore50"}:
+            if stage in {"screen10", "screen", "formal", "explore50", "full100"}:
                 ensure_locked_evaluation(
                     python=args.python,
                     evaluator_script=args.evaluator_script,
@@ -877,6 +932,58 @@ def run_supervisor(args: argparse.Namespace) -> int:
                 },
             )
             return 0
+        if full100_only:
+            baseline_run = output_root / run_name("full100", "baseline")
+            method_run = output_root / run_name("full100", "ra_glgm")
+            validate_evaluated_arm(baseline_run, variant="baseline", stage="full100")
+            validate_evaluated_arm(method_run, variant="ra_glgm", stage="full100")
+            revalidate_supervisor_authority(protocol, authority)
+            if full100_output.exists():
+                report = _validate_full100_report(full100_output, output_root)
+                append_audit_event(
+                    audit, {"event": "full100_report_reused_after_recomputation"}
+                )
+            else:
+                result = subprocess.run(
+                    build_gate_command(
+                        python=args.python,
+                        output_root=output_root,
+                        gate_output=full100_output,
+                        stage="full100",
+                    ),
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                )
+                append_audit_event(
+                    audit,
+                    {"event": "full100_report_exit", "returncode": result.returncode},
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("Full100 paired trajectory report failed engineering audit")
+                report = _validate_full100_report(full100_output, output_root)
+            append_audit_event(
+                audit,
+                {
+                    "event": "full100_complete",
+                    "role": report["scientific_role"],
+                    "evaluated_epochs": report["evaluated_epochs"],
+                },
+            )
+            _atomic_json(
+                status,
+                {
+                    "time": _utc_now(),
+                    "process_state": "complete",
+                    "mode": "full100",
+                    "target_epoch": 100,
+                    "baseline_run": str(baseline_run),
+                    "ra_run": str(method_run),
+                    "trajectory_report": str(full100_output),
+                    "role": report["scientific_role"],
+                },
+            )
+            return 0
         formal_report = _validate_formal_report(formal_output)
         append_audit_event(
             audit,
@@ -948,6 +1055,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--explore50-only",
         action="store_true",
         help="run only a fresh paired 50-epoch post-hoc trajectory experiment",
+    )
+    parser.add_argument(
+        "--full100-only",
+        action="store_true",
+        help="run paired batch16 Smoke2 then fresh full-data v1.1 Full100 arms",
     )
     return parser
 

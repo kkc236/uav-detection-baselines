@@ -51,6 +51,10 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     assert protocol["training"]["screen10_cutoff_epoch"] == 10
     assert protocol["training"]["explore50_schedule_epochs"] == 50
     assert protocol["training"]["explore50_cutoff_epoch"] == 50
+    assert protocol["training"]["full100_schedule_epochs"] == 100
+    assert protocol["training"]["full100_cutoff_epoch"] == 100
+    assert protocol["training"]["full100_batch"] == 16
+    assert protocol["training"]["full100_nbs"] == 64
     assert protocol["training"]["formal_schedule_epochs"] == 100
     assert protocol["training"]["save_period"] == 1
     assert protocol["dataset"]["screen_train_images"] == 647
@@ -124,6 +128,10 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
         "no_advancement_gate": True,
     }
     assert protocol["evaluation"]["explore50_evaluated_epochs"] == list(range(5, 51, 5))
+    assert protocol["evaluation"]["full100_evaluated_epochs"] == list(range(5, 101, 5))
+    assert protocol["full100"]["train_images"] == 6471
+    assert protocol["full100"]["validation_images"] == 548
+    assert protocol["full100"]["fresh_paired_scratch"] is True
     assert protocol["publication"]["publish_pt"] is False
     assert BASELINE_PARAMETERS == 33_156_614
 
@@ -184,6 +192,50 @@ def test_smoke_and_screen_stages_never_validate_on_official_val(
         assert json.loads(generated.read_text(encoding="utf-8"))["val"] == str(
             expected.resolve()
         )
+
+
+def test_full100_uses_full_data_and_batch16(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = (tmp_path / "VisDrone").resolve()
+    dataset.mkdir()
+    authority_root = tmp_path / "authority"
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {"path": str(dataset), "train": "images/train", "val": "images/val"}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ra_train, "ignore_sidecar_signature", lambda _root: {})
+    monkeypatch.setattr(
+        ra_train.fdr_train, "prepare_data_yaml", lambda *_args, **_kwargs: source
+    )
+    manifest = {
+        "dataset_authority": {
+            "root": str(dataset),
+            "positive": {"sha256": RA_EXPERIMENT_PROTOCOL["dataset"]["sha256"]},
+            "ignore": {},
+        }
+    }
+    generated = ra_train.prepare_data(
+        dataset, "full100", authority_root, manifest
+    )
+    assert generated == source
+    settings = ra_train.build_settings(
+        SimpleNamespace(
+            variant="baseline",
+            stage="full100",
+            output_root=tmp_path / "runs",
+            name="full100-test",
+            resume=None,
+        ),
+        generated,
+    )
+    assert settings["epochs"] == 100
+    assert settings["batch"] == 16
+    assert settings["nbs"] == 64
+    assert settings["workers"] == 8
 
 
 def test_ignore_sidecar_signature_freezes_split_and_empty_file_distribution(

@@ -47,8 +47,22 @@ from src.rtdetr_ra_glgm import (  # noqa: E402
 )
 
 
-STAGE_SCHEDULE = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100, "explore50": 50}
-STAGE_CUTOFF = {"smoke": 2, "screen10": 10, "screen": 30, "formal": 100, "explore50": 50}
+STAGE_SCHEDULE = {
+    "smoke": 2,
+    "screen10": 50,
+    "screen": 50,
+    "formal": 100,
+    "explore50": 50,
+    "full100": 100,
+}
+STAGE_CUTOFF = {
+    "smoke": 2,
+    "screen10": 10,
+    "screen": 30,
+    "formal": 100,
+    "explore50": 50,
+    "full100": 100,
+}
 EVIDENCE_FIELDS = (
     "completed_epoch",
     "variant",
@@ -249,6 +263,14 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
         "name": args.name or f"{args.stage}-seed0-{args.variant}-ra-glgm-v1.1",
         "exist_ok": False,
     }
+    if args.stage in {"smoke", "full100"}:
+        settings.update(
+            {
+                "batch": int(RA_EXPERIMENT_PROTOCOL["training"]["full100_batch"]),
+                "workers": int(RA_EXPERIMENT_PROTOCOL["training"]["full100_workers"]),
+                "nbs": int(RA_EXPERIMENT_PROTOCOL["training"]["full100_nbs"]),
+            }
+        )
     if args.resume is not None:
         settings["resume"] = str(args.resume.resolve())
     return settings
@@ -420,7 +442,9 @@ def write_runtime_manifest(
         "dataset_authority": manifest["dataset_authority"],
         "gpu_uuid": actual_gpu,
         "schedule_epochs": STAGE_SCHEDULE[args.stage],
-        "cutoff_epoch": STAGE_CUTOFF[args.stage] if args.stage in {"screen10", "screen", "explore50"} else None,
+        "cutoff_epoch": STAGE_CUTOFF[args.stage]
+        if args.stage in {"screen10", "screen", "explore50", "full100"}
+        else None,
         "model_parameters": sum(parameter.numel() for parameter in _model(trainer).parameters()),
         "locked_evaluator_sha256": manifest["locked_evaluator"]["sha256"],
         "initialization_mode": "fresh_paired_scratch",

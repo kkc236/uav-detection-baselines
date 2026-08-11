@@ -13,7 +13,7 @@ from src.fdr_protocol import FDR_PROTOCOL, canonical_json_bytes, public_state_sh
 
 
 RA_VARIANTS = ("baseline", "ra_glgm")
-RA_STAGES = ("smoke", "screen10", "screen", "formal", "explore50")
+RA_STAGES = ("smoke", "screen10", "screen", "formal", "explore50", "full100")
 BASELINE_PARAMETERS = 33_156_614
 MAX_PARAMETER_INCREASE_RATIO = 0.10
 MAX_PEAK_VRAM_MIB = 22 * 1024
@@ -73,6 +73,11 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
         "screen_cutoff_epoch": 30,
         "explore50_schedule_epochs": 50,
         "explore50_cutoff_epoch": 50,
+        "full100_schedule_epochs": 100,
+        "full100_cutoff_epoch": 100,
+        "full100_batch": 16,
+        "full100_workers": 8,
+        "full100_nbs": 64,
         "formal_schedule_epochs": 100,
         "save_period": 1,
     },
@@ -205,6 +210,7 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
         "screen_evaluated_epochs": [28, 29, 30],
         "formal_evaluated_epochs": [98, 99, 100],
         "explore50_evaluated_epochs": list(range(5, 51, 5)),
+        "full100_evaluated_epochs": list(range(5, 101, 5)),
     },
     "screen10_gate": {
         "selection_tail3_map_delta": ">0",
@@ -251,6 +257,17 @@ RA_EXPERIMENT_PROTOCOL: dict[str, Any] = {
         "fresh_paired_scratch": True,
         "validation": "frozen train-derived selection_set; official val remains isolated",
         "report_every_epochs": 5,
+        "no_advancement_gate": True,
+    },
+    "full100": {
+        "role": "full-data v1.1 trajectory experiment; exploratory because official val is reused",
+        "train_images": 6471,
+        "validation_images": 548,
+        "validation": "official VisDrone val",
+        "fresh_paired_scratch": True,
+        "report_every_epochs": 5,
+        "primary_checkpoint": "epoch100",
+        "tail_summary": "epochs 96-100 training metrics and locked 80-100 five-epoch trajectory",
         "no_advancement_gate": True,
     },
     "publication": {
@@ -393,8 +410,22 @@ def validate_runtime_authority(
     if file_sha256(initial_path) != str(initial_state.get("sha256", "")).upper():
         raise ValueError("RA runtime initial-state SHA256 mismatch")
 
-    schedule = {"smoke": 2, "screen10": 50, "screen": 50, "formal": 100, "explore50": 50}[stage]
-    cutoff = {"smoke": None, "screen10": 10, "screen": 30, "formal": None, "explore50": 50}[stage]
+    schedule = {
+        "smoke": 2,
+        "screen10": 50,
+        "screen": 50,
+        "formal": 100,
+        "explore50": 50,
+        "full100": 100,
+    }[stage]
+    cutoff = {
+        "smoke": None,
+        "screen10": 10,
+        "screen": 30,
+        "formal": None,
+        "explore50": 50,
+        "full100": 100,
+    }[stage]
     if manifest.get("schedule_epochs") != schedule or manifest.get("cutoff_epoch") != cutoff:
         raise ValueError("RA runtime schedule/cutoff differs from frozen stage authority")
     if manifest.get("initialization_mode") != "fresh_paired_scratch":
@@ -416,7 +447,7 @@ def validate_runtime_authority(
         normalized = str(value).upper()
         return len(normalized) == 64 and set(normalized) <= hexadecimal
 
-    if stage in {"smoke", "screen10", "explore50"}:
+    if stage in {"smoke", "screen10", "explore50", "full100"}:
         if screen10_sha is not None or screen_sha is not None:
             raise ValueError(f"{stage} runtime may not inherit an upstream gate")
     elif stage == "screen":
