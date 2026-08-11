@@ -53,8 +53,9 @@ def test_frozen_ra_protocol_preserves_fdr_line_and_screen_scheduler() -> None:
     assert protocol["training"]["explore50_cutoff_epoch"] == 50
     assert protocol["training"]["full100_schedule_epochs"] == 100
     assert protocol["training"]["full100_cutoff_epoch"] == 100
-    assert protocol["training"]["full100_batch"] == 16
+    assert protocol["training"]["full100_batch"] == 8
     assert protocol["training"]["full100_nbs"] == 64
+    assert protocol["training"]["full100_internal_oom_retry"] is False
     assert protocol["training"]["formal_schedule_epochs"] == 100
     assert protocol["training"]["save_period"] == 1
     assert protocol["dataset"]["screen_train_images"] == 647
@@ -194,7 +195,7 @@ def test_smoke_and_screen_stages_never_validate_on_official_val(
         )
 
 
-def test_full100_uses_full_data_and_batch16(
+def test_full100_uses_full_data_and_batch8(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset = (tmp_path / "VisDrone").resolve()
@@ -233,9 +234,27 @@ def test_full100_uses_full_data_and_batch16(
         generated,
     )
     assert settings["epochs"] == 100
-    assert settings["batch"] == 16
+    assert settings["batch"] == 8
     assert settings["nbs"] == 64
     assert settings["workers"] == 8
+
+
+def test_ra_trainer_disables_internal_oom_batch_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DummyTrainer:
+        def __init__(self, **_kwargs: object) -> None:
+            self._oom_retries = 0
+
+    monkeypatch.setattr(ra_train, "_AuditedRAGLGMControlTrainer", DummyTrainer)
+    trainer = ra_train.create_trainer(
+        "baseline",
+        {},
+        tmp_path / "initial.pt",
+        optimizer_evidence_context={"run_id": "run", "variant": "baseline"},
+    )
+
+    assert trainer._oom_retries == 3
 
 
 def test_ignore_sidecar_signature_freezes_split_and_empty_file_distribution(

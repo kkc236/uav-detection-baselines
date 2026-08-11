@@ -18,8 +18,9 @@
 
 - 输入：640x640。
 - epoch：Baseline 100 + RA-GLGM 100。
-- batch=16，nbs=64，梯度累积 4 次，有效 batch=64。
+- batch=8，nbs=64，梯度累积 8 次，有效 batch=64。该规格与既有 FDR/v1.1 协议一致，并经完整数据高密度样本审计后冻结。
 - workers=8，AMP 开启，cache=false，deterministic=true。
+- 禁用框架内部 OOM 自动降批；OOM 必须显式失败并建立新的实验 authority，不允许一臂内静默改变 batch。
 - 优化器、学习率、增强、FDR/BPDD、Query 和 Hungarian 匹配保持既有冻结协议不变。
 - 先对两臂各运行 Smoke2；任一臂显存、AMP、梯度或有限数值检查失败，则不得启动 Full100。改变 batch 必须形成新的预注册和新实验 authority，不能在一臂中途变更。
 

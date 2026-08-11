@@ -290,6 +290,12 @@ def create_trainer(
         trainer = _AuditedRAGLGMTrainer(**common, experiment_seed=0)
     else:
         raise ValueError(f"unknown RA variant: {variant}")
+    # Ultralytics otherwise halves the batch and restarts inside one run after OOM,
+    # which silently changes a frozen paired protocol.
+    if not bool(
+        RA_EXPERIMENT_PROTOCOL["training"]["full100_internal_oom_retry"]
+    ):
+        trainer._oom_retries = 3
     if optimizer_evidence_context is None:
         raise ValueError("RA optimizer evidence context is required")
     trainer.optimizer_evidence_context = dict(optimizer_evidence_context)
