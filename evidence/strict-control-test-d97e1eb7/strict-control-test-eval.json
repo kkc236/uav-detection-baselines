@@ -1,0 +1,183 @@
+{
+  "checkpoint": {
+    "completed_epoch": 100,
+    "ema_state_sha256": "386937FEE0558FDBAAA51D2FDEBC57A0A1455C9BF6AF81F0788866D622CE8C2D",
+    "kind": "exact-final-ema",
+    "raw_epoch": 99,
+    "sha256": "9C242711F44B7E68B360AF904AB7C44F64505C7136B7E7F90481092AE3308AF7",
+    "sha256_verified": true,
+    "source_field": "ema",
+    "strict_fdr_inference_graph": true
+  },
+  "class_details": {
+    "awning-tricycle": {
+      "id": 7,
+      "map": 0.08772347308995693,
+      "map50": 0.16571931331677592,
+      "map75": 0.08827403868390207
+    },
+    "bicycle": {
+      "id": 2,
+      "map": 0.0401751914675779,
+      "map50": 0.10339696540610589,
+      "map75": 0.020634359327172044
+    },
+    "bus": {
+      "id": 8,
+      "map": 0.3588681595221488,
+      "map50": 0.5453641727269016,
+      "map75": 0.4048951348359878
+    },
+    "car": {
+      "id": 3,
+      "map": 0.4556755215216571,
+      "map50": 0.7399334080949218,
+      "map75": 0.49985670524586034
+    },
+    "motor": {
+      "id": 9,
+      "map": 0.1138035117954496,
+      "map50": 0.29909331767845876,
+      "map75": 0.06083316295106797
+    },
+    "pedestrian": {
+      "id": 0,
+      "map": 0.10221672494558154,
+      "map50": 0.2691118047410772,
+      "map75": 0.05495847902374654
+    },
+    "people": {
+      "id": 1,
+      "map": 0.06307536421583912,
+      "map50": 0.1831189643942266,
+      "map75": 0.0257260986684777
+    },
+    "tricycle": {
+      "id": 6,
+      "map": 0.0939602459984036,
+      "map50": 0.1846057671019798,
+      "map75": 0.08666184133420443
+    },
+    "truck": {
+      "id": 5,
+      "map": 0.21484016081863894,
+      "map50": 0.3582115748788561,
+      "map75": 0.23216942708163055
+    },
+    "van": {
+      "id": 4,
+      "map": 0.2438259634119213,
+      "map50": 0.37352098191541316,
+      "map75": 0.28101714888516094
+    }
+  },
+  "classes": {
+    "awning-tricycle": 0.08772347308995693,
+    "bicycle": 0.0401751914675779,
+    "bus": 0.3588681595221488,
+    "car": 0.4556755215216571,
+    "motor": 0.1138035117954496,
+    "pedestrian": 0.10221672494558154,
+    "people": 0.06307536421583912,
+    "tricycle": 0.0939602459984036,
+    "truck": 0.21484016081863894,
+    "van": 0.2438259634119213
+  },
+  "environment": {
+    "cuda": "12.1",
+    "driver": "550.142",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "python": "3.10.12",
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "ultralytics": "8.4.90"
+  },
+  "evaluation_protocol": {
+    "batch": 8,
+    "cache": false,
+    "conf": 0.001,
+    "device": "0",
+    "half": false,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "plots": false,
+    "rect": false,
+    "save_json": false,
+    "save_txt": false,
+    "split": "test",
+    "verbose": true,
+    "workers": 8
+  },
+  "format_version": 1,
+  "identity": {
+    "bpdd_enabled": false,
+    "completed_epoch": 100,
+    "fdr_enabled": false,
+    "initial_state_sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D",
+    "ira_enabled": false,
+    "model": "Ultralytics RT-DETR-L",
+    "seed": 0,
+    "training_protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "training_source_commit": "d97e1eb7f98414752a1c1f38287697db3f2a0679",
+    "variant": "control"
+  },
+  "metrics": {
+    "f1": 0.39421778511842925,
+    "map": 0.1774164316787175,
+    "map50": 0.3222076270254717,
+    "map75": 0.17550263960372106,
+    "precision": 0.4179784854691559,
+    "recall": 0.37301321245245467
+  },
+  "prediction_passes": 1,
+  "processed_images": 1610,
+  "scale_definition": {
+    "coordinate_space": "network-input-pixels",
+    "large": "sqrt(area) >= 96",
+    "medium": "32 <= sqrt(area) < 96",
+    "small": "16 <= sqrt(area) < 32",
+    "tiny": "sqrt(area) < 16"
+  },
+  "scale_details": {
+    "large": {
+      "gt": 306,
+      "map": 0.4289143061406714,
+      "map50": 0.5343489468037964,
+      "map75": 0.4677971867470467
+    },
+    "medium": {
+      "gt": 9148,
+      "map": 0.281605029920257,
+      "map50": 0.4256937449424359,
+      "map75": 0.3175883910262963
+    },
+    "small": {
+      "gt": 19878,
+      "map": 0.1867755384112167,
+      "map50": 0.3391523978743412,
+      "map75": 0.18461982679631778
+    },
+    "tiny": {
+      "gt": 45770,
+      "map": 0.06591573551881268,
+      "map50": 0.15750537089855582,
+      "map75": 0.0460832394694599
+    }
+  },
+  "scales": {
+    "large": 0.4289143061406714,
+    "medium": 0.281605029920257,
+    "small": 0.1867755384112167,
+    "tiny": 0.06591573551881268
+  },
+  "test_authority": {
+    "archive_sha256": "45543DB16745616BB203BAD23532623D30099CA8FF38E502A9B996F5F1A58CFB",
+    "data_yaml": "/data/uav/evidence/strict-control-test-d97e1eb7/test-data.yaml",
+    "format_version": 1,
+    "images": 1610,
+    "instances": 75102,
+    "labels": 1610,
+    "source_split": "VisDrone test"
+  }
+}

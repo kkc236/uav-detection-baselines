@@ -1,0 +1,171 @@
+{
+  "checkpoint": {
+    "completed_epoch": 100,
+    "ema_state_sha256": "85E94FFAE4CF630D35CD9D93A774115C0B4E034C2E0073ED17DA1E0F37B6D528",
+    "kind": "exact-final-ema",
+    "raw_epoch": 99,
+    "sha256": "C2F638744508ADFE7B6C4A1EF3E08C503273F628062E4650AD59FFFF4C6588C2",
+    "sha256_verified": true,
+    "source_field": "ema",
+    "strict_fdr_inference_graph": true
+  },
+  "class_details": {
+    "awning-tricycle": {
+      "id": 7,
+      "map": 0.12125750862997482,
+      "map50": 0.20135862036934865,
+      "map75": 0.1386480021767319
+    },
+    "bicycle": {
+      "id": 2,
+      "map": 0.07549430757387526,
+      "map50": 0.18065451283650016,
+      "map75": 0.04818250720011261
+    },
+    "bus": {
+      "id": 8,
+      "map": 0.4281497342196099,
+      "map50": 0.6051844517398066,
+      "map75": 0.48277145708777064
+    },
+    "car": {
+      "id": 3,
+      "map": 0.506470086969426,
+      "map50": 0.7901246333988309,
+      "map75": 0.5614624028954889
+    },
+    "motor": {
+      "id": 9,
+      "map": 0.17419742491760465,
+      "map50": 0.410367249056159,
+      "map75": 0.11409198406230155
+    },
+    "pedestrian": {
+      "id": 0,
+      "map": 0.153998378043944,
+      "map50": 0.3822062241972813,
+      "map75": 0.09509977700533245
+    },
+    "people": {
+      "id": 1,
+      "map": 0.10098321877638879,
+      "map50": 0.28800102017560114,
+      "map75": 0.0417822797240967
+    },
+    "tricycle": {
+      "id": 6,
+      "map": 0.1456976444884414,
+      "map50": 0.26744242730721746,
+      "map75": 0.14674299829018062
+    },
+    "truck": {
+      "id": 5,
+      "map": 0.2835542080929695,
+      "map50": 0.4362651606529506,
+      "map75": 0.3203421063913776
+    },
+    "van": {
+      "id": 4,
+      "map": 0.29020750875614987,
+      "map50": 0.4217927338878547,
+      "map75": 0.3399037026418029
+    }
+  },
+  "classes": {
+    "awning-tricycle": 0.12125750862997482,
+    "bicycle": 0.07549430757387526,
+    "bus": 0.4281497342196099,
+    "car": 0.506470086969426,
+    "motor": 0.17419742491760465,
+    "pedestrian": 0.153998378043944,
+    "people": 0.10098321877638879,
+    "tricycle": 0.1456976444884414,
+    "truck": 0.2835542080929695,
+    "van": 0.29020750875614987
+  },
+  "evaluation_protocol": {
+    "batch": 8,
+    "cache": false,
+    "conf": 0.001,
+    "device": "0",
+    "half": false,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "plots": false,
+    "rect": false,
+    "save_json": false,
+    "save_txt": false,
+    "split": "test",
+    "verbose": true,
+    "workers": 8
+  },
+  "format_version": 1,
+  "identity": {
+    "completed_epoch": 100,
+    "initial_state_sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D",
+    "model": "Ultralytics RT-DETR-L + FDR",
+    "seed": 0,
+    "training_protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "training_source_commit": "d97e1eb7f98414752a1c1f38287697db3f2a0679",
+    "variant": "fdr"
+  },
+  "metrics": {
+    "f1": 0.4647884909014567,
+    "map": 0.2280010020468384,
+    "map50": 0.3983397033621551,
+    "map75": 0.2289027217475196,
+    "precision": 0.5034013232722852,
+    "recall": 0.4316771784011883
+  },
+  "prediction_passes": 1,
+  "processed_images": 1610,
+  "scale_definition": {
+    "coordinate_space": "network-input-pixels",
+    "large": "sqrt(area) >= 96",
+    "medium": "32 <= sqrt(area) < 96",
+    "small": "16 <= sqrt(area) < 32",
+    "tiny": "sqrt(area) < 16"
+  },
+  "scale_details": {
+    "large": {
+      "gt": 306,
+      "map": 0.4453065253517913,
+      "map50": 0.5290763288482492,
+      "map75": 0.4800021773198182
+    },
+    "medium": {
+      "gt": 9148,
+      "map": 0.3317945434296956,
+      "map50": 0.4779958348798753,
+      "map75": 0.3819161210252394
+    },
+    "small": {
+      "gt": 19878,
+      "map": 0.24748874622961212,
+      "map50": 0.41637559166294225,
+      "map75": 0.2596766045412773
+    },
+    "tiny": {
+      "gt": 45770,
+      "map": 0.10591866996450552,
+      "map50": 0.2344698315570639,
+      "map75": 0.08315109648329481
+    }
+  },
+  "scales": {
+    "large": 0.4453065253517913,
+    "medium": 0.3317945434296956,
+    "small": 0.24748874622961212,
+    "tiny": 0.10591866996450552
+  },
+  "test_authority": {
+    "archive_sha256": "45543DB16745616BB203BAD23532623D30099CA8FF38E502A9B996F5F1A58CFB",
+    "data_yaml": "/data/uav/evidence/strict-control-test-d97e1eb7/test-data.yaml",
+    "format_version": 1,
+    "images": 1610,
+    "instances": 75102,
+    "labels": 1610,
+    "source_split": "VisDrone test"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "names": [
+    "pedestrian",
+    "people",
+    "bicycle",
+    "car",
+    "van",
+    "truck",
+    "tricycle",
+    "awning-tricycle",
+    "bus",
+    "motor"
+  ],
+  "nc": 10,
+  "path": "/data/uav/datasets/VisDrone",
+  "train": "/data/uav/datasets/VisDrone/images/train",
+  "val": "/data/uav/datasets/VisDrone/images/val",
+  "test": "/data/uav/datasets/VisDrone/images/test"
+}

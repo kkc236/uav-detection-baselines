@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "images": 1610,
+  "labels": 1610,
+  "instances": 75102,
+  "archive_sha256": "45543DB16745616BB203BAD23532623D30099CA8FF38E502A9B996F5F1A58CFB",
+  "source_split": "VisDrone test",
+  "data_yaml": "/data/uav/evidence/strict-control-test-d97e1eb7/test-data.yaml"
+}
