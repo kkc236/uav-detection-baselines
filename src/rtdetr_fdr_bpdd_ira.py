@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import torch
+from torch import nn
 from ultralytics.utils import RANK
 
 from src.fdr_protocol import initialize_private_module, validate_fdr_initial_state
@@ -88,6 +89,71 @@ def load_fdr_bpdd_ira_initial_state(
         "missing_keys": missing_keys,
         "ira_private_keys": ira_private_keys,
     }
+
+
+def _exact_combined_resume_state(weights: Any) -> Mapping[str, torch.Tensor]:
+    """Normalize only an exact combined module or explicit state mapping."""
+
+    candidate = weights
+    if isinstance(candidate, Mapping):
+        if "model" in candidate:
+            candidate = candidate["model"]
+        elif "state_dict" in candidate:
+            candidate = candidate["state_dict"]
+
+    if isinstance(candidate, nn.Module):
+        if not isinstance(candidate, FDRBPDDIRADetectionModel):
+            raise ValueError(
+                "resume requires an exact combined FDR+BPDD+IRA model/state"
+            )
+        return candidate.state_dict()
+    if isinstance(candidate, Mapping) and all(
+        isinstance(name, str) and isinstance(value, torch.Tensor)
+        for name, value in candidate.items()
+    ):
+        return candidate
+    raise ValueError("resume requires an exact combined FDR+BPDD+IRA model/state")
+
+
+def load_exact_fdr_bpdd_ira_resume_state(
+    model: "FDRBPDDIRADetectionModel",
+    weights: Any,
+) -> None:
+    """Strictly restore a combined checkpoint without key intersection."""
+
+    source = _exact_combined_resume_state(weights)
+    target = model.state_dict()
+    if set(source) != set(target):
+        missing = sorted(set(target) - set(source))
+        unexpected = sorted(set(source) - set(target))
+        raise ValueError(
+            "resume requires an exact combined FDR+BPDD+IRA model/state: "
+            f"missing={missing[:5]}, unexpected={unexpected[:5]}"
+        )
+
+    normalized: dict[str, torch.Tensor] = {}
+    for name, expected in target.items():
+        actual = source[name]
+        if actual.shape != expected.shape:
+            raise ValueError(
+                "resume requires an exact combined FDR+BPDD+IRA model/state: "
+                f"shape mismatch for {name}"
+            )
+        if actual.dtype != expected.dtype:
+            if not (actual.is_floating_point() and expected.is_floating_point()):
+                raise ValueError(
+                    "resume requires an exact combined FDR+BPDD+IRA model/state: "
+                    f"dtype mismatch for {name}"
+                )
+            actual = actual.to(dtype=expected.dtype)
+        normalized[name] = actual
+
+    try:
+        model.load_state_dict(normalized, strict=True)
+    except RuntimeError as error:
+        raise ValueError(
+            "resume requires an exact combined FDR+BPDD+IRA model/state"
+        ) from error
 
 
 class FDRBPDDIRADetectionModel(FDRBPDDDetectionModel):
@@ -176,7 +242,7 @@ class FDRBPDDIRATrainer(FDRBPDDTrainer):
             ira_private_seed=20_000 + self.experiment_seed,
         )
         if weights:
-            model.load(weights)
+            load_exact_fdr_bpdd_ira_resume_state(model, weights)
         elif self.initial_state_path is not None:
             artifact = torch.load(
                 Path(self.initial_state_path),
@@ -191,6 +257,7 @@ __all__ = [
     "BPDD_IRA_MODEL_CFG",
     "FDRBPDDIRADetectionModel",
     "FDRBPDDIRATrainer",
+    "load_exact_fdr_bpdd_ira_resume_state",
     "load_fdr_bpdd_ira_initial_state",
     "remap_bpdd_ira_shared_key",
 ]

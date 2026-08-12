@@ -21,6 +21,21 @@ def _validate_feature(x: Tensor, channels: int) -> None:
         raise ValueError(f"IRA input must have {channels} channels")
 
 
+def _ira_construction_cuda_devices() -> list[int]:
+    """Return CUDA RNG devices that IRA construction could consume."""
+
+    if not torch.cuda.is_available():
+        return []
+    default_device = torch.get_default_device()
+    if default_device.type != "cuda":
+        return []
+    return [
+        int(default_device.index)
+        if default_device.index is not None
+        else int(torch.cuda.current_device())
+    ]
+
+
 class IRABaseBlock(nn.Module):
     """Depth-wise feature refinement with two internal residual paths."""
 
@@ -85,11 +100,17 @@ class IRA(nn.Module):
     def __init__(self, channels: int) -> None:
         super().__init__()
         self.channels = _validate_channels(channels)
-        self.refine = nn.Sequential(
-            IRABaseBlock(self.channels),
-            IRABaseBlock(self.channels),
-            IRAAttention(self.channels),
-        )
+        # Do not perturb the initialization trajectory of modules constructed
+        # after this private YAML layer (stock P4/P5 and the FDR decoder).
+        with torch.random.fork_rng(
+            devices=_ira_construction_cuda_devices(),
+            enabled=True,
+        ):
+            self.refine = nn.Sequential(
+                IRABaseBlock(self.channels),
+                IRABaseBlock(self.channels),
+                IRAAttention(self.channels),
+            )
         self.residual_scale = nn.Parameter(torch.zeros(()))
 
     def forward(self, x: Tensor) -> Tensor:
