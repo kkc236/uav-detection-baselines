@@ -29,6 +29,7 @@ from src.fdr_head import (
 from src.fdr_loss import FDRDetectionLoss
 from src.fdr_protocol import load_fdr_initial_state
 from src.frequency_cm import FrequencyCM
+from src.ira import IRA
 from src.rtdetr_lpr import FixedPairedProtocolMixin
 from src.rtdetr_vsf_rmr import apply_resume_runtime_overrides
 
@@ -42,6 +43,7 @@ def register_fdr_module() -> None:
 
     ultralytics_tasks.FDRRTDETRDecoder = FDRRTDETRDecoder
     ultralytics_tasks.FrequencyCM = FrequencyCM
+    ultralytics_tasks.IRA = IRA
 
 
 def build_stock_rtdetr_model(*args: Any, **kwargs: Any) -> RTDETRDetectionModel:
