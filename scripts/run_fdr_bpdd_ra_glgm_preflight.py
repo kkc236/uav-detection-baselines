@@ -84,6 +84,7 @@ def run_preflight(*, authority_path: Path, device_name: str) -> dict:
     if combo.criterion.last_normal_decoder_assignment is None:
         raise ValueError("preflight final ordinary assignment is absent")
     bpdd = float(combo.last_fdr_losses["loss_bpdd"])
+    eligible_edges = int(combo.last_bpdd_statistics["eligible_edges"])
     gradients = {
         "ra_alpha": float(combo.ra_glgm.alpha.grad.detach().float().norm()),
         "ra_support": float(combo.ra_glgm.support_head.weight.grad.detach().float().norm()),
@@ -91,8 +92,8 @@ def run_preflight(*, authority_path: Path, device_name: str) -> dict:
             combo.model[-1].dec_bbox_head[0].layers[-1].weight.grad.detach().float().norm()
         ),
     }
-    if not math.isfinite(bpdd) or bpdd <= 0.0:
-        raise ValueError("preflight BPDD signal is not positive")
+    if not math.isfinite(bpdd) or bpdd < 0.0 or eligible_edges <= 0:
+        raise ValueError("preflight BPDD graph has no finite eligible-edge signal")
     if any(not math.isfinite(value) or value <= 0.0 for value in gradients.values()):
         raise ValueError("preflight one required gradient is absent")
     return {
@@ -108,6 +109,8 @@ def run_preflight(*, authority_path: Path, device_name: str) -> dict:
         "stock_match_calls": 7,
         "fgl_extra_match_calls": 0,
         "loss_bpdd": bpdd,
+        "bpdd_eligible_edges": eligible_edges,
+        "bpdd_initial_dormancy_expected": bpdd == 0.0,
         "gradients": gradients,
     }
 
