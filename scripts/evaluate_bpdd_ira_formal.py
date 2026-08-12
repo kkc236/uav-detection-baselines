@@ -491,17 +491,38 @@ def build_preliminary_comparisons(
     *,
     fdr_evaluation: str | Path,
     bpdd_evaluation: str | Path,
-    ira_evaluation: str | Path,
+    ira_evaluation: str | Path | None,
 ) -> dict[str, Any]:
     references = [
         load_reference_authority(fdr_evaluation, expected_variant="fdr", method="FDR"),
         load_reference_authority(
             bpdd_evaluation, expected_variant="fdr_bpdd", method="FDR+BPDD"
         ),
-        load_reference_authority(
-            ira_evaluation, expected_variant="fdr_ira", method="FDR+IRA"
-        ),
     ]
+    if ira_evaluation is not None:
+        references.append(
+            load_reference_authority(
+                ira_evaluation, expected_variant="fdr_ira", method="FDR+IRA"
+            )
+        )
+    else:
+        references.append(
+            {
+                "method": "FDR+IRA",
+                "variant": "fdr_ira",
+                "strict": False,
+                "evidence_level": "unavailable",
+                "strict_validation_failures": ["authority_unavailable"],
+                "authority_path": None,
+                "authority_sha256": None,
+                "metrics": {
+                    key: None
+                    for key in ("precision", "recall", "f1", "map50", "map75", "map")
+                },
+                "scales": {},
+                "class_details": {},
+            }
+        )
     rows = [
         {
             "method": reference["method"],
@@ -534,7 +555,12 @@ def build_preliminary_comparisons(
         "non_strict_historical_reference": [
             row
             for row, reference in zip(rows, references, strict=False)
-            if not reference["strict"]
+            if reference["evidence_level"] == "non_strict_historical_reference"
+        ],
+        "unavailable_references": [
+            row
+            for row, reference in zip(rows, references, strict=False)
+            if reference["evidence_level"] == "unavailable"
         ],
     }
     by_method = {reference["method"]: reference for reference in references}
@@ -554,7 +580,7 @@ def evaluate_formal_checkpoint(
     dataset_root: str | Path,
     fdr_evaluation: str | Path,
     bpdd_evaluation: str | Path,
-    ira_evaluation: str | Path,
+    ira_evaluation: str | Path | None,
     output: str | Path,
     device: str = "cuda:0",
     checkpoint_loader: Callable[..., LoadedCombinedCheckpoint] = load_exact_combined_checkpoint,
@@ -630,7 +656,9 @@ def evaluate_formal_checkpoint(
             "data_yaml_sha256": val_authority["yaml_sha256"],
             "fdr_evaluation_sha256": file_sha256(fdr_evaluation),
             "bpdd_evaluation_sha256": file_sha256(bpdd_evaluation),
-            "ira_evaluation_sha256": file_sha256(ira_evaluation),
+            "ira_evaluation_sha256": (
+                file_sha256(ira_evaluation) if ira_evaluation is not None else None
+            ),
             "dataset_sha256": val_authority["dataset_sha256"],
         },
     }
@@ -645,7 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--fdr-evaluation", type=Path, required=True)
     parser.add_argument("--bpdd-evaluation", type=Path, required=True)
-    parser.add_argument("--ira-evaluation", type=Path, required=True)
+    parser.add_argument("--ira-evaluation", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
     return parser

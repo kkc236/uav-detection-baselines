@@ -496,6 +496,57 @@ def test_preliminary_comparison_reports_core_scale_and_class_deltas(
     assert comparison["against_fdr"]["authority_sha256"] == _sha(fdr)
 
 
+def test_missing_historical_ira_authority_is_explicitly_unavailable(
+    tmp_path: Path,
+) -> None:
+    current = _validation_payload(0.31)
+    fdr = _evaluation(tmp_path / "fdr.json", variant="fdr", map_value=0.28)
+    bpdd = _evaluation(tmp_path / "bpdd.json", variant="fdr_bpdd", map_value=0.30)
+
+    comparison = formal.build_preliminary_comparisons(
+        current,
+        fdr_evaluation=fdr,
+        bpdd_evaluation=bpdd,
+        ira_evaluation=None,
+    )
+
+    ira = comparison["four_row_summary"][2]
+    assert ira == {
+        "method": "FDR+IRA",
+        "evidence_level": "unavailable",
+        "strict_validation_failures": ["authority_unavailable"],
+        "precision": None,
+        "recall": None,
+        "f1": None,
+        "map50": None,
+        "map75": None,
+        "map": None,
+    }
+    assert comparison["unavailable_references"] == [ira]
+    assert "against_fdr_ira" not in comparison
+
+
+def test_cli_allows_missing_historical_ira_authority() -> None:
+    args = formal.build_parser().parse_args(
+        [
+            "--run-dir",
+            "run",
+            "--checkpoint",
+            "epoch99.pt",
+            "--dataset-root",
+            "VisDrone",
+            "--fdr-evaluation",
+            "fdr.json",
+            "--bpdd-evaluation",
+            "bpdd.json",
+            "--output",
+            "report.json",
+        ]
+    )
+
+    assert args.ira_evaluation is None
+
+
 @pytest.mark.parametrize("drift", ["split", "evaluator", "protocol", "images"])
 def test_reference_is_never_strict_when_split_evaluator_or_protocol_drifts(
     tmp_path: Path, drift: str
