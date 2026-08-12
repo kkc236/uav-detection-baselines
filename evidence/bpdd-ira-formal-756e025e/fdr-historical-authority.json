@@ -1,0 +1,110 @@
+{
+  "checkpoint": {
+    "completed_epoch": 100,
+    "kind": "historical-same-evaluator-last-pt",
+    "sha256": "2C1ADE3FD9DC59B8FE5B816B8B95183037E47839186BB8F68C93774B0B60451A",
+    "sha256_verified": true
+  },
+  "class_details": {
+    "awning-tricycle": {
+      "id": 7,
+      "map": 0.11369970267543297,
+      "map50": 0.18468547207477282,
+      "map75": 0.1219040450526665
+    },
+    "bicycle": {
+      "id": 2,
+      "map": 0.1104408238318458,
+      "map50": 0.2373203210759639,
+      "map75": 0.0844063832275172
+    },
+    "bus": {
+      "id": 8,
+      "map": 0.43801175495937905,
+      "map50": 0.6078606939718958,
+      "map75": 0.507530136937965
+    },
+    "car": {
+      "id": 3,
+      "map": 0.6092958342624943,
+      "map50": 0.8569187758719696,
+      "map75": 0.6854572861623589
+    },
+    "motor": {
+      "id": 9,
+      "map": 0.29401010710226805,
+      "map50": 0.6059547348230194,
+      "map75": 0.2451845298433588
+    },
+    "pedestrian": {
+      "id": 0,
+      "map": 0.2727694174041536,
+      "map50": 0.5666464394902543,
+      "map75": 0.22404188739718672
+    },
+    "people": {
+      "id": 1,
+      "map": 0.20888264005505053,
+      "map50": 0.4982903997894248,
+      "map75": 0.13556340800559782
+    },
+    "tricycle": {
+      "id": 6,
+      "map": 0.20574209445095676,
+      "map50": 0.3662418271278357,
+      "map75": 0.19977766366135502
+    },
+    "truck": {
+      "id": 5,
+      "map": 0.26402940154622645,
+      "map50": 0.3908486859535236,
+      "map75": 0.2874203583621784
+    },
+    "van": {
+      "id": 4,
+      "map": 0.3797157146886031,
+      "map50": 0.532070228854915,
+      "map75": 0.43396953035784347
+    }
+  },
+  "evaluation_identity": {
+    "data": "historical_strict_same_evaluator_authority",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "fdr_protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "images": 548,
+    "protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "run_id": "fdr-formal-seed0-d97e1eb7-historical-same-evaluator",
+    "seed": 0,
+    "split": "val",
+    "stage": "formal",
+    "variant": "fdr"
+  },
+  "evaluation_protocol": {
+    "batch": 8,
+    "conf": 0.001,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "workers": 8
+  },
+  "format_version": 1,
+  "metrics": {
+    "f1": 0.5248400311972669,
+    "map": 0.289659749097641,
+    "map50": 0.48468375790335755,
+    "map75": 0.29252552290080275,
+    "precision": 0.5691126151072722,
+    "recall": 0.49277710639408445
+  },
+  "note": "Historical same-evaluator last.pt authority; exact-final-EMA identity was not proven, so strict validator must downgrade this reference.",
+  "prediction_passes": 1,
+  "processed_images": 548,
+  "scales": {
+    "large": 0.38608000831368355,
+    "medium": 0.3962977580115748,
+    "small": 0.2899815508690768,
+    "tiny": 0.14479634888637893
+  },
+  "source": "/data/uav/reports/bpdd-ira-formal-756e025e/fdr-vs-control-strict-final-paper-metrics.json",
+  "source_status": "preliminary_same_evaluator"
+}

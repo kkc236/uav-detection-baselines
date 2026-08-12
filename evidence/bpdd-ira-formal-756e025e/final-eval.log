@@ -1,0 +1,387 @@
+Overriding model.yaml nc=80 with nc=10
+WARNING ⚠️ no model scale passed. Assuming scale='l'.
+
+                   from  n    params  module                                       arguments                     
+  0                  -1  1     25248  ultralytics.nn.modules.block.HGStem          [3, 32, 48]                   
+  1                  -1  6    155072  ultralytics.nn.modules.block.HGBlock         [48, 48, 128, 3, 6]           
+  2                  -1  1      1408  ultralytics.nn.modules.conv.DWConv           [128, 128, 3, 2, 1, False]    
+  3                  -1  6    839296  ultralytics.nn.modules.block.HGBlock         [128, 96, 512, 3, 6]          
+  4                  -1  1      5632  ultralytics.nn.modules.conv.DWConv           [512, 512, 3, 2, 1, False]    
+  5                  -1  6   1695360  ultralytics.nn.modules.block.HGBlock         [512, 192, 1024, 5, 6, True, False]
+  6                  -1  6   2055808  ultralytics.nn.modules.block.HGBlock         [1024, 192, 1024, 5, 6, True, True]
+  7                  -1  6   2055808  ultralytics.nn.modules.block.HGBlock         [1024, 192, 1024, 5, 6, True, True]
+  8                  -1  1     11264  ultralytics.nn.modules.conv.DWConv           [1024, 1024, 3, 2, 1, False]  
+  9                  -1  6   6708480  ultralytics.nn.modules.block.HGBlock         [1024, 384, 2048, 5, 6, True, False]
+ 10                  -1  1    524800  ultralytics.nn.modules.conv.Conv             [2048, 256, 1, 1, None, 1, 1, False]
+ 11                  -1  1    789760  ultralytics.nn.modules.transformer.AIFI      [256, 1024, 8]                
+ 12                  -1  1     66048  ultralytics.nn.modules.conv.Conv             [256, 256, 1, 1]              
+ 13                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
+ 14                   7  1    262656  ultralytics.nn.modules.conv.Conv             [1024, 256, 1, 1, None, 1, 1, False]
+ 15            [-2, -1]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 16                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 17                  -1  1     66048  ultralytics.nn.modules.conv.Conv             [256, 256, 1, 1]              
+ 18                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
+ 19                   3  1    131584  ultralytics.nn.modules.conv.Conv             [512, 256, 1, 1, None, 1, 1, False]
+ 20            [-2, -1]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 21                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 22                  21  1    301476  src.ira.IRA                                  [256]                         
+ 23                  21  1    590336  ultralytics.nn.modules.conv.Conv             [256, 256, 3, 2]              
+ 24            [23, 17]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 25                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 26                  25  1    590336  ultralytics.nn.modules.conv.Conv             [256, 256, 3, 2]              
+ 27            [26, 12]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 28                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 29        [22, 25, 28]  1   7652390  src.fdr_head.FDRRTDETRDecoder                [10, [256, 256, 256], [256, 256, 256], {'hidden_dim': 256, 'num_queries': 300, 'num_decoder_layers': 6, 'reg_max': 32, 'reg_scale': 4.0, 'up': 0.5, 'cumulative': True, 'preliminary_box': True, 'private_seed': 10000}]
+[W813 01:05:03.906269856 NNPACK.cpp:61] Could not initialize NNPACK! Reason: Unsupported hardware.
+rtdetr-l-fdr-bpdd-ira summary: 486 layers, 33,458,090 parameters, 33,458,090 gradients, 111.6 GFLOPs
+
+WARNING ⚠️ 'half' is deprecated and will be removed in the future. Use 'quantize' instead.
+Ultralytics 8.4.90 🚀 Python-3.10.12 torch-2.5.1+cu121 CUDA:0 (NVIDIA GeForce RTX 4090, 22684MiB)
+rtdetr-l-fdr-bpdd-ira summary: 331 layers, 32,635,754 parameters, 8,743,626 gradients, 107.1 GFLOPs
+[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 4904.4±556.6 MB/s, size: 126.9 KB)
+[K[34m[1mval: [0mScanning /data/uav/datasets/VisDrone/labels/val.cache... 548 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 548/548 143.7Mit/s 0.0s
+[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 1% ──────────── 1/69 2.3it/s 0.1s<29.4s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 4% ╸─────────── 3/69 6.6it/s 0.3s<10.0s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 7% ╸─────────── 5/69 9.0it/s 0.4s<7.1s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 10% ━─────────── 7/69 10.8it/s 0.5s<5.7s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 13% ━╸────────── 9/69 11.5it/s 0.7s<5.2s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 15% ━╸────────── 11/69 12.9it/s 0.8s<4.5s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 18% ━━────────── 13/69 13.7it/s 0.9s<4.1s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 21% ━━╸───────── 15/69 14.5it/s 1.0s<3.7s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 24% ━━╸───────── 17/69 14.5it/s 1.2s<3.6s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 27% ━━━───────── 19/69 15.2it/s 1.3s<3.3s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 30% ━━━╸──────── 21/69 15.4it/s 1.4s<3.1s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 33% ━━━━──────── 23/69 15.7it/s 1.6s<2.9s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 36% ━━━━──────── 25/69 15.5it/s 1.7s<2.8s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 39% ━━━━╸─────── 27/69 15.6it/s 1.8s<2.7s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 42% ━━━━━─────── 29/69 15.9it/s 1.9s<2.5s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 44% ━━━━━─────── 31/69 16.1it/s 2.1s<2.4s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 47% ━━━━━╸────── 33/69 15.9it/s 2.2s<2.3s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 50% ━━━━━━────── 35/69 15.8it/s 2.3s<2.2s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 53% ━━━━━━────── 37/69 15.9it/s 2.4s<2.0s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 56% ━━━━━━╸───── 39/69 16.0it/s 2.6s<1.9s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 59% ━━━━━━━───── 41/69 15.8it/s 2.7s<1.8s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 62% ━━━━━━━───── 43/69 15.7it/s 2.8s<1.7s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 65% ━━━━━━━╸──── 45/69 15.3it/s 3.0s<1.6s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 68% ━━━━━━━━──── 47/69 14.8it/s 3.1s<1.5s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 71% ━━━━━━━━╸─── 49/69 14.9it/s 3.2s<1.3s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 73% ━━━━━━━━╸─── 51/69 15.3it/s 3.4s<1.2s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 76% ━━━━━━━━━─── 53/69 15.4it/s 3.5s<1.0s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 79% ━━━━━━━━━╸── 55/69 15.4it/s 3.6s<0.9s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 82% ━━━━━━━━━╸── 57/69 15.5it/s 3.7s<0.8s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 85% ━━━━━━━━━━── 59/69 15.6it/s 3.9s<0.6s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 88% ━━━━━━━━━━╸─ 61/69 15.7it/s 4.0s<0.5s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 91% ━━━━━━━━━━╸─ 63/69 15.6it/s 4.1s<0.4s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 94% ━━━━━━━━━━━─ 65/69 15.7it/s 4.2s<0.3s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 97% ━━━━━━━━━━━╸ 67/69 15.7it/s 4.4s<0.1s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 69/69 15.3it/s 4.5s
+                   all        548      38759      0.556      0.498      0.481       0.29
+Speed: 0.4ms preprocess, 5.2ms inference, 0.0ms loss, 0.2ms postprocess per image
+Overriding model.yaml nc=80 with nc=10
+WARNING ⚠️ no model scale passed. Assuming scale='l'.
+
+                   from  n    params  module                                       arguments                     
+  0                  -1  1     25248  ultralytics.nn.modules.block.HGStem          [3, 32, 48]                   
+  1                  -1  6    155072  ultralytics.nn.modules.block.HGBlock         [48, 48, 128, 3, 6]           
+  2                  -1  1      1408  ultralytics.nn.modules.conv.DWConv           [128, 128, 3, 2, 1, False]    
+  3                  -1  6    839296  ultralytics.nn.modules.block.HGBlock         [128, 96, 512, 3, 6]          
+  4                  -1  1      5632  ultralytics.nn.modules.conv.DWConv           [512, 512, 3, 2, 1, False]    
+  5                  -1  6   1695360  ultralytics.nn.modules.block.HGBlock         [512, 192, 1024, 5, 6, True, False]
+  6                  -1  6   2055808  ultralytics.nn.modules.block.HGBlock         [1024, 192, 1024, 5, 6, True, True]
+  7                  -1  6   2055808  ultralytics.nn.modules.block.HGBlock         [1024, 192, 1024, 5, 6, True, True]
+  8                  -1  1     11264  ultralytics.nn.modules.conv.DWConv           [1024, 1024, 3, 2, 1, False]  
+  9                  -1  6   6708480  ultralytics.nn.modules.block.HGBlock         [1024, 384, 2048, 5, 6, True, False]
+ 10                  -1  1    524800  ultralytics.nn.modules.conv.Conv             [2048, 256, 1, 1, None, 1, 1, False]
+ 11                  -1  1    789760  ultralytics.nn.modules.transformer.AIFI      [256, 1024, 8]                
+ 12                  -1  1     66048  ultralytics.nn.modules.conv.Conv             [256, 256, 1, 1]              
+ 13                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
+ 14                   7  1    262656  ultralytics.nn.modules.conv.Conv             [1024, 256, 1, 1, None, 1, 1, False]
+ 15            [-2, -1]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 16                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 17                  -1  1     66048  ultralytics.nn.modules.conv.Conv             [256, 256, 1, 1]              
+ 18                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
+ 19                   3  1    131584  ultralytics.nn.modules.conv.Conv             [512, 256, 1, 1, None, 1, 1, False]
+ 20            [-2, -1]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 21                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 22                  21  1    301476  src.ira.IRA                                  [256]                         
+ 23                  21  1    590336  ultralytics.nn.modules.conv.Conv             [256, 256, 3, 2]              
+ 24            [23, 17]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 25                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 26                  25  1    590336  ultralytics.nn.modules.conv.Conv             [256, 256, 3, 2]              
+ 27            [26, 12]  1         0  ultralytics.nn.modules.conv.Concat           [1]                           
+ 28                  -1  3   2232320  ultralytics.nn.modules.block.RepC3           [512, 256, 3]                 
+ 29        [22, 25, 28]  1   7652390  src.fdr_head.FDRRTDETRDecoder                [10, [256, 256, 256], [256, 256, 256], {'hidden_dim': 256, 'num_queries': 300, 'num_decoder_layers': 6, 'reg_max': 32, 'reg_scale': 4.0, 'up': 0.5, 'cumulative': True, 'preliminary_box': True, 'private_seed': 10000}]
+rtdetr-l-fdr-bpdd-ira summary: 486 layers, 33,458,090 parameters, 33,458,090 gradients, 111.6 GFLOPs
+
+{
+  "benchmark_protocol": {
+    "batch": 1,
+    "half": true,
+    "imgsz": 640,
+    "runs": 200,
+    "warmup": 50
+  },
+  "checkpoint": {
+    "completed_epoch": 100,
+    "ema_state_sha256": "CC45CDCD7F4B5788E2E713DF6B5FF3D3F16E34B7730BF59CC77FDABE9390876F",
+    "kind": "exact-final-ema",
+    "raw_epoch": 99,
+    "sha256": "3EA6CD138C20AD38A35EF652407B6D77C423379A06E669028F771517843E069F",
+    "sha256_verified": true,
+    "source_field": "ema",
+    "strict_fdr_bpdd_ira_graph": true
+  },
+  "class_details": {
+    "awning-tricycle": {
+      "id": 7,
+      "map": 0.11273430197256155,
+      "map50": 0.18526414408323455,
+      "map75": 0.1269918006746333
+    },
+    "bicycle": {
+      "id": 2,
+      "map": 0.10971119103990827,
+      "map50": 0.23596035334695067,
+      "map75": 0.0831907239045164
+    },
+    "bus": {
+      "id": 8,
+      "map": 0.44188493729413925,
+      "map50": 0.6040310082918806,
+      "map75": 0.5092102107172111
+    },
+    "car": {
+      "id": 3,
+      "map": 0.6125518022214063,
+      "map50": 0.8575940442881618,
+      "map75": 0.6884386802022515
+    },
+    "motor": {
+      "id": 9,
+      "map": 0.2958889479919947,
+      "map50": 0.6070246807697401,
+      "map75": 0.24397376392566672
+    },
+    "pedestrian": {
+      "id": 0,
+      "map": 0.2730985174562685,
+      "map50": 0.560843827702932,
+      "map75": 0.22686076597745758
+    },
+    "people": {
+      "id": 1,
+      "map": 0.209015126063442,
+      "map50": 0.4945236975516213,
+      "map75": 0.13411395567027898
+    },
+    "tricycle": {
+      "id": 6,
+      "map": 0.20651366340749328,
+      "map50": 0.3574452882684965,
+      "map75": 0.2170625510373036
+    },
+    "truck": {
+      "id": 5,
+      "map": 0.25553103332314536,
+      "map50": 0.37758269209539747,
+      "map75": 0.28763747453493693
+    },
+    "van": {
+      "id": 4,
+      "map": 0.38259912259788076,
+      "map50": 0.5321395906600511,
+      "map75": 0.4335563719108234
+    }
+  },
+  "classes": {
+    "awning-tricycle": 0.11273430197256155,
+    "bicycle": 0.10971119103990827,
+    "bus": 0.44188493729413925,
+    "car": 0.6125518022214063,
+    "motor": 0.2958889479919947,
+    "pedestrian": 0.2730985174562685,
+    "people": 0.209015126063442,
+    "tricycle": 0.20651366340749328,
+    "truck": 0.25553103332314536,
+    "van": 0.38259912259788076
+  },
+  "comparisons": {
+    "comparison_scope": "preliminary_cross_run",
+    "four_row_summary": [
+      {
+        "evidence_level": "non_strict_historical_reference",
+        "f1": 0.5248400311972669,
+        "map": 0.289659749097641,
+        "map50": 0.48468375790335755,
+        "map75": 0.29252552290080275,
+        "method": "FDR",
+        "precision": 0.5691126151072722,
+        "recall": 0.49277710639408445,
+        "strict_validation_failures": [
+          "checkpoint"
+        ]
+      },
+      {
+        "evidence_level": "non_strict_historical_reference",
+        "f1": 0.5298252895497555,
+        "map": 0.29225786956881444,
+        "map50": 0.4864074913692349,
+        "map75": 0.29809564823246976,
+        "method": "FDR+BPDD",
+        "precision": 0.5706336342276676,
+        "recall": 0.494464137092214,
+        "strict_validation_failures": [
+          "split"
+        ]
+      },
+      {
+        "evidence_level": "unavailable",
+        "f1": null,
+        "map": null,
+        "map50": null,
+        "map75": null,
+        "method": "FDR+IRA",
+        "precision": null,
+        "recall": null,
+        "strict_validation_failures": [
+          "authority_unavailable"
+        ]
+      },
+      {
+        "evidence_level": "current_exact",
+        "f1": 0.525488885047014,
+        "map": 0.28995286433682393,
+        "map50": 0.4812409327058466,
+        "map75": 0.295103629855508,
+        "method": "FDR+BPDD+IRA",
+        "precision": 0.5557616181420737,
+        "recall": 0.4983437446164801,
+        "strict_validation_failures": []
+      }
+    ],
+    "non_strict_historical_reference": [
+      {
+        "evidence_level": "non_strict_historical_reference",
+        "f1": 0.5248400311972669,
+        "map": 0.289659749097641,
+        "map50": 0.48468375790335755,
+        "map75": 0.29252552290080275,
+        "method": "FDR",
+        "precision": 0.5691126151072722,
+        "recall": 0.49277710639408445,
+        "strict_validation_failures": [
+          "checkpoint"
+        ]
+      },
+      {
+        "evidence_level": "non_strict_historical_reference",
+        "f1": 0.5298252895497555,
+        "map": 0.29225786956881444,
+        "map50": 0.4864074913692349,
+        "map75": 0.29809564823246976,
+        "method": "FDR+BPDD",
+        "precision": 0.5706336342276676,
+        "recall": 0.494464137092214,
+        "strict_validation_failures": [
+          "split"
+        ]
+      }
+    ],
+    "strict_delta_table": [],
+    "strict_paired": false,
+    "unavailable_references": [
+      {
+        "evidence_level": "unavailable",
+        "f1": null,
+        "map": null,
+        "map50": null,
+        "map75": null,
+        "method": "FDR+IRA",
+        "precision": null,
+        "recall": null,
+        "strict_validation_failures": [
+          "authority_unavailable"
+        ]
+      }
+    ]
+  },
+  "efficiency": {
+    "fp16": {
+      "device": "cuda:0",
+      "fps": 36.37904388076888,
+      "median_ms": 27.48835300008068,
+      "p95_ms": 27.942936896215542,
+      "peak_memory_mib": 248.92529296875
+    },
+    "gflops": 111.648142848,
+    "parameters": 33458090
+  },
+  "epoch_records": {
+    "all_gradients_finite": true,
+    "completed_epochs": [
+      1,
+      100
+    ],
+    "count": 100,
+    "final_checkpoint_sha256": "3EA6CD138C20AD38A35EF652407B6D77C423379A06E669028F771517843E069F",
+    "final_ema_state_sha256": "CC45CDCD7F4B5788E2E713DF6B5FF3D3F16E34B7730BF59CC77FDABE9390876F",
+    "path": "/data/uav/runs/bpdd-ira-formal-756e025e/formal-seed0-fdr_bpdd_ira-v1/fdr-epochs.jsonl",
+    "sha256": "258FC54AC5544C032325A51B0EA9720D51AADC594149C2C01CBEC6BB579CABC8"
+  },
+  "evaluation_identity": {
+    "data": "/data/uav/runs/bpdd-ira-formal-756e025e/_bpdd-ira-authority/formal-data.yaml",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "fdr_protocol_sha256": "2545F68302639EEB217EC8B53FDB229681B2DAFC91463C61F6B5CEC9B5486302",
+    "images": 548,
+    "initial_state_sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D",
+    "protocol_sha256": "7714F3FF3A5537CFF66927DE01F931E824470AEBF378FD5659E0A0C3B3EF52EA",
+    "run_id": "fdr_bpdd_ira-formal-seed0-467651c51ceb-7714f3ff3a55",
+    "seed": 0,
+    "source_sha256": "467651C51CEB07C356B6AAD2D49D3DFDDADBC1E9108FAF6BA28845801D19DF1D",
+    "split": "val",
+    "stage": "formal",
+    "variant": "fdr_bpdd_ira"
+  },
+  "evaluation_protocol": {
+    "batch": 8,
+    "conf": 0.001,
+    "imgsz": 640,
+    "max_det": 300,
+    "nms": false,
+    "workers": 8
+  },
+  "format_version": 1,
+  "hashes": {
+    "bpdd_evaluation_sha256": "EFA3E28BF8DBF5C6A68CDD19FA759016BF104D31A628479AD100FCE6A6A931E0",
+    "checkpoint_sha256": "3EA6CD138C20AD38A35EF652407B6D77C423379A06E669028F771517843E069F",
+    "data_yaml_sha256": "84DAF5AA3B5416904FF2E097C3366C08EE307EDD5F14B0F79CE07D596861689D",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "ema_state_sha256": "CC45CDCD7F4B5788E2E713DF6B5FF3D3F16E34B7730BF59CC77FDABE9390876F",
+    "epoch_records_sha256": "258FC54AC5544C032325A51B0EA9720D51AADC594149C2C01CBEC6BB579CABC8",
+    "fdr_evaluation_sha256": "90F76AED8D95800E87206A5F4E3859A1E7DD0AC5CE3AD232485B1164848082DE",
+    "ira_evaluation_sha256": null
+  },
+  "metrics": {
+    "f1": 0.525488885047014,
+    "map": 0.28995286433682393,
+    "map50": 0.4812409327058466,
+    "map75": 0.295103629855508,
+    "precision": 0.5557616181420737,
+    "recall": 0.4983437446164801
+  },
+  "prediction_passes": 1,
+  "processed_images": 548,
+  "scale_definition": {
+    "coordinate_space": "network-input-pixels",
+    "large": "sqrt(area) >= 96",
+    "medium": "32 <= sqrt(area) < 96",
+    "small": "16 <= sqrt(area) < 32",
+    "tiny": "sqrt(area) < 16"
+  },
+  "scale_details": {
+    "large": {
+      "gt": 130,
+      "map": 0.40602245681767957,
+      "map50": 0.49752010901190974,
+      "map75": 0.44054914137548157
+    },
+    "medium": {
+      "gt": 5349,
+      "map": 0.3854382243348465,
+      "map50": 0.5277704483775747,
+      "map75": 0.43294825544837867
+    },
+    "small": {
+      "gt": 12420,
+      "map": 0.29354318166781845,
+      "map50": 0.4656612334180886,
+      "map75": 0.32517333400821247
+    },
+    "tiny": {
+      "gt": 20860,
+      "map": 0.14631531658485405,
+      "map50": 0.3045349304606019,
+      "map75": 0.11430542873748128
+    }
+  },
+  "scales": {
+    "large": 0.40602245681767957,
+    "medium": 0.3854382243348465,
+    "small": 0.29354318166781845,
+    "tiny": 0.14631531658485405
+  },
+  "val_authority": {
+    "dataset_root": "/data/uav/datasets/VisDrone",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+    "images": 548,
+    "split": "val",
+    "yaml": "/data/uav/runs/bpdd-ira-formal-756e025e/_bpdd-ira-authority/formal-data.yaml",
+    "yaml_sha256": "84DAF5AA3B5416904FF2E097C3366C08EE307EDD5F14B0F79CE07D596861689D"
+  }
+}
