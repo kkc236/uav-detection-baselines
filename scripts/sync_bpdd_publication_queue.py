@@ -91,7 +91,12 @@ def _is_within(path: Path, directory: Path) -> bool:
     return True
 
 
-def load_validated_queue(queue: str | Path, run_dir: str | Path) -> list[QueueEntry]:
+def load_validated_queue(
+    queue: str | Path,
+    run_dir: str | Path,
+    *,
+    verified_through_epoch: int = 0,
+) -> list[QueueEntry]:
     queue_path = Path(queue).resolve()
     run = Path(run_dir).resolve()
     rows = _read_jsonl(queue_path)
@@ -134,21 +139,22 @@ def load_validated_queue(queue: str | Path, run_dir: str | Path) -> list[QueueEn
             raise ValueError(
                 f"BPDD queue checkpoint is outside the run directory at epoch {completed_epoch}"
             )
-        if not checkpoint.is_file():
-            raise FileNotFoundError(
-                f"BPDD queue checkpoint not found at epoch {completed_epoch}: {checkpoint}"
-            )
         expected_sha = str(row["checkpoint_sha256"]).upper()
         if not re.fullmatch(r"[0-9A-F]{64}", expected_sha):
             raise ValueError(f"invalid BPDD checkpoint SHA256 at epoch {completed_epoch}")
-        metadata = checkpoint_metadata(checkpoint)
-        if metadata.completed_epoch != completed_epoch:
-            raise ValueError(
-                "BPDD checkpoint completed epoch mismatch: "
-                f"queue={completed_epoch}, checkpoint={metadata.completed_epoch}"
+        if checkpoint.is_file():
+            metadata = checkpoint_metadata(checkpoint)
+            if metadata.completed_epoch != completed_epoch:
+                raise ValueError(
+                    "BPDD checkpoint completed epoch mismatch: "
+                    f"queue={completed_epoch}, checkpoint={metadata.completed_epoch}"
+                )
+            if metadata.sha256.upper() != expected_sha:
+                raise ValueError(f"BPDD checkpoint SHA256 mismatch at epoch {completed_epoch}")
+        elif completed_epoch > verified_through_epoch:
+            raise FileNotFoundError(
+                f"BPDD queue checkpoint not found at epoch {completed_epoch}: {checkpoint}"
             )
-        if metadata.sha256.upper() != expected_sha:
-            raise ValueError(f"BPDD checkpoint SHA256 mismatch at epoch {completed_epoch}")
         entries.append(
             QueueEntry(
                 run_id=current_identity[0],
@@ -162,6 +168,39 @@ def load_validated_queue(queue: str | Path, run_dir: str | Path) -> list[QueueEn
             )
         )
     return entries
+
+
+def prune_verified_local_checkpoints(
+    entries: Sequence[QueueEntry],
+    *,
+    verified_through_epoch: int,
+    local_retain: int,
+) -> list[Path]:
+    if local_retain <= 0:
+        raise ValueError("BPDD local retain must be positive")
+    if verified_through_epoch <= local_retain:
+        return []
+
+    verified = [
+        entry for entry in entries if entry.completed_epoch <= verified_through_epoch
+    ]
+    retained_paths = {entry.checkpoint for entry in verified[-local_retain:]}
+    unpublished_paths = {
+        entry.checkpoint
+        for entry in entries
+        if entry.completed_epoch > verified_through_epoch
+    }
+    removed: list[Path] = []
+    for entry in verified[:-local_retain]:
+        checkpoint = entry.checkpoint
+        if checkpoint.name.lower() in {"last.pt", "best.pt"}:
+            continue
+        if checkpoint in retained_paths or checkpoint in unpublished_paths:
+            continue
+        if checkpoint.is_file():
+            checkpoint.unlink()
+            removed.append(checkpoint)
+    return removed
 
 
 def load_validated_ledger(
@@ -345,8 +384,13 @@ def _write_status(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def sync_once(args: argparse.Namespace) -> list[dict[str, Any]]:
-    entries = load_validated_queue(args.queue, args.run_dir)
     ledger_path = args.run_dir / "publication-ledger.jsonl"
+    ledger_records = _read_jsonl(ledger_path) if ledger_path.exists() else []
+    entries = load_validated_queue(
+        args.queue,
+        args.run_dir,
+        verified_through_epoch=len(ledger_records),
+    )
     ledger = load_validated_ledger(ledger_path, entries)
     if not entries:
         _write_status(args.status_file, {"state": "waiting", "completed_epoch": 0})
@@ -355,6 +399,11 @@ def sync_once(args: argparse.Namespace) -> list[dict[str, Any]]:
     token = validate_token_file(args.token_file)
     session = github_session(token)
     verify_ledger_assets(session, ledger, args)
+    prune_verified_local_checkpoints(
+        entries,
+        verified_through_epoch=len(ledger),
+        local_retain=args.local_retain,
+    )
     published: list[dict[str, Any]] = []
     for entry in entries[len(ledger) :]:
         expected_epoch = len(ledger) + len(published) + 1
@@ -367,6 +416,11 @@ def sync_once(args: argparse.Namespace) -> list[dict[str, Any]]:
             raise RuntimeError("BPDD publisher returned an out-of-order epoch")
         _append_ledger(ledger_path, record)
         published.append(record)
+        prune_verified_local_checkpoints(
+            entries,
+            verified_through_epoch=len(ledger) + len(published),
+            local_retain=args.local_retain,
+        )
         _write_status(
             args.status_file,
             {
@@ -428,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asset-prefix", required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--local-retain", type=int, default=3)
     parser.add_argument("--once", action="store_true")
     parser.add_argument(
         "--status-file", type=Path, default=Path("logs/bpdd-publication-sync.json")
@@ -442,6 +497,8 @@ def _resolve_args(args: argparse.Namespace) -> argparse.Namespace:
     args.status_file = args.status_file.resolve()
     if args.interval <= 0:
         raise ValueError("BPDD publication interval must be positive")
+    if args.local_retain <= 0:
+        raise ValueError("BPDD local retain must be positive")
     checkpoint_asset_name(1, prefix=args.asset_prefix)
     return args
 

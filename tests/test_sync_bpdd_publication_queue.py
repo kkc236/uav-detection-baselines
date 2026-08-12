@@ -74,6 +74,7 @@ def _args(tmp_path: Path, run: Path, queue: Path, **changes) -> argparse.Namespa
         "asset_prefix": "bpdd-screen",
         "run_dir": run,
         "interval": 1,
+        "local_retain": 3,
         "once": True,
         "status_file": tmp_path / "status.json",
     }
@@ -102,6 +103,8 @@ def test_cli_exposes_exact_queue_release_and_runtime_controls() -> None:
             "run",
             "--interval",
             "17",
+            "--local-retain",
+            "5",
             "--once",
             "--status-file",
             "status.json",
@@ -116,8 +119,45 @@ def test_cli_exposes_exact_queue_release_and_runtime_controls() -> None:
     assert args.asset_prefix == "bpdd"
     assert args.run_dir == Path("run")
     assert args.interval == 17
+    assert args.local_retain == 5
     assert args.once is True
     assert args.status_file == Path("status.json")
+
+
+def test_cli_defaults_to_three_local_epoch_checkpoints() -> None:
+    module = _load_module()
+
+    args = module.build_parser().parse_args(
+        [
+            "--queue",
+            "queue.jsonl",
+            "--token-file",
+            "token",
+            "--repo",
+            "owner/repository",
+            "--tag",
+            "bpdd-live",
+            "--asset-prefix",
+            "bpdd",
+            "--run-dir",
+            "run",
+        ]
+    )
+
+    assert args.local_retain == 3
+
+
+@pytest.mark.parametrize("local_retain", (0, -1))
+def test_resolve_args_rejects_non_positive_local_retain(
+    tmp_path: Path, local_retain: int
+) -> None:
+    module = _load_module()
+    run = tmp_path / "run"
+    queue = run / "publication-queue.jsonl"
+    args = _args(tmp_path, run, queue, local_retain=local_retain)
+
+    with pytest.raises(ValueError, match="local retain"):
+        module._resolve_args(args)
 
 
 def test_queue_validation_binds_path_sha_and_checkpoint_epoch(tmp_path: Path) -> None:
@@ -273,6 +313,110 @@ def test_reentry_verifies_existing_assets_without_reupload_or_ledger_rewrite(
     assert ledger.read_bytes() == original_bytes
 
 
+def test_reentry_accepts_missing_checkpoints_only_in_verified_ledger_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    run = tmp_path / "run"
+    queue = run / "publication-queue.jsonl"
+    rows = [_queue_row(run, epoch) for epoch in (1, 2)]
+    _write_jsonl(queue, rows)
+    args = _args(tmp_path, run, queue, local_retain=1)
+    monkeypatch.setattr(module, "validate_token_file", lambda _path: "TOP-SECRET-TOKEN")
+    monkeypatch.setattr(module, "github_session", lambda _token: object())
+    monkeypatch.setattr(module, "verify_ledger_assets", lambda *_args, **_kwargs: None)
+
+    def fake_publish(_session, entry, _args):
+        return {
+            "format_version": 1,
+            "run_id": entry.run_id,
+            "variant": entry.variant,
+            "stage": entry.stage,
+            "completed_epoch": entry.completed_epoch,
+            "queue_record_sha256": entry.queue_record_sha256,
+            "checkpoint": {
+                "asset_id": 100 + entry.completed_epoch,
+                "asset_name": f"bpdd-screen-epoch-{entry.completed_epoch:04d}.pt",
+                "bytes": entry.checkpoint.stat().st_size,
+                "sha256": entry.checkpoint_sha256.lower(),
+            },
+            "manifest": {
+                "asset_id": 200 + entry.completed_epoch,
+                "asset_name": f"bpdd-screen-epoch-{entry.completed_epoch:04d}.json",
+            },
+            "release_url": "https://example.invalid/releases/bpdd-live",
+            "verified": True,
+        }
+
+    monkeypatch.setattr(module, "publish_entry", fake_publish)
+    assert [record["completed_epoch"] for record in module.sync_once(args)] == [1, 2]
+    assert not Path(rows[0]["checkpoint"]).exists()
+    assert Path(rows[1]["checkpoint"]).is_file()
+
+    monkeypatch.setattr(
+        module,
+        "publish_entry",
+        lambda *_args, **_kwargs: pytest.fail("verified epochs must not be reuploaded"),
+    )
+    assert module.sync_once(args) == []
+
+    pending = _queue_row(run, 3)
+    _write_jsonl(queue, [*rows, pending])
+    Path(pending["checkpoint"]).unlink()
+    with pytest.raises(FileNotFoundError, match="epoch 3"):
+        module.sync_once(args)
+
+
+def test_pruning_retains_latest_verified_epochs_and_never_unpublished(
+    tmp_path: Path
+) -> None:
+    module = _load_module()
+    run = tmp_path / "run"
+    queue = run / "publication-queue.jsonl"
+    rows = [_queue_row(run, epoch) for epoch in range(1, 6)]
+    _write_jsonl(queue, rows)
+    entries = module.load_validated_queue(queue, run)
+
+    removed = module.prune_verified_local_checkpoints(
+        entries,
+        verified_through_epoch=4,
+        local_retain=2,
+    )
+
+    assert removed == [Path(rows[0]["checkpoint"]), Path(rows[1]["checkpoint"])]
+    assert not Path(rows[0]["checkpoint"]).exists()
+    assert not Path(rows[1]["checkpoint"]).exists()
+    assert Path(rows[2]["checkpoint"]).is_file()
+    assert Path(rows[3]["checkpoint"]).is_file()
+    assert Path(rows[4]["checkpoint"]).is_file(), "unpublished epoch must not be pruned"
+
+
+def test_pruning_never_removes_last_or_best_checkpoint(tmp_path: Path) -> None:
+    module = _load_module()
+    run = tmp_path / "run"
+    queue = run / "publication-queue.jsonl"
+    rows = [_queue_row(run, epoch) for epoch in (1, 2, 3)]
+    protected = []
+    for row, name in zip(rows[:2], ("last.pt", "best.pt")):
+        old = Path(row["checkpoint"])
+        replacement = old.with_name(name)
+        old.replace(replacement)
+        row["checkpoint"] = str(replacement.resolve())
+        row["checkpoint_sha256"] = hashlib.sha256(replacement.read_bytes()).hexdigest().upper()
+        protected.append(replacement)
+    _write_jsonl(queue, rows)
+    entries = module.load_validated_queue(queue, run)
+
+    removed = module.prune_verified_local_checkpoints(
+        entries,
+        verified_through_epoch=3,
+        local_retain=1,
+    )
+
+    assert removed == []
+    assert all(path.is_file() for path in protected)
+
+
 def test_changed_queue_or_ledger_history_is_rejected(tmp_path: Path) -> None:
     module = _load_module()
     run = tmp_path / "run"
@@ -390,4 +534,3 @@ def test_retry_status_and_stderr_never_expose_token(
     assert secret not in output.out
     assert secret not in output.err
     assert "[REDACTED]" in status_text
-
