@@ -88,7 +88,7 @@ def run_preflight(*, authority_path: Path, device_name: str) -> dict:
         "ra_alpha": float(combo.ra_glgm.alpha.grad.detach().float().norm()),
         "ra_support": float(combo.ra_glgm.support_head.weight.grad.detach().float().norm()),
         "fdr_distribution": float(
-            combo.fdr.decoder.pre_bbox_head.layers[-1].weight.grad.detach().float().norm()
+            combo.model[-1].dec_bbox_head[0].layers[-1].weight.grad.detach().float().norm()
         ),
     }
     if not math.isfinite(bpdd) or bpdd <= 0.0:
