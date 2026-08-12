@@ -186,10 +186,12 @@ class FDRBPDDIRADetectionModel(FDRBPDDDetectionModel):
             raise ValueError("FDR decoder must consume IRA-P3 plus stock P4/P5")
 
         self.ira_private_seed = int(ira_private_seed)
-        initialize_private_module(
-            self.model[IRA_MODEL_INDEX],
-            private_seed=self.ira_private_seed,
-        )
+        cuda_devices = list(range(torch.cuda.device_count()))
+        with torch.random.fork_rng(devices=cuda_devices, enabled=True):
+            initialize_private_module(
+                self.model[IRA_MODEL_INDEX],
+                private_seed=self.ira_private_seed,
+            )
         with torch.no_grad():
             self.model[IRA_MODEL_INDEX].residual_scale.zero_()
 
