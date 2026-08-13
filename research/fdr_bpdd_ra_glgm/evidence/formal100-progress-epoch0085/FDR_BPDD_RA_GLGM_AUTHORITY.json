@@ -1,0 +1,269 @@
+{
+  "dataset_authority": {
+    "ignore": {
+      "boxes": 11753,
+      "empty_files": 3648,
+      "files": 7019,
+      "nonempty_files": 3371,
+      "sha256": "B59EB704C9225B46D94D6783D0C42F8E63635DBAE832C373181135E77E424085",
+      "splits": {
+        "train": {
+          "boxes": 10343,
+          "empty_files": 3451,
+          "files": 6471,
+          "nonempty_files": 3020
+        },
+        "val": {
+          "boxes": 1410,
+          "empty_files": 197,
+          "files": 548,
+          "nonempty_files": 351
+        }
+      }
+    },
+    "positive": {
+      "file_count": 14038,
+      "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+    },
+    "root": "/home/ubuntu/ra-glgm/data/VisDrone"
+  },
+  "format_version": 1,
+  "gpu_uuid": "GPU-6906ed5f-079f-b24d-e58a-3e5fe0da7d6a",
+  "initial_state": {
+    "fingerprints": {
+      "control": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "fdr": "9DC59D77708FDC06E68626324EDEA21392BA8DEE44E3B6BB9794661B9AADF505",
+      "fdr_public": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "private": "9E3958F8087897CDFC6211743AD925830394823B2B0ED1D88D4E3F701F3CD0BF",
+      "public": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "replaced_control": "44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAAFF8A"
+    },
+    "path": "/home/ubuntu/ra-glgm-v11-full100-b8/authority/paired-initial-state-69c188b.pt",
+    "sha256": "4990B008B267F8D63C3BA6D5E3DBABCFA716CB463C537C561318B29647B222AC"
+  },
+  "manifest_sha256": "93CB4F91BEEFD4B09D067B28B8A318B99B6E491171E64199CFA87A0AC17B5C90",
+  "protocol": {
+    "augmentation": {
+      "close_mosaic": 10,
+      "copy_paste": 0.0,
+      "cutmix": 0.0,
+      "degrees": 0.0,
+      "fliplr": 0.5,
+      "flipud": 0.0,
+      "hsv_h": 0.015,
+      "hsv_s": 0.7,
+      "hsv_v": 0.4,
+      "mixup": 0.0,
+      "mosaic": 1.0,
+      "perspective": 0.0,
+      "scale": 0.5,
+      "shear": 0.0,
+      "translate": 0.1
+    },
+    "components": {
+      "bpdd": {
+        "assignment": "final ordinary stock Hungarian assignment only",
+        "denoising_queries": "excluded",
+        "eps": 1e-06,
+        "margin": 0.02,
+        "parameters": 0,
+        "source_blob": "dd536a7ed68763bfdb570727d0293b04e37bedd2",
+        "source_commit": "848f00cb7a40907e3884885ecd5bbd474450758a",
+        "teacher": "detached reliability-weighted mixture of future decoder layers",
+        "temperature": 0.5,
+        "training_only": true,
+        "weight": 0.5
+      },
+      "fdr": "unchanged cumulative four-edge distribution regression and FGL",
+      "ra_glgm": {
+        "identity_initialization": true,
+        "insertion": "FDR decoder P3 only",
+        "private_input": "P3.detach()",
+        "private_parameters": 813396,
+        "scale_loss_weight": 0.05,
+        "source_commit": "69c188b2717499ac5ad54b5186299d3aaf1351ad",
+        "support_loss_weight": 0.05,
+        "version": "v1.1 hard three-scale gate"
+      }
+    },
+    "dataset": {
+      "classes": 10,
+      "ignore_sidecar": {
+        "boxes": {
+          "train": 10343,
+          "val": 1410
+        },
+        "files": {
+          "train": 6471,
+          "val": 548
+        },
+        "invalid_zero_area_rows_excluded": {
+          "train": 2,
+          "val": 0
+        }
+      },
+      "name": "VisDrone",
+      "screen_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",
+      "screen_train_images": 647,
+      "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB",
+      "train_images": 6471,
+      "val_images": 548
+    },
+    "decision": {
+      "arms": {
+        "A": "historical FDR epoch100, uniformly re-evaluated",
+        "B": "historical FDR+BPDD epoch100, uniformly re-evaluated",
+        "C": "historical FDR+RA-GLGM epoch100, uniformly re-evaluated",
+        "D": "new FDR+BPDD+RA-GLGM epoch100"
+      },
+      "endpoint_positive": [
+        "D epoch100 map50_95 > max(B,C)",
+        "D tail5 map50_95 > both corresponding historical tail5 means",
+        "D AP75 >= max(B,C)",
+        "D AP-tiny >= max(B,C)",
+        "D AP-small >= max(B,C)",
+        "D improves at least 7 of 10 class AP values over A"
+      ],
+      "fallback_labels": {
+        "integration_positive": "D>A but D<=max(B,C); no synergy claim",
+        "negative": "D<=A or engineering/scientific integrity gate fails"
+      },
+      "historical_endpoint_screen": "D map50_95 - max(B,C) >= 0.001",
+      "scientific_scope": "cross-authority endpoint exploration only; synergy requires fresh comparable four-arm interaction contrast D+A>B+C and multi-seed confirmation"
+    },
+    "design": "fdr-bpdd-ra-glgm-v1.1-single-arm-formal100",
+    "device": "0",
+    "engineering_gates": {
+      "all_losses_metrics_gradients_finite": true,
+      "amp_skipped_steps": 0,
+      "bpdd_active_edge_ratio_ever_positive": true,
+      "bpdd_parameter_delta_from_ra": 0,
+      "checkpoint_scope": "local-only",
+      "free_disk_hard_stop_gib": 8,
+      "free_disk_warning_gib": 12,
+      "model_parameters_exact": 33970010,
+      "peak_vram_mib_max": 22528,
+      "publish_pt": false,
+      "ra_private_gradient_each_epoch_positive": true
+    },
+    "evaluation": {
+      "best_checkpoint": "supplemental only",
+      "conf": 0.001,
+      "formal_milestones": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        55,
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100
+      ],
+      "half": false,
+      "imgsz": 640,
+      "max_det": 300,
+      "metrics": [
+        "precision",
+        "recall",
+        "map50",
+        "map75",
+        "map50_95",
+        "ap_tiny",
+        "ap_small",
+        "class_ap_10"
+      ],
+      "nms": false,
+      "official_val_images": 548,
+      "primary_checkpoint": 100,
+      "primary_tail": "epochs 96-100 standard validation mean",
+      "same_locked_evaluator_for_all_historical_checkpoints": true
+    },
+    "evidence_role": "single-arm combination validation against historical checkpoints; BPDD comparisons remain cross-authority until a fresh paired run exists",
+    "loss": "sum(stock RT-DETR and FDR/FGL/pre-box losses) + loss_bpdd + 0.05*loss_ra_support + 0.05*loss_ra_scale",
+    "seed": 0,
+    "training": {
+      "amp": true,
+      "amp_initial_scale": 128.0,
+      "amp_scale": 128.0,
+      "batch": 8,
+      "cache": false,
+      "cos_lr": false,
+      "ddp": false,
+      "deterministic": true,
+      "device": 0,
+      "epochs": {
+        "formal": 100,
+        "smoke": 2
+      },
+      "formal_schedule_epochs": 100,
+      "imgsz": 640,
+      "inherit_checkpoint": false,
+      "internal_oom_retry": false,
+      "last_checkpoint_every_epoch": true,
+      "lightweight_evidence_every_epoch": true,
+      "lr0": 0.01,
+      "lrf": 0.01,
+      "max_det": 300,
+      "milestone_checkpoint_period": {
+        "formal": 5,
+        "smoke": 1
+      },
+      "momentum": 0.937,
+      "nbs": 64,
+      "nms": false,
+      "optimizer": "MuSGD",
+      "pretrained": false,
+      "queries": 300,
+      "scratch": true,
+      "screen_cutoff_epoch": 30,
+      "screen_schedule_epochs": 50,
+      "seeds": [
+        0
+      ],
+      "single_gpu": true,
+      "warmup_bias_lr": 0.0,
+      "warmup_epochs": 3.0,
+      "warmup_momentum": 0.8,
+      "weight_decay": 0.0005,
+      "workers": 8
+    }
+  },
+  "protocol_sha256": "3B82A7C8EDDC252D9B6C20546DC9B3B40388D4A7C7E9CCA516DE5B060840FE6D",
+  "run_identities": {
+    "formal": {
+      "gpu_uuid": "GPU-6906ed5f-079f-b24d-e58a-3e5fe0da7d6a",
+      "protocol_sha256": "3B82A7C8EDDC252D9B6C20546DC9B3B40388D4A7C7E9CCA516DE5B060840FE6D",
+      "run_id": "fdr_bpdd_ra_glgm-formal-seed0-1023444c2347-3b82a7c8eddc",
+      "seed": 0,
+      "source_sha256": "1023444C234709BCEA9374186EEFE9E811CC0A0C2D45373B5045700C682AD734",
+      "stage": "formal",
+      "variant": "fdr_bpdd_ra_glgm"
+    },
+    "smoke": {
+      "gpu_uuid": "GPU-6906ed5f-079f-b24d-e58a-3e5fe0da7d6a",
+      "protocol_sha256": "3B82A7C8EDDC252D9B6C20546DC9B3B40388D4A7C7E9CCA516DE5B060840FE6D",
+      "run_id": "fdr_bpdd_ra_glgm-smoke-seed0-1023444c2347-3b82a7c8eddc",
+      "seed": 0,
+      "source_sha256": "1023444C234709BCEA9374186EEFE9E811CC0A0C2D45373B5045700C682AD734",
+      "stage": "smoke",
+      "variant": "fdr_bpdd_ra_glgm"
+    }
+  },
+  "source": {
+    "git_commit": "5926ac7502ab355b8e50efc4f7af94a16b532de0",
+    "tree_sha256": "2157B9E617B43C7F3F28B77491D7A748EEC4C852F3F1F997B1D14027C7E7E140"
+  },
+  "source_sha256": "1023444C234709BCEA9374186EEFE9E811CC0A0C2D45373B5045700C682AD734"
+}

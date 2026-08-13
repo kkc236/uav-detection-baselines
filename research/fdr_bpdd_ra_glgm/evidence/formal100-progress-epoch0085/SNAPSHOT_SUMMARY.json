@@ -1,0 +1,39 @@
+{
+  "artifact_role": "interim_online_validation_metrics_only",
+  "best_online_map_through_epoch85": {
+    "epoch": 83,
+    "map50_95": 0.28669
+  },
+  "captured_at_utc": "2026-08-13T03:57:14.237131+00:00",
+  "checkpoint_included": false,
+  "claim_boundary": "Interim online validation trajectory. Not an epoch100 endpoint, not a fresh four-arm paired result, and not a significance claim.",
+  "dataset": {
+    "train_images": 6471,
+    "val_images": 548
+  },
+  "epoch85": {
+    "ap50": 0.4783,
+    "ap75": 0.2902104073938563,
+    "f1": 0.5269590371809624,
+    "map50_95": 0.28634,
+    "precision": 0.57098,
+    "recall": 0.48924
+  },
+  "epochs": {
+    "count": 85,
+    "first": 1,
+    "last": 85
+  },
+  "format_version": 1,
+  "identity": {
+    "run_id": "fdr_bpdd_ra_glgm-formal-seed0-1023444c2347-3b82a7c8eddc",
+    "seed": 0,
+    "source_commit": "5926ac7502ab355b8e50efc4f7af94a16b532de0",
+    "variant": "fdr_bpdd_ra_glgm"
+  },
+  "integrity": {
+    "amp_skipped_steps_total": 0,
+    "contiguous_epochs_1_85": true,
+    "finite_metrics": true
+  }
+}

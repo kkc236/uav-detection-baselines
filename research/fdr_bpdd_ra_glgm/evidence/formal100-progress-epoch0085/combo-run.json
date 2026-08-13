@@ -1,0 +1,66 @@
+{
+  "bpdd_parameters": 0,
+  "data": "/home/ubuntu/fdr-bpdd-ra-glgm/runs/_combo-authority/formal-data.yaml",
+  "dataset_authority": {
+    "ignore": {
+      "boxes": 11753,
+      "empty_files": 3648,
+      "files": 7019,
+      "nonempty_files": 3371,
+      "sha256": "B59EB704C9225B46D94D6783D0C42F8E63635DBAE832C373181135E77E424085",
+      "splits": {
+        "train": {
+          "boxes": 10343,
+          "empty_files": 3451,
+          "files": 6471,
+          "nonempty_files": 3020
+        },
+        "val": {
+          "boxes": 1410,
+          "empty_files": 197,
+          "files": 548,
+          "nonempty_files": 351
+        }
+      }
+    },
+    "positive": {
+      "file_count": 14038,
+      "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+    },
+    "root": "/home/ubuntu/ra-glgm/data/VisDrone"
+  },
+  "format_version": 1,
+  "gpu_uuid": "GPU-6906ed5f-079f-b24d-e58a-3e5fe0da7d6a",
+  "initial_state": {
+    "fingerprints": {
+      "control": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "fdr": "9DC59D77708FDC06E68626324EDEA21392BA8DEE44E3B6BB9794661B9AADF505",
+      "fdr_public": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "private": "9E3958F8087897CDFC6211743AD925830394823B2B0ED1D88D4E3F701F3CD0BF",
+      "public": "A9C81EC03F3AB0E4F6E5AA355CDCF0A8153271AEB5AA2560968D11410EC89C1F",
+      "replaced_control": "44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAAFF8A"
+    },
+    "path": "/home/ubuntu/ra-glgm-v11-full100-b8/authority/paired-initial-state-69c188b.pt",
+    "sha256": "4990B008B267F8D63C3BA6D5E3DBABCFA716CB463C537C561318B29647B222AC"
+  },
+  "initialization_mode": "fresh_seed0_scratch",
+  "milestone_period": 5,
+  "model_parameters": 33970010,
+  "parent_checkpoint": null,
+  "protocol_sha256": "3B82A7C8EDDC252D9B6C20546DC9B3B40388D4A7C7E9CCA516DE5B060840FE6D",
+  "rolling_last_every_epoch": true,
+  "run_identity": {
+    "gpu_uuid": "GPU-6906ed5f-079f-b24d-e58a-3e5fe0da7d6a",
+    "protocol_sha256": "3B82A7C8EDDC252D9B6C20546DC9B3B40388D4A7C7E9CCA516DE5B060840FE6D",
+    "run_id": "fdr_bpdd_ra_glgm-formal-seed0-1023444c2347-3b82a7c8eddc",
+    "seed": 0,
+    "source_sha256": "1023444C234709BCEA9374186EEFE9E811CC0A0C2D45373B5045700C682AD734",
+    "stage": "formal",
+    "variant": "fdr_bpdd_ra_glgm"
+  },
+  "schedule_epochs": 100,
+  "source": {
+    "git_commit": "5926ac7502ab355b8e50efc4f7af94a16b532de0",
+    "tree_sha256": "2157B9E617B43C7F3F28B77491D7A748EEC4C852F3F1F997B1D14027C7E7E140"
+  }
+}
