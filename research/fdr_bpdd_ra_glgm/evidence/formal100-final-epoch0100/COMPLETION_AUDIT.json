@@ -1,0 +1,34 @@
+{
+  "all_epoch_bpdd_losses_positive": true,
+  "all_epoch_fdr_gradients_positive": true,
+  "all_epoch_ra_gradients_positive": true,
+  "all_numeric_evidence_finite": true,
+  "amp_skipped_steps_total": 0,
+  "checkpoint": {
+    "authoritative_local_files": [
+      "committed.pt",
+      "epoch99.pt"
+    ],
+    "bytes": 207044096,
+    "completed_epoch": 100,
+    "last_pt_note": "Framework-stripped inference copy; not the recovery checkpoint bound by the epoch100 receipt.",
+    "published": false,
+    "raw_zero_based_epoch": 99,
+    "sha256": "F066B23B2B6679BD7FFBD95CA151859A947F38F658F7C03B057367D3A101F986",
+    "stripped_last_pt_sha256": "B9D936C8AEBB78B0D364D95507650B918262E169EC85FCD0F81B88C85C041F54"
+  },
+  "epochs": {
+    "contiguous": true,
+    "count": 100,
+    "first": 1,
+    "last": 100
+  },
+  "format_version": 1,
+  "optimizer_evidence_rows": 10556,
+  "queue": {
+    "contiguous": true,
+    "count": 100
+  },
+  "residual_reproducibility_risk": "CUDA grid_sampler_2d_backward_cuda emitted a deterministic-algorithm warning once per epoch; the run is protocol-controlled but not guaranteed bitwise reproducible.",
+  "status": "completed_and_engineering_valid"
+}

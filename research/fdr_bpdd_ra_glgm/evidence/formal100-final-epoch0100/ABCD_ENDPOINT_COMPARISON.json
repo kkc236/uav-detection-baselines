@@ -1,0 +1,127 @@
+{
+  "arms": {
+    "A": {
+      "best_online": {
+        "ap50": 0.48473,
+        "ap75": 0.2936147255276428,
+        "epoch": 92,
+        "f1": 0.5272892210804186,
+        "map50_95": 0.29078,
+        "precision": 0.57064,
+        "recall": 0.49006
+      },
+      "epoch100_online": {
+        "ap50": 0.4848,
+        "ap75": 0.29272978946146405,
+        "epoch": 100,
+        "f1": 0.5280405359565806,
+        "map50_95": 0.28971,
+        "precision": 0.56778,
+        "recall": 0.4935
+      },
+      "label": "FDR",
+      "source": "origin/training-results:results/fdr-formal-d97e1eb7-seed0-fdr/fdr-epochs.jsonl",
+      "tail5_online": {
+        "map": 0.289874,
+        "map50": 0.48477800000000004,
+        "map75": 0.2932387440950932,
+        "precision": 0.573876,
+        "recall": 0.490852
+      }
+    },
+    "B": {
+      "epoch100_locked_independent": {
+        "ap50": 0.4864074913692349,
+        "ap75": 0.29809564823246976,
+        "epoch": 100,
+        "f1": 0.5298252895497555,
+        "map50_95": 0.29225786956881444,
+        "precision": 0.5706336342276676,
+        "recall": 0.494464137092214
+      },
+      "label": "FDR+BPDD",
+      "source": "GitHub Release bpdd-formal-848f00cb-live independent exact-final-EMA evaluation",
+      "tail5_note": "Per-epoch release receipts contain checkpoint identity but no metrics; not inferred.",
+      "tail5_online": null
+    },
+    "C": {
+      "best_online": {
+        "ap50": 0.47909,
+        "ap75": 0.2916791163407286,
+        "epoch": 92,
+        "f1": 0.5225727844875135,
+        "map50_95": 0.28777,
+        "precision": 0.56677,
+        "recall": 0.48477
+      },
+      "epoch100_online": {
+        "ap50": 0.47882,
+        "ap75": 0.2896601526894328,
+        "epoch": 100,
+        "f1": 0.5221977313978045,
+        "map50_95": 0.28674,
+        "precision": 0.56796,
+        "recall": 0.48326
+      },
+      "label": "FDR+RA-GLGM v1.1",
+      "source": "historical RA Full100 authority 69c188b",
+      "tail5_online": {
+        "map": 0.28667,
+        "map50": 0.478366,
+        "map75": 0.2896404347448488,
+        "precision": 0.5630040000000001,
+        "recall": 0.484274
+      }
+    },
+    "D": {
+      "best_online": {
+        "ap50": 0.48057,
+        "ap75": 0.291376710213166,
+        "epoch": 89,
+        "f1": 0.5292158714960276,
+        "map50_95": 0.28733,
+        "precision": 0.58249,
+        "recall": 0.48487
+      },
+      "epoch100_online": {
+        "ap50": 0.47932,
+        "ap75": 0.2888139298340664,
+        "epoch": 100,
+        "f1": 0.5273474109169689,
+        "map50_95": 0.28555,
+        "precision": 0.57379,
+        "recall": 0.48786
+      },
+      "label": "FDR+BPDD+RA-GLGM v1.1",
+      "source": "current Formal100 5926ac7",
+      "tail5_online": {
+        "map": 0.286062,
+        "map50": 0.480248,
+        "map75": 0.2891020141199796,
+        "precision": 0.576484,
+        "recall": 0.48757799999999996
+      }
+    }
+  },
+  "comparison_role": "cross-authority_endpoint_reference",
+  "decision": {
+    "D_above_A": false,
+    "D_above_B": false,
+    "D_above_C": false,
+    "preregistered_endpoint_pass": false,
+    "reason": "D epoch100 and D tail5 mAP do not exceed the stronger historical endpoints."
+  },
+  "epoch100_map_deltas_raw": {
+    "D_minus_A_online": -0.004159999999999997,
+    "D_minus_B_mixed_endpoint": -0.006707869568814417,
+    "D_minus_C_online": -0.0011899999999999689
+  },
+  "format_version": 1,
+  "limitations": [
+    "A/B and C/D do not share one initial-state authority.",
+    "B epoch100 is a locked independent exact-final-EMA evaluation; A/C/D table endpoints are their recorded online validation endpoints.",
+    "Only seed0 exists for D; no significance or interaction estimate is available.",
+    "Synergy requires a fresh four-arm test of D+A>B+C with multiple seeds."
+  ],
+  "metric_scale": "raw [0,1]"
+}

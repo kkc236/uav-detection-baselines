@@ -1,0 +1,7 @@
+{
+  "bytes": 207044096,
+  "checkpoint": "/home/ubuntu/fdr-bpdd-ra-glgm/runs/formal-seed0-fdr_bpdd_ra_glgm-v1.1/weights/committed.pt",
+  "completed_epoch": 100,
+  "run_id": "fdr_bpdd_ra_glgm-formal-seed0-1023444c2347-3b82a7c8eddc",
+  "sha256": "F066B23B2B6679BD7FFBD95CA151859A947F38F658F7C03B057367D3A101F986"
+}

@@ -1,0 +1,46 @@
+{
+  "best_online_supplemental_only": {
+    "ap50": 0.48057,
+    "ap75": 0.291376710213166,
+    "epoch": 89,
+    "f1": 0.5292158714960276,
+    "map50_95": 0.28733,
+    "precision": 0.58249,
+    "recall": 0.48487
+  },
+  "captured_at_utc": "2026-08-13T16:17:16.351650+00:00",
+  "claim_boundary": "D is one fresh seed0 arm. A/B use historical FDR authority while C/D use the RA Full100 initial-state authority. Endpoint comparisons are cross-authority references, not a fresh four-arm interaction test, synergy proof, or statistical-significance claim.",
+  "dataset": {
+    "name": "VisDrone",
+    "official_val_images": 548,
+    "train_images": 6471
+  },
+  "engineering_status": "pass",
+  "epoch100_online": {
+    "ap50": 0.47932,
+    "ap75": 0.2888139298340664,
+    "epoch": 100,
+    "f1": 0.5273474109169689,
+    "map50_95": 0.28555,
+    "precision": 0.57379,
+    "recall": 0.48786
+  },
+  "format_version": 1,
+  "model": "RT-DETR-L + FDR + BPDD + RA-GLGM v1.1",
+  "protocol": {
+    "batch": 8,
+    "epochs": 100,
+    "imgsz": 640,
+    "pretrained": false,
+    "seed": 0
+  },
+  "scientific_status": "negative_for_preregistered_combination_endpoint",
+  "tail5_online_mean_epochs96_100": {
+    "ap50": 0.480248,
+    "ap75": 0.2891020141199796,
+    "f1_from_mean_precision_recall": 0.5283168006225201,
+    "map50_95": 0.286062,
+    "precision": 0.576484,
+    "recall": 0.48757799999999996
+  }
+}
