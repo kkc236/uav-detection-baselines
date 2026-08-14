@@ -25,6 +25,7 @@ BPDD_PR_IRA_MODEL_CFG = (
 )
 PR_IRA_MODEL_INDEX = 22
 PR_IRA_STATE_PREFIX = f"model.{PR_IRA_MODEL_INDEX}."
+PR_IRA_PRIVATE_LR_MULTIPLIER = 0.1
 _MODEL_KEY = re.compile(r"^model\.(\d+)\.(.+)$")
 
 
@@ -439,11 +440,111 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
 class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
     """FDR+BPDD trainer with strict combined graph construction and resume."""
 
+    def build_optimizer(
+        self,
+        model: nn.Module,
+        name: str = "MuSGD",
+        lr: float = 0.01,
+        momentum: float = 0.937,
+        decay: float = 0.0005,
+        iterations: float = 1e5,
+    ) -> torch.optim.Optimizer:
+        """Preserve stock groups while applying the frozen private LR ratio."""
+
+        optimizer = super().build_optimizer(
+            model,
+            name=name,
+            lr=lr,
+            momentum=momentum,
+            decay=decay,
+            iterations=iterations,
+        )
+        combined = unwrap_model(model)
+        if not isinstance(combined, FDRBPDDPRIRADetectionModel):
+            raise TypeError("optimizer requires the combined PR-IRA model")
+        private_ids = {
+            id(parameter)
+            for parameter in combined.pr_ira_private_parameters()
+            if parameter.requires_grad
+        }
+        if not private_ids:
+            raise RuntimeError("PR-IRA private optimizer group is empty")
+
+        rebuilt: list[dict[str, Any]] = []
+        seen: list[int] = []
+        private_seen: set[int] = set()
+        for original in optimizer.param_groups:
+            public_parameters: list[nn.Parameter] = []
+            private_parameters: list[nn.Parameter] = []
+            for parameter in original["params"]:
+                identifier = id(parameter)
+                seen.append(identifier)
+                if identifier in private_ids:
+                    private_parameters.append(parameter)
+                    private_seen.add(identifier)
+                else:
+                    public_parameters.append(parameter)
+
+            if public_parameters:
+                public_group = dict(original)
+                public_group["params"] = public_parameters
+                public_group.pop("pr_ira_private", None)
+                rebuilt.append(public_group)
+            if private_parameters:
+                private_group = dict(original)
+                private_group["params"] = private_parameters
+                private_group["lr"] = (
+                    float(original["lr"]) * PR_IRA_PRIVATE_LR_MULTIPLIER
+                )
+                if "initial_lr" in private_group:
+                    private_group["initial_lr"] = (
+                        float(original["initial_lr"])
+                        * PR_IRA_PRIVATE_LR_MULTIPLIER
+                    )
+                private_group["pr_ira_private"] = True
+                rebuilt.append(private_group)
+
+        if len(seen) != len(set(seen)):
+            raise RuntimeError("optimizer contains duplicate parameters")
+        if private_seen != private_ids:
+            raise RuntimeError("optimizer omitted PR-IRA private parameters")
+        optimizer.param_groups[:] = rebuilt
+        return optimizer
+
     def _firewall_model(self) -> FDRBPDDPRIRADetectionModel:
         model = unwrap_model(self.model)
         if not isinstance(model, FDRBPDDPRIRADetectionModel):
             raise TypeError("trainer requires the combined FDR+BPDD+PR-IRA model")
         return model
+
+    def _model_train(self) -> None:
+        """Apply the immutable relative-progress schedule once per epoch."""
+
+        super()._model_train()
+        self._firewall_model().pr_ira.set_training_progress(
+            int(self.epoch) + 1,
+            int(self.epochs),
+        )
+
+    def suppress_pr_ira_identity_gradients(self) -> bool:
+        """Prevent momentum or decay from moving private state while closed."""
+
+        model = self._firewall_model()
+        if model.pr_ira.open_ratio != 0.0:
+            return False
+        for parameter in model.pr_ira_private_parameters():
+            parameter.grad = None
+        return True
+
+    def _clear_memory(self, threshold: float | None = None) -> None:
+        """Clear pending firewall state on normal cleanup and OOM retries."""
+
+        candidate = getattr(self, "model", None)
+        if candidate is not None:
+            unwrapped = unwrap_model(candidate)
+            if isinstance(unwrapped, FDRBPDDPRIRADetectionModel):
+                unwrapped.clear_pr_ira_firewall_buffer()
+        super()._clear_memory(threshold)
 
     def reset_pr_ira_firewall_state(self) -> None:
         """Clear gradients and pending private contributions before a retry."""
@@ -459,6 +560,7 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         try:
             self.scaler.unscale_(self.optimizer)
             model.subtract_pr_ira_firewall_buffer()
+            self.suppress_pr_ira_identity_gradients()
             norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 max_norm=10.0,
@@ -540,6 +642,7 @@ __all__ = [
     "BPDD_PR_IRA_MODEL_CFG",
     "FDRBPDDPRIRADetectionModel",
     "FDRBPDDPRIRATrainer",
+    "PR_IRA_PRIVATE_LR_MULTIPLIER",
     "load_exact_fdr_bpdd_pr_ira_resume_state",
     "load_fdr_bpdd_pr_ira_initial_state",
     "remap_bpdd_pr_ira_shared_key",
