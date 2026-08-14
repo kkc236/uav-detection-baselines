@@ -16,6 +16,20 @@ def _state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     }
 
 
+def _assert_floating_bits_equal(
+    actual: torch.Tensor, expected: torch.Tensor
+) -> None:
+    integer_dtype = {
+        torch.float16: torch.int16,
+        torch.bfloat16: torch.int16,
+        torch.float32: torch.int32,
+        torch.float64: torch.int64,
+    }[expected.dtype]
+    assert actual.dtype == expected.dtype
+    assert actual.shape == expected.shape
+    assert torch.equal(actual.view(integer_dtype), expected.view(integer_dtype))
+
+
 @pytest.mark.parametrize(
     ("epoch", "epochs", "expected"),
     [
@@ -95,6 +109,13 @@ def test_pr_ira_rejects_invalid_scalar_configuration(
         PRIRA(8, **{keyword: value})  # type: ignore[arg-type]
 
 
+def test_pr_ira_accepts_alpha_max_and_epsilon_positionally() -> None:
+    module = PRIRA(8, 0.15, 1e-5)
+
+    assert module.alpha_max == 0.15
+    assert module.epsilon == 1e-5
+
+
 def test_pr_ira_defaults_and_local_gate_architecture_are_frozen() -> None:
     module = PRIRA(8)
 
@@ -144,6 +165,110 @@ def test_pr_ira_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
         not value.requires_grad and value.grad_fn is None
         for value in diagnostics.values()
     )
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+)
+def test_zero_amplitude_is_bit_exact_for_signed_zero_and_extreme_values(
+    dtype: torch.dtype,
+) -> None:
+    module = PRIRA(2).to(dtype=dtype)
+    module.set_training_progress(30, 30)
+    finfo = torch.finfo(dtype)
+    x = torch.tensor(
+        [
+            -0.0,
+            0.0,
+            finfo.max,
+            -finfo.max,
+            finfo.tiny,
+            -finfo.tiny,
+            1.0,
+            -1.0,
+        ],
+        dtype=dtype,
+    ).reshape(1, 2, 2, 2)
+
+    output = module(x)
+
+    _assert_floating_bits_equal(output, x)
+    assert all(
+        torch.isfinite(value).item() and not value.requires_grad
+        for value in module.diagnostics.values()
+    )
+    assert module.diagnostics["effective_amplitude"].item() == 0.0
+    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+
+
+def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() -> None:
+    module = PRIRA(4).double()
+    module.set_training_progress(30, 30)
+    x = torch.randn(2, 4, 5, 3, dtype=torch.float64, requires_grad=True)
+    probe = torch.randn_like(x)
+
+    with torch.no_grad():
+        d_raw = module.local_blocks(x) - x
+        d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+        stock_rms = x.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+        residual = d_raw / (d_raw_rms + module.epsilon) * stock_rms
+        magnitude = d_raw.abs()
+        channel_gate = torch.sigmoid(module.channel_gate(magnitude))
+        spatial_gate = torch.sigmoid(
+            module.spatial_gate(
+                torch.cat(
+                    (
+                        magnitude.mean(dim=1, keepdim=True),
+                        magnitude.amax(dim=1, keepdim=True),
+                    ),
+                    dim=1,
+                )
+            )
+        )
+        expected_amplitude_gradient = (
+            module.alpha_max * (probe * channel_gate * spatial_gate * residual).sum()
+        )
+
+    output = module(x)
+    (output * probe).sum().backward()
+
+    _assert_floating_bits_equal(output, x)
+    assert module.amplitude.grad is not None
+    assert torch.isfinite(module.amplitude.grad)
+    assert module.amplitude.grad.item() != 0.0
+    torch.testing.assert_close(
+        module.amplitude.grad,
+        expected_amplitude_gradient,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+)
+def test_closed_schedule_fast_path_is_bit_exact_for_extreme_values(
+    dtype: torch.dtype,
+) -> None:
+    module = PRIRA(2).to(dtype=dtype)
+    module.set_training_progress(3, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.75)
+    finfo = torch.finfo(dtype)
+    x = torch.tensor(
+        [-0.0, 0.0, finfo.max, -finfo.max, 1.0, -1.0, finfo.tiny, -finfo.tiny],
+        dtype=dtype,
+    ).reshape(1, 2, 2, 2)
+
+    output = module(x)
+
+    _assert_floating_bits_equal(output, x)
+    assert all(
+        torch.isfinite(value).item() and not value.requires_grad
+        for value in module.diagnostics.values()
+    )
+    assert module.diagnostics["effective_amplitude"].item() == 0.0
+    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
 
 
 def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:

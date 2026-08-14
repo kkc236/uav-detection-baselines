@@ -98,6 +98,23 @@ class _LocalDepthwiseResidualBlock(nn.Module):
         return x + self.pointwise(self.activation(self.depthwise(x)))
 
 
+class _IdentityForwardResidualBackward(torch.autograd.Function):
+    """Return the identity bit-for-bit while retaining residual-path gradients."""
+
+    @staticmethod
+    def forward(x: Tensor, increment: Tensor) -> Tensor:
+        return x.clone(memory_format=torch.preserve_format)
+
+    @staticmethod
+    def setup_context(ctx: object, inputs: tuple[Tensor, Tensor], output: Tensor) -> None:
+        del ctx, inputs, output
+
+    @staticmethod
+    def backward(ctx: object, grad_output: Tensor) -> tuple[Tensor, Tensor]:
+        del ctx
+        return grad_output, grad_output
+
+
 class PRIRA(nn.Module):
     """Protected local residual adapter for floating BCHW feature maps."""
 
@@ -112,7 +129,6 @@ class PRIRA(nn.Module):
         self,
         channels: int,
         alpha_max: float = 0.20,
-        *,
         epsilon: float = 1e-6,
     ) -> None:
         super().__init__()
@@ -197,8 +213,17 @@ class PRIRA(nn.Module):
         ratio = relative_open_ratio(epoch, epochs)
         self._open_ratio.fill_(ratio)
 
+    def _set_inactive_diagnostics(self, x: Tensor) -> None:
+        zero = x.new_zeros(())
+        self._diagnostics = {
+            name: zero.clone() for name in self._DIAGNOSTIC_NAMES
+        }
+
     def forward(self, x: Tensor) -> Tensor:
         _validate_feature(x, self.channels)
+        if self._open_ratio.item() == 0.0:
+            self._set_inactive_diagnostics(x)
+            return x
 
         d_raw = self.local_blocks(x) - x
         d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
@@ -226,8 +251,20 @@ class PRIRA(nn.Module):
         increment = (
             effective_amplitude * channel_gate * spatial_gate * residual
         )
-        output = x + increment
+        if effective_amplitude.detach().item() == 0.0:
+            output = _IdentityForwardResidualBackward.apply(x, increment)
+            finite_gate = torch.nan_to_num(
+                gate.detach(), nan=0.0, posinf=1.0, neginf=0.0
+            )
+            self._diagnostics = {
+                "effective_amplitude": effective_amplitude.detach(),
+                "gate_mean": finite_gate.mean(),
+                "gate_max": finite_gate.amax(),
+                "residual_rms_ratio": x.new_zeros(()),
+            }
+            return output
 
+        output = x + increment
         stock_global_rms = x.square().mean().sqrt().detach()
         increment_rms = increment.square().mean().sqrt()
         self._diagnostics = {
