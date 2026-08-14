@@ -64,6 +64,12 @@ def _validate_feature(x: Tensor, channels: int) -> None:
         raise ValueError("PRIRA input must have non-empty batch and spatial dimensions")
 
 
+def _promote_for_rms(x: Tensor) -> Tensor:
+    if x.dtype in (torch.float16, torch.bfloat16):
+        return x.float()
+    return x
+
+
 def _construction_cuda_devices() -> list[int]:
     """Return CUDA RNG devices that module construction could consume."""
 
@@ -129,6 +135,7 @@ class PRIRA(nn.Module):
         self,
         channels: int,
         alpha_max: float = 0.20,
+        *,
         epsilon: float = 1e-6,
     ) -> None:
         super().__init__()
@@ -226,11 +233,23 @@ class PRIRA(nn.Module):
             return x
 
         d_raw = self.local_blocks(x) - x
-        d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
-        stock_rms = (
-            x.square().mean(dim=(-2, -1), keepdim=True).sqrt().detach()
+        d_raw_for_rms = _promote_for_rms(d_raw)
+        x_for_rms = _promote_for_rms(x)
+        d_raw_rms = (
+            d_raw_for_rms.square().mean(dim=(-2, -1), keepdim=True).sqrt()
         )
-        residual = d_raw / (d_raw_rms + self.epsilon) * stock_rms
+        stock_rms = (
+            x_for_rms.square()
+            .mean(dim=(-2, -1), keepdim=True)
+            .sqrt()
+            .detach()
+        )
+        residual = (
+            d_raw_for_rms / (d_raw_rms + self.epsilon) * stock_rms
+        ).to(
+            dtype=x.dtype,
+            device=x.device,
+        )
 
         magnitude = d_raw.abs()
         channel_gate = torch.sigmoid(self.channel_gate(magnitude))
@@ -253,20 +272,17 @@ class PRIRA(nn.Module):
         )
         if effective_amplitude.detach().item() == 0.0:
             output = _IdentityForwardResidualBackward.apply(x, increment)
-            finite_gate = torch.nan_to_num(
-                gate.detach(), nan=0.0, posinf=1.0, neginf=0.0
-            )
             self._diagnostics = {
                 "effective_amplitude": effective_amplitude.detach(),
-                "gate_mean": finite_gate.mean(),
-                "gate_max": finite_gate.amax(),
+                "gate_mean": gate.mean().detach(),
+                "gate_max": gate.amax().detach(),
                 "residual_rms_ratio": x.new_zeros(()),
             }
             return output
 
         output = x + increment
-        stock_global_rms = x.square().mean().sqrt().detach()
-        increment_rms = increment.square().mean().sqrt()
+        stock_global_rms = x_for_rms.square().mean().sqrt().detach()
+        increment_rms = _promote_for_rms(increment).square().mean().sqrt()
         self._diagnostics = {
             "effective_amplitude": effective_amplitude.detach(),
             "gate_mean": gate.mean().detach(),

@@ -109,11 +109,13 @@ def test_pr_ira_rejects_invalid_scalar_configuration(
         PRIRA(8, **{keyword: value})  # type: ignore[arg-type]
 
 
-def test_pr_ira_accepts_alpha_max_and_epsilon_positionally() -> None:
-    module = PRIRA(8, 0.15, 1e-5)
+def test_pr_ira_keeps_epsilon_keyword_only() -> None:
+    module = PRIRA(8, 0.15, epsilon=1e-5)
 
     assert module.alpha_max == 0.15
     assert module.epsilon == 1e-5
+    with pytest.raises(TypeError):
+        PRIRA(8, 0.15, 1e-5)  # type: ignore[misc]
 
 
 def test_pr_ira_defaults_and_local_gate_architecture_are_frozen() -> None:
@@ -194,7 +196,7 @@ def test_zero_amplitude_is_bit_exact_for_signed_zero_and_extreme_values(
 
     _assert_floating_bits_equal(output, x)
     assert all(
-        torch.isfinite(value).item() and not value.requires_grad
+        not value.requires_grad and value.grad_fn is None
         for value in module.diagnostics.values()
     )
     assert module.diagnostics["effective_amplitude"].item() == 0.0
@@ -244,6 +246,23 @@ def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() 
     )
 
 
+def test_zero_amplitude_diagnostics_do_not_hide_nonfinite_gates() -> None:
+    module = PRIRA(2)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        assert module.spatial_gate.bias is not None
+        module.spatial_gate.bias.fill_(float("nan"))
+    x = torch.randn(1, 2, 3, 3)
+
+    output = module(x)
+
+    _assert_floating_bits_equal(output, x)
+    assert torch.isnan(module.diagnostics["gate_mean"])
+    assert torch.isnan(module.diagnostics["gate_max"])
+    assert module.diagnostics["effective_amplitude"].item() == 0.0
+    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+
+
 @pytest.mark.parametrize(
     "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
 )
@@ -269,6 +288,34 @@ def test_closed_schedule_fast_path_is_bit_exact_for_extreme_values(
     )
     assert module.diagnostics["effective_amplitude"].item() == 0.0
     assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_full_open_nonzero_amplitude_uses_finite_promoted_rms(
+    dtype: torch.dtype,
+) -> None:
+    module = PRIRA(4).to(dtype=dtype, device="cpu")
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.7)
+    x = torch.full((2, 4, 6, 5), 300.0, dtype=dtype, device="cpu")
+
+    output = module(x)
+
+    assert output.dtype == dtype
+    assert output.device == x.device
+    assert torch.isfinite(output).all()
+    assert not torch.equal(output, x)
+    assert all(
+        torch.isfinite(value).item()
+        and not value.requires_grad
+        and value.grad_fn is None
+        for value in module.diagnostics.values()
+    )
+    assert 0.0 < module.diagnostics["residual_rms_ratio"].item()
+    assert module.diagnostics["residual_rms_ratio"].item() <= (
+        module.alpha_max + 1e-5
+    )
 
 
 def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
