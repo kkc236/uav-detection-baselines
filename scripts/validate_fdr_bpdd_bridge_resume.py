@@ -254,6 +254,10 @@ def validate_bridge_run(
         raise ValueError(
             "bridge optimizer evidence does not cover each committed epoch"
         )
+    if completed == STAGE_LIMITS[stage] and not any(
+        float(row["bpdd_active_edge_ratio"]) > 0.0 for row in evidence
+    ):
+        raise ValueError("completed bridge stage never activated a BPDD edge")
     return {
         "format_version": 1,
         "decision": "complete" if completed == STAGE_LIMITS[stage] else "resume",
