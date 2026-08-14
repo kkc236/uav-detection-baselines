@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import math
+
+import pytest
+import torch
+from torch import nn
+
+from src.pr_ira import PRIRA, relative_open_ratio
+
+
+def _state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        name: tensor.detach().clone()
+        for name, tensor in module.state_dict().items()
+    }
+
+
+@pytest.mark.parametrize(
+    ("epoch", "epochs", "expected"),
+    [
+        (1, 30, 0.0),
+        (3, 30, 0.0),
+        (4, 30, 1.0 / 7.0),
+        (9, 30, 6.0 / 7.0),
+        (10, 30, 1.0),
+        (30, 30, 1.0),
+        (1, 100, 0.0),
+        (10, 100, 0.0),
+        (11, 100, 1.0 / 21.0),
+        (30, 100, 20.0 / 21.0),
+        (31, 100, 1.0),
+        (100, 100, 1.0),
+    ],
+)
+def test_relative_open_ratio_uses_exact_integer_milestones(
+    epoch: int, epochs: int, expected: float
+) -> None:
+    assert relative_open_ratio(epoch, epochs) == pytest.approx(expected)
+
+
+def test_relative_open_ratio_does_not_round_large_integer_milestones() -> None:
+    epochs = 9_999_999_999_999_981
+    exact_identity_end = (epochs + 9) // 10
+
+    assert relative_open_ratio(exact_identity_end, epochs) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("epoch", "epochs", "error"),
+    [
+        (True, 30, TypeError),
+        (1.0, 30, TypeError),
+        (1, False, TypeError),
+        (1, 30.0, TypeError),
+        (0, 30, ValueError),
+        (-1, 30, ValueError),
+        (31, 30, ValueError),
+        (1, 0, ValueError),
+        (1, -1, ValueError),
+    ],
+)
+def test_relative_open_ratio_rejects_invalid_progress(
+    epoch: object, epochs: object, error: type[Exception]
+) -> None:
+    with pytest.raises(error, match="epoch"):
+        relative_open_ratio(epoch, epochs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("channels", [0, -1, 1.5, True, "8"])
+def test_pr_ira_rejects_invalid_channels(channels: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="channels"):
+        PRIRA(channels)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("alpha_max", 0.0),
+        ("alpha_max", -0.1),
+        ("alpha_max", float("inf")),
+        ("alpha_max", float("nan")),
+        ("alpha_max", True),
+        ("epsilon", 0.0),
+        ("epsilon", -1e-6),
+        ("epsilon", float("inf")),
+        ("epsilon", float("nan")),
+        ("epsilon", False),
+    ],
+)
+def test_pr_ira_rejects_invalid_scalar_configuration(
+    keyword: str, value: object
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=keyword):
+        PRIRA(8, **{keyword: value})  # type: ignore[arg-type]
+
+
+def test_pr_ira_defaults_and_local_gate_architecture_are_frozen() -> None:
+    module = PRIRA(8)
+
+    assert module.channels == 8
+    assert module.alpha_max == 0.20
+    assert module.epsilon == 1e-6
+    assert module.amplitude.ndim == 0
+    assert module.amplitude.item() == 0.0
+    assert len(module.local_blocks) == 2
+    for block in module.local_blocks:
+        assert block.depthwise.in_channels == 8
+        assert block.depthwise.out_channels == 8
+        assert block.depthwise.groups == 8
+
+    channel_final = module.channel_gate[-1]
+    assert isinstance(channel_final, nn.Conv2d)
+    assert torch.count_nonzero(channel_final.weight) == 0
+    assert channel_final.bias is not None
+    assert torch.count_nonzero(channel_final.bias) == 0
+    assert isinstance(module.spatial_gate, nn.Conv2d)
+    assert torch.count_nonzero(module.spatial_gate.weight) == 0
+    assert module.spatial_gate.bias is not None
+    assert torch.count_nonzero(module.spatial_gate.bias) == 0
+
+
+def test_pr_ira_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
+    module = PRIRA(8)
+    module.set_training_progress(30, 30)
+    x = torch.randn(2, 8, 9, 7)
+
+    output = module(x)
+
+    assert output.shape == x.shape
+    torch.testing.assert_close(output, x, rtol=0, atol=0)
+    diagnostics = module.diagnostics
+    assert set(diagnostics) == {
+        "effective_amplitude",
+        "gate_mean",
+        "gate_max",
+        "residual_rms_ratio",
+    }
+    assert diagnostics["effective_amplitude"].item() == 0.0
+    assert diagnostics["gate_mean"].item() == pytest.approx(0.25)
+    assert diagnostics["gate_max"].item() == pytest.approx(0.25)
+    assert diagnostics["residual_rms_ratio"].item() == 0.0
+    assert all(
+        not value.requires_grad and value.grad_fn is None
+        for value in diagnostics.values()
+    )
+
+
+def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
+    module = PRIRA(8).double()
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.7)
+    x = torch.randn(2, 8, 6, 5, dtype=torch.float64)
+
+    output = module(x)
+
+    d_raw = module.local_blocks(x) - x
+    d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+    x_rms = x.square().mean(dim=(-2, -1), keepdim=True).sqrt().detach()
+    residual = d_raw / (d_raw_rms + module.epsilon) * x_rms
+    magnitude = d_raw.abs()
+    channel_gate = torch.sigmoid(module.channel_gate(magnitude))
+    spatial_summary = torch.cat(
+        (
+            magnitude.mean(dim=1, keepdim=True),
+            magnitude.amax(dim=1, keepdim=True),
+        ),
+        dim=1,
+    )
+    spatial_gate = torch.sigmoid(module.spatial_gate(spatial_summary))
+    effective_amplitude = module.alpha_max * torch.tanh(module.amplitude)
+    expected = x + effective_amplitude * channel_gate * spatial_gate * residual
+
+    torch.testing.assert_close(output, expected, rtol=0, atol=0)
+    diagnostics = module.diagnostics
+    assert diagnostics["effective_amplitude"].item() == pytest.approx(
+        module.alpha_max * math.tanh(0.7)
+    )
+    assert diagnostics["gate_mean"].item() == pytest.approx(0.25)
+    assert diagnostics["gate_max"].item() == pytest.approx(0.25)
+    assert 0.0 < diagnostics["residual_rms_ratio"].item()
+    assert diagnostics["residual_rms_ratio"].item() <= module.alpha_max + 1e-5
+
+
+def test_pr_ira_detaches_stock_rms_rescaling_from_input_gradient() -> None:
+    module = PRIRA(4).double()
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.9)
+
+    actual_input = torch.randn(2, 4, 5, 6, dtype=torch.float64, requires_grad=True)
+    actual_loss = module(actual_input).square().mean()
+    (actual_gradient,) = torch.autograd.grad(actual_loss, actual_input)
+
+    expected_input = actual_input.detach().clone().requires_grad_(True)
+    d_raw = module.local_blocks(expected_input) - expected_input
+    d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+    stock_rms = (
+        expected_input.square().mean(dim=(-2, -1), keepdim=True).sqrt().detach()
+    )
+    residual = d_raw / (d_raw_rms + module.epsilon) * stock_rms
+    magnitude = d_raw.abs()
+    channel_gate = torch.sigmoid(module.channel_gate(magnitude))
+    spatial_gate = torch.sigmoid(
+        module.spatial_gate(
+            torch.cat(
+                (
+                    magnitude.mean(dim=1, keepdim=True),
+                    magnitude.amax(dim=1, keepdim=True),
+                ),
+                dim=1,
+            )
+        )
+    )
+    expected_output = expected_input + (
+        module.alpha_max
+        * torch.tanh(module.amplitude)
+        * channel_gate
+        * spatial_gate
+        * residual
+    )
+    expected_loss = expected_output.square().mean()
+    (expected_gradient,) = torch.autograd.grad(expected_loss, expected_input)
+
+    torch.testing.assert_close(actual_gradient, expected_gradient, rtol=0, atol=0)
+
+
+def test_pr_ira_zero_raw_residual_stays_finite() -> None:
+    module = PRIRA(8)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(10.0)
+        for block in module.local_blocks:
+            block.depthwise.weight.zero_()
+            if block.depthwise.bias is not None:
+                block.depthwise.bias.zero_()
+            block.pointwise.weight.zero_()
+            if block.pointwise.bias is not None:
+                block.pointwise.bias.zero_()
+    x = torch.randn(2, 8, 4, 3)
+
+    output = module(x)
+
+    assert torch.isfinite(output).all()
+    torch.testing.assert_close(output, x, rtol=0, atol=0)
+    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+
+
+def test_pr_ira_rejects_invalid_inputs() -> None:
+    module = PRIRA(8)
+
+    with pytest.raises(TypeError, match="Tensor"):
+        module([[1.0]])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="BCHW"):
+        module(torch.randn(8, 5, 5))
+    with pytest.raises(ValueError, match="8 channels"):
+        module(torch.randn(1, 4, 5, 5))
+    with pytest.raises(TypeError, match="floating"):
+        module(torch.ones(1, 8, 5, 5, dtype=torch.int64))
+    with pytest.raises(ValueError, match="non-empty"):
+        module(torch.empty(0, 8, 5, 5))
+    with pytest.raises(ValueError, match="non-empty"):
+        module(torch.empty(1, 8, 0, 5))
+
+
+def test_progress_setter_controls_a_non_persistent_runtime_schedule() -> None:
+    module = PRIRA(8)
+    with torch.no_grad():
+        module.amplitude.fill_(0.5)
+    x = torch.randn(1, 8, 5, 5)
+
+    module.set_training_progress(3, 30)
+    identity = module(x)
+    module.set_training_progress(4, 30)
+    ramp = module(x)
+    module.set_training_progress(10, 30)
+    opened = module(x)
+
+    torch.testing.assert_close(identity, x, rtol=0, atol=0)
+    assert not torch.equal(ramp, x)
+    assert not torch.equal(opened, ramp)
+    assert module.open_ratio == 1.0
+    assert "_open_ratio" not in module.state_dict()
+    assert "_open_ratio" in dict(module.named_buffers())
+
+    with pytest.raises(ValueError, match="epoch"):
+        module.set_training_progress(31, 30)
+
+
+def test_pr_ira_construction_is_deterministic_and_preserves_public_rng() -> None:
+    torch.manual_seed(71)
+    cpu_state = torch.random.get_rng_state().clone()
+    cuda_states = (
+        [state.clone() for state in torch.cuda.get_rng_state_all()]
+        if torch.cuda.is_available()
+        else []
+    )
+
+    first = _state_dict(PRIRA(8))
+
+    torch.testing.assert_close(torch.random.get_rng_state(), cpu_state, rtol=0, atol=0)
+    if torch.cuda.is_available():
+        for actual, expected in zip(
+            torch.cuda.get_rng_state_all(), cuda_states, strict=True
+        ):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    second = _state_dict(PRIRA(8))
+    assert first.keys() == second.keys()
+    for name in first:
+        torch.testing.assert_close(first[name], second[name], rtol=0, atol=0)
+
+
+def test_pr_ira_state_dict_round_trip_preserves_output_after_progress_setter() -> None:
+    source = PRIRA(8)
+    source.set_training_progress(9, 30)
+    with torch.no_grad():
+        source.amplitude.fill_(0.6)
+    x = torch.randn(1, 8, 7, 5)
+    expected = source(x)
+
+    restored = PRIRA(8)
+    restored.load_state_dict(source.state_dict(), strict=True)
+    assert restored.open_ratio == 0.0
+    restored.set_training_progress(9, 30)
+
+    assert source.state_dict().keys() == restored.state_dict().keys()
+    torch.testing.assert_close(restored(x), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_pr_ira_preserves_floating_dtype_and_device(dtype: torch.dtype) -> None:
+    module = PRIRA(8).to(dtype=dtype, device="cpu")
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.4)
+    x = torch.randn(1, 8, 5, 7, dtype=dtype, device="cpu")
+
+    output = module(x)
+
+    assert output.dtype == dtype
+    assert output.device == x.device
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_pr_ira_preserves_cuda_rng_dtype_and_device() -> None:
+    cuda_states = [state.clone() for state in torch.cuda.get_rng_state_all()]
+    module = PRIRA(8).to(dtype=torch.float16, device="cuda")
+    for actual, expected in zip(torch.cuda.get_rng_state_all(), cuda_states, strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.4)
+    x = torch.randn(1, 8, 8, 8, dtype=torch.float16, device="cuda")
+
+    output = module(x)
+
+    assert output.dtype == torch.float16
+    assert output.device == x.device
+    assert torch.isfinite(output).all()
