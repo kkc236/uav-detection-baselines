@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import src.pr_ira_protocol as pr_ira_protocol_module
 from src.bpdd_protocol import BPDD_PROTOCOL
 from src.fdr_protocol import FDR_PROTOCOL, FDR_PROTOCOL_SHA256
 from src.pr_ira_protocol import (
@@ -108,16 +109,80 @@ def test_protocol_freezes_seed_optimizer_and_pr_ira_schedule() -> None:
                 "identity": [1, 3],
                 "linear_open": [4, 9],
                 "fully_open": [10, 30],
+                "private_update": [4, 30],
+                "private_frozen": [],
             },
             "formal100": {
                 "epochs": 100,
                 "identity": [1, 10],
                 "linear_open": [11, 30],
                 "fully_open": [31, 100],
+                "private_update": [11, 60],
+                "private_frozen": [61, 100],
             },
         },
     }
     assert PR_IRA_PROTOCOL["seed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("epoch", "epochs", "expected"),
+    [
+        (3, 30, False),
+        (4, 30, True),
+        (30, 30, True),
+        (10, 100, False),
+        (11, 100, True),
+        (60, 100, True),
+        (61, 100, False),
+        (100, 100, False),
+    ],
+)
+def test_private_update_window_boundaries(
+    epoch: int, epochs: int, expected: bool
+) -> None:
+    assert (
+        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("epoch", "epochs"),
+    [
+        (0, 30),
+        (31, 30),
+        (101, 100),
+        (1, 50),
+    ],
+)
+def test_private_update_window_rejects_invalid_values(
+    epoch: int, epochs: int
+) -> None:
+    with pytest.raises(ValueError):
+        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)
+
+
+@pytest.mark.parametrize(
+    ("epoch", "epochs"),
+    [
+        (True, 30),
+        (1.0, 30),
+        ("1", 30),
+        (1, True),
+        (1, 30.0),
+        (1, "30"),
+    ],
+)
+def test_private_update_window_rejects_non_integer_types(
+    epoch: object, epochs: object
+) -> None:
+    with pytest.raises(TypeError):
+        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)  # type: ignore[arg-type]
+
+
+def test_private_update_helper_is_exported() -> None:
+    assert "pr_ira_private_update_enabled" in pr_ira_protocol_module.__all__
 
 
 def test_protocol_freezes_variants_stages_and_every_gate_threshold() -> None:

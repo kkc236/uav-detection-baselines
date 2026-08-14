@@ -62,12 +62,16 @@ PR_IRA_PROTOCOL: dict[str, Any] = {
                 "identity": [1, 3],
                 "linear_open": [4, 9],
                 "fully_open": [10, 30],
+                "private_update": [4, 30],
+                "private_frozen": [],
             },
             "formal100": {
                 "epochs": 100,
                 "identity": [1, 10],
                 "linear_open": [11, 30],
                 "fully_open": [31, 100],
+                "private_update": [11, 60],
+                "private_frozen": [61, 100],
             },
         },
     },
@@ -125,6 +129,31 @@ PR_IRA_PROTOCOL: dict[str, Any] = {
     "independence_gate_reuses_compatibility": True,
 }
 PR_IRA_PROTOCOL_SHA256 = public_state_sha256(PR_IRA_PROTOCOL)
+
+
+def pr_ira_private_update_enabled(epoch: int, epochs: int) -> bool:
+    """Return whether the private branch may update in a frozen schedule."""
+
+    if type(epoch) is not int:
+        raise TypeError("epoch must be an int")
+    if type(epochs) is not int:
+        raise TypeError("epochs must be an int")
+
+    schedule = next(
+        (
+            frozen_schedule
+            for frozen_schedule in PR_IRA_PROTOCOL["pr_ira"]["schedule"].values()
+            if frozen_schedule["epochs"] == epochs
+        ),
+        None,
+    )
+    if schedule is None:
+        raise ValueError(f"unsupported PR-IRA schedule epochs: {epochs}")
+    if not 1 <= epoch <= epochs:
+        raise ValueError(f"epoch must be within [1, {epochs}]")
+
+    start, end = schedule["private_update"]
+    return start <= epoch <= end
 
 
 def build_run_identity(
@@ -203,6 +232,7 @@ __all__ = [
     "PR_IRA_PROTOCOL_SHA256",
     "build_run_identity",
     "canonical_json_bytes",
+    "pr_ira_private_update_enabled",
     "public_state_sha256",
     "validate_resume_authority",
     "write_create_only_manifest",
