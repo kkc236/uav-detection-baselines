@@ -15,7 +15,10 @@ from ultralytics.utils.torch_utils import unwrap_model
 
 from src.fdr_protocol import initialize_private_module, validate_fdr_initial_state
 from src.pr_ira import PRIRA
-from src.pr_ira_protocol import validate_resume_authority
+from src.pr_ira_protocol import (
+    pr_ira_private_update_enabled,
+    validate_resume_authority,
+)
 from src.rtdetr_fdr_bpdd import FDRBPDDDetectionModel, FDRBPDDTrainer
 
 
@@ -568,13 +571,14 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
             int(self.epochs),
         )
 
-    def suppress_pr_ira_identity_gradients(self) -> bool:
-        """Prevent momentum or decay from moving private state while closed."""
+    def suppress_pr_ira_inactive_gradients(self) -> bool:
+        """Prevent momentum or decay from moving inactive private state."""
 
-        model = self._firewall_model()
-        if model.pr_ira.open_ratio != 0.0:
-            return False
-        for parameter in model.pr_ira_private_parameters():
+        if hasattr(self, "epoch") and hasattr(self, "epochs"):
+            current_epoch = int(self.epoch) + 1
+            if pr_ira_private_update_enabled(current_epoch, int(self.epochs)):
+                return False
+        for parameter in self._firewall_model().pr_ira_private_parameters():
             parameter.grad = None
         return True
 
@@ -604,7 +608,7 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         try:
             self.scaler.unscale_(self.optimizer)
             model.subtract_pr_ira_firewall_buffer()
-            self.suppress_pr_ira_identity_gradients()
+            self.suppress_pr_ira_inactive_gradients()
             norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 max_norm=10.0,

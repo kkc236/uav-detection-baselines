@@ -143,33 +143,154 @@ def test_model_train_applies_the_frozen_relative_schedule(
     assert combined_model.pr_ira.open_ratio == pytest.approx(expected)
 
 
-def test_identity_phase_suppresses_all_private_gradients_only(
+@pytest.mark.parametrize(
+    ("epoch_zero_based", "epochs", "expected_suppressed"),
+    [
+        (2, 30, True),
+        (3, 30, False),
+        (29, 30, False),
+        (9, 100, True),
+        (10, 100, False),
+        (59, 100, False),
+        (60, 100, True),
+        (99, 100, True),
+    ],
+)
+def test_inactive_phases_suppress_all_private_gradients_only(
+    combined_model: FDRBPDDPRIRADetectionModel,
+    epoch_zero_based: int,
+    epochs: int,
+    expected_suppressed: bool,
+) -> None:
+    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer.model = combined_model
+    trainer.epoch = epoch_zero_based
+    trainer.epochs = epochs
+    private = combined_model.pr_ira_private_parameters()
+    private_ids = {id(parameter) for parameter in private}
+    public = next(
+        parameter
+        for parameter in combined_model.parameters()
+        if parameter.requires_grad and id(parameter) not in private_ids
+    )
+
+    try:
+        private_gradients = [torch.ones_like(parameter) for parameter in private]
+        for parameter, gradient in zip(private, private_gradients, strict=True):
+            parameter.grad = gradient
+        public_gradient = torch.ones_like(public)
+        public.grad = public_gradient
+
+        assert trainer.suppress_pr_ira_inactive_gradients() is expected_suppressed
+        if expected_suppressed:
+            assert all(parameter.grad is None for parameter in private)
+        else:
+            assert all(
+                parameter.grad is not None
+                and torch.equal(parameter.grad, gradient)
+                for parameter, gradient in zip(
+                    private,
+                    private_gradients,
+                    strict=True,
+                )
+            )
+        assert public.grad is not None
+        assert torch.equal(public.grad, public_gradient)
+    finally:
+        for parameter in combined_model.parameters():
+            parameter.grad = None
+
+
+def test_missing_schedule_context_suppresses_private_gradients_only(
     combined_model: FDRBPDDPRIRADetectionModel,
 ) -> None:
     trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
     trainer.model = combined_model
     private = combined_model.pr_ira_private_parameters()
+    private_ids = {id(parameter) for parameter in private}
     public = next(
         parameter
         for parameter in combined_model.parameters()
-        if parameter.requires_grad and id(parameter) not in {id(item) for item in private}
+        if parameter.requires_grad and id(parameter) not in private_ids
     )
 
-    combined_model.pr_ira.set_training_progress(3, 30)
-    for parameter in private:
-        parameter.grad = torch.ones_like(parameter)
-    public.grad = torch.ones_like(public)
+    try:
+        for parameter in private:
+            parameter.grad = torch.ones_like(parameter)
+        public_gradient = torch.ones_like(public)
+        public.grad = public_gradient
 
-    assert trainer.suppress_pr_ira_identity_gradients() is True
-    assert all(parameter.grad is None for parameter in private)
-    assert public.grad is not None
+        assert trainer.suppress_pr_ira_inactive_gradients() is True
+        assert all(parameter.grad is None for parameter in private)
+        assert public.grad is not None
+        assert torch.equal(public.grad, public_gradient)
+    finally:
+        for parameter in combined_model.parameters():
+            parameter.grad = None
 
-    combined_model.pr_ira.set_training_progress(4, 30)
-    for parameter in private:
-        parameter.grad = torch.ones_like(parameter)
 
-    assert trainer.suppress_pr_ira_identity_gradients() is False
-    assert all(parameter.grad is not None for parameter in private)
+def test_late_freeze_preserves_private_sgd_parameter_and_momentum(
+    combined_model: FDRBPDDPRIRADetectionModel,
+) -> None:
+    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer.model = combined_model
+    trainer.epoch = 60
+    trainer.epochs = 100
+    private_parameters = combined_model.pr_ira_private_parameters()
+    private_ids = {id(parameter) for parameter in private_parameters}
+    private = private_parameters[0]
+    public = next(
+        parameter
+        for parameter in combined_model.parameters()
+        if parameter.requires_grad and id(parameter) not in private_ids
+    )
+    optimizer = torch.optim.SGD(
+        [private, public],
+        lr=0.01,
+        momentum=0.9,
+        weight_decay=0.1,
+    )
+    private_original = private.detach().clone()
+    public_original = public.detach().clone()
+
+    try:
+        private.grad = torch.ones_like(private)
+        public.grad = torch.ones_like(public)
+        optimizer.step()
+        assert torch.count_nonzero(
+            optimizer.state[private]["momentum_buffer"]
+        ).item() > 0
+        assert torch.count_nonzero(
+            optimizer.state[public]["momentum_buffer"]
+        ).item() > 0
+
+        private_before_freeze = private.detach().clone()
+        private_momentum_before_freeze = optimizer.state[private][
+            "momentum_buffer"
+        ].clone()
+        public_before_freeze = public.detach().clone()
+        private.grad = torch.full_like(private, 2.0)
+        public.grad = torch.full_like(public, 2.0)
+
+        assert trainer.suppress_pr_ira_inactive_gradients() is True
+        assert private.grad is None
+        assert public.grad is not None
+        optimizer.step()
+
+        assert torch.equal(private, private_before_freeze)
+        assert torch.equal(
+            optimizer.state[private]["momentum_buffer"],
+            private_momentum_before_freeze,
+        )
+        assert not torch.equal(public, public_before_freeze)
+    finally:
+        optimizer.zero_grad(set_to_none=True)
+        optimizer.state.clear()
+        with torch.no_grad():
+            private.copy_(private_original)
+            public.copy_(public_original)
+        for parameter in combined_model.parameters():
+            parameter.grad = None
 
 
 def test_memory_cleanup_preserves_normal_accumulation_and_resets_retry(
