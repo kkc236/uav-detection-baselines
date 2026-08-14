@@ -51,7 +51,7 @@ def relative_open_ratio(epoch: int, epochs: int) -> float:
     return (current - identity_end) / (fully_open_start - identity_end)
 
 
-def _validate_feature(x: Tensor, channels: int) -> None:
+def _validate_feature(x: Tensor, channels: int, reference: Tensor) -> None:
     if not isinstance(x, Tensor):
         raise TypeError("PRIRA input must be a torch.Tensor")
     if x.ndim != 4:
@@ -62,12 +62,53 @@ def _validate_feature(x: Tensor, channels: int) -> None:
         raise TypeError("PRIRA input must use a floating dtype")
     if any(size <= 0 for size in (x.shape[0], x.shape[2], x.shape[3])):
         raise ValueError("PRIRA input must have non-empty batch and spatial dimensions")
+    if x.device != reference.device:
+        raise ValueError("PRIRA input and module parameters must use the same device")
+    if (
+        x.dtype != reference.dtype
+        and not torch.is_autocast_enabled(x.device.type)
+    ):
+        raise ValueError(
+            "PRIRA input dtype must match module floating parameter dtype "
+            "outside autocast"
+        )
 
 
 def _promote_for_rms(x: Tensor) -> Tensor:
     if x.dtype in (torch.float16, torch.bfloat16):
         return x.float()
     return x
+
+
+def _stable_rms(
+    x: Tensor,
+    dim: tuple[int, ...] | None = None,
+    *,
+    keepdim: bool = False,
+) -> Tensor:
+    promoted = _promote_for_rms(x)
+    if dim is None:
+        element_count = promoted.numel()
+    else:
+        element_count = 1
+        for index in dim:
+            element_count *= promoted.shape[index]
+    return torch.linalg.vector_norm(
+        promoted,
+        ord=2,
+        dim=dim,
+        keepdim=keepdim,
+    ) / math.sqrt(element_count)
+
+
+def _assert_finite_when_active(x: Tensor, active: Tensor) -> Tensor:
+    condition = torch.logical_or(torch.logical_not(active), x.isfinite().all())
+    token = torch._functional_assert_async(
+        condition,
+        "PRIRA produced non-finite values",
+        x.new_zeros(()),
+    )
+    return x + token
 
 
 def _construction_cuda_devices() -> list[int]:
@@ -104,12 +145,14 @@ class _LocalDepthwiseResidualBlock(nn.Module):
         return x + self.pointwise(self.activation(self.depthwise(x)))
 
 
-class _IdentityForwardResidualBackward(torch.autograd.Function):
-    """Return the identity bit-for-bit while retaining residual-path gradients."""
+class _ExactAdd(torch.autograd.Function):
+    """Add elementwise while preserving base bits for exact-zero increments."""
+
+    generate_vmap_rule = True
 
     @staticmethod
     def forward(x: Tensor, increment: Tensor) -> Tensor:
-        return x.clone(memory_format=torch.preserve_format)
+        return torch.where(increment == 0, x, x + increment)
 
     @staticmethod
     def setup_context(ctx: object, inputs: tuple[Tensor, Tensor], output: Tensor) -> None:
@@ -119,6 +162,24 @@ class _IdentityForwardResidualBackward(torch.autograd.Function):
     def backward(ctx: object, grad_output: Tensor) -> tuple[Tensor, Tensor]:
         del ctx
         return grad_output, grad_output
+
+    @staticmethod
+    def jvp(
+        ctx: object,
+        grad_x: Tensor | None,
+        grad_increment: Tensor | None,
+    ) -> Tensor | None:
+        del ctx
+        if grad_x is None:
+            return grad_increment
+        if grad_increment is None:
+            return grad_x
+        return grad_x + grad_increment
+
+
+@torch.compiler.allow_in_graph
+def _exact_add(x: Tensor, increment: Tensor) -> Tensor:
+    return _ExactAdd.apply(x, increment)
 
 
 class PRIRA(nn.Module):
@@ -220,38 +281,39 @@ class PRIRA(nn.Module):
         ratio = relative_open_ratio(epoch, epochs)
         self._open_ratio.fill_(ratio)
 
-    def _set_inactive_diagnostics(self, x: Tensor) -> None:
-        zero = x.new_zeros(())
-        self._diagnostics = {
-            name: zero.clone() for name in self._DIAGNOSTIC_NAMES
-        }
-
     def forward(self, x: Tensor) -> Tensor:
-        _validate_feature(x, self.channels)
-        if self._open_ratio.item() == 0.0:
-            self._set_inactive_diagnostics(x)
-            return x
+        _validate_feature(x, self.channels, self.amplitude)
+        open_ratio = self._open_ratio.to(dtype=x.dtype, device=x.device)
+        active = open_ratio != 0
 
         d_raw = self.local_blocks(x) - x
-        d_raw_for_rms = _promote_for_rms(d_raw)
-        x_for_rms = _promote_for_rms(x)
-        d_raw_rms = (
-            d_raw_for_rms.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+        d_raw = _assert_finite_when_active(d_raw, active)
+        active_d_raw = torch.where(active, d_raw, torch.zeros_like(d_raw))
+        d_raw_for_rms = _promote_for_rms(active_d_raw)
+        d_raw_rms = _stable_rms(
+            active_d_raw,
+            dim=(-2, -1),
+            keepdim=True,
         )
-        stock_rms = (
-            x_for_rms.square()
-            .mean(dim=(-2, -1), keepdim=True)
-            .sqrt()
-            .detach()
-        )
-        residual = (
+        stock_rms = _stable_rms(
+            x,
+            dim=(-2, -1),
+            keepdim=True,
+        ).detach()
+        raw_residual = (
             d_raw_for_rms / (d_raw_rms + self.epsilon) * stock_rms
         ).to(
             dtype=x.dtype,
             device=x.device,
         )
+        raw_residual = _assert_finite_when_active(raw_residual, active)
+        residual = torch.where(
+            active,
+            raw_residual,
+            torch.zeros_like(raw_residual),
+        )
 
-        magnitude = d_raw.abs()
+        magnitude = active_d_raw.abs()
         channel_gate = torch.sigmoid(self.channel_gate(magnitude))
         spatial_summary = torch.cat(
             (
@@ -261,35 +323,55 @@ class PRIRA(nn.Module):
             dim=1,
         )
         spatial_gate = torch.sigmoid(self.spatial_gate(spatial_summary))
+        channel_gate = _assert_finite_when_active(channel_gate, active)
+        spatial_gate = _assert_finite_when_active(spatial_gate, active)
+        channel_gate = torch.where(
+            active,
+            channel_gate,
+            torch.zeros_like(channel_gate),
+        )
+        spatial_gate = torch.where(
+            active,
+            spatial_gate,
+            torch.zeros_like(spatial_gate),
+        )
         gate = channel_gate * spatial_gate
 
-        open_ratio = self._open_ratio.to(dtype=x.dtype, device=x.device)
-        effective_amplitude = (
-            open_ratio * self.alpha_max * torch.tanh(self.amplitude)
+        raw_effective_amplitude = (
+            open_ratio
+            * self.alpha_max
+            * torch.tanh(self.amplitude).to(dtype=x.dtype, device=x.device)
+        )
+        raw_effective_amplitude = _assert_finite_when_active(
+            raw_effective_amplitude,
+            active,
+        )
+        effective_amplitude = torch.where(
+            active,
+            raw_effective_amplitude,
+            x.new_zeros(()),
         )
         increment = (
             effective_amplitude * channel_gate * spatial_gate * residual
-        )
-        if effective_amplitude.detach().item() == 0.0:
-            output = _IdentityForwardResidualBackward.apply(x, increment)
-            self._diagnostics = {
-                "effective_amplitude": effective_amplitude.detach(),
-                "gate_mean": gate.mean().detach(),
-                "gate_max": gate.amax().detach(),
-                "residual_rms_ratio": x.new_zeros(()),
-            }
-            return output
+        ).to(dtype=x.dtype, device=x.device)
+        increment = _assert_finite_when_active(increment, active)
 
-        output = x + increment
-        stock_global_rms = x_for_rms.square().mean().sqrt().detach()
-        increment_rms = _promote_for_rms(increment).square().mean().sqrt()
+        output = _exact_add(x, increment)
+        stock_global_rms = _stable_rms(x).detach()
+        increment_rms = _stable_rms(increment)
+        raw_residual_rms_ratio = increment_rms / (
+            stock_global_rms + self.epsilon
+        )
+        residual_rms_ratio = torch.where(
+            active,
+            raw_residual_rms_ratio,
+            raw_residual_rms_ratio.new_zeros(()),
+        )
         self._diagnostics = {
             "effective_amplitude": effective_amplitude.detach(),
             "gate_mean": gate.mean().detach(),
             "gate_max": gate.amax().detach(),
-            "residual_rms_ratio": (
-                increment_rms / (stock_global_rms + self.epsilon)
-            ).detach(),
+            "residual_rms_ratio": residual_rms_ratio.detach(),
         }
         return output
 

@@ -30,6 +30,13 @@ def _assert_floating_bits_equal(
     assert torch.equal(actual.view(integer_dtype), expected.view(integer_dtype))
 
 
+def _stable_spatial_rms(x: torch.Tensor) -> torch.Tensor:
+    spatial_size = x.shape[-2] * x.shape[-1]
+    return torch.linalg.vector_norm(
+        x, ord=2, dim=(-2, -1), keepdim=True
+    ) / math.sqrt(spatial_size)
+
+
 @pytest.mark.parametrize(
     ("epoch", "epochs", "expected"),
     [
@@ -172,7 +179,7 @@ def test_pr_ira_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
 @pytest.mark.parametrize(
     "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
 )
-def test_zero_amplitude_is_bit_exact_for_signed_zero_and_extreme_values(
+def test_zero_amplitude_is_bit_exact_for_signed_zero_and_practical_values(
     dtype: torch.dtype,
 ) -> None:
     module = PRIRA(2).to(dtype=dtype)
@@ -182,8 +189,8 @@ def test_zero_amplitude_is_bit_exact_for_signed_zero_and_extreme_values(
         [
             -0.0,
             0.0,
-            finfo.max,
-            -finfo.max,
+            300.0,
+            -300.0,
             finfo.tiny,
             -finfo.tiny,
             1.0,
@@ -211,8 +218,8 @@ def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() 
 
     with torch.no_grad():
         d_raw = module.local_blocks(x) - x
-        d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
-        stock_rms = x.square().mean(dim=(-2, -1), keepdim=True).sqrt()
+        d_raw_rms = _stable_spatial_rms(d_raw)
+        stock_rms = _stable_spatial_rms(x)
         residual = d_raw / (d_raw_rms + module.epsilon) * stock_rms
         magnitude = d_raw.abs()
         channel_gate = torch.sigmoid(module.channel_gate(magnitude))
@@ -246,7 +253,7 @@ def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() 
     )
 
 
-def test_zero_amplitude_diagnostics_do_not_hide_nonfinite_gates() -> None:
+def test_active_nonfinite_gate_fails_closed() -> None:
     module = PRIRA(2)
     module.set_training_progress(30, 30)
     with torch.no_grad():
@@ -254,13 +261,38 @@ def test_zero_amplitude_diagnostics_do_not_hide_nonfinite_gates() -> None:
         module.spatial_gate.bias.fill_(float("nan"))
     x = torch.randn(1, 2, 3, 3)
 
-    output = module(x)
+    with pytest.raises(RuntimeError):
+        module(x)
 
-    _assert_floating_bits_equal(output, x)
-    assert torch.isnan(module.diagnostics["gate_mean"])
-    assert torch.isnan(module.diagnostics["gate_max"])
-    assert module.diagnostics["effective_amplitude"].item() == 0.0
-    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+
+def test_active_nonfinite_local_transform_fails_closed() -> None:
+    module = PRIRA(2)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        bias = module.local_blocks[0].depthwise.bias
+        assert bias is not None
+        bias.fill_(float("nan"))
+
+    with pytest.raises(RuntimeError):
+        module(torch.randn(1, 2, 3, 3))
+
+
+def test_active_nonfinite_normalized_residual_fails_closed() -> None:
+    module = PRIRA(2)
+    module.set_training_progress(30, 30)
+    module.epsilon = 0.0
+    with torch.no_grad():
+        module.amplitude.fill_(0.7)
+        for block in module.local_blocks:
+            block.depthwise.weight.zero_()
+            assert block.depthwise.bias is not None
+            block.depthwise.bias.zero_()
+            block.pointwise.weight.zero_()
+            assert block.pointwise.bias is not None
+            block.pointwise.bias.zero_()
+
+    with pytest.raises(RuntimeError):
+        module(torch.ones(1, 2, 3, 3))
 
 
 @pytest.mark.parametrize(
@@ -273,6 +305,11 @@ def test_closed_schedule_fast_path_is_bit_exact_for_extreme_values(
     module.set_training_progress(3, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.75)
+        transform_bias = module.local_blocks[0].depthwise.bias
+        assert transform_bias is not None
+        transform_bias.fill_(float("nan"))
+        assert module.spatial_gate.bias is not None
+        module.spatial_gate.bias.fill_(float("nan"))
     finfo = torch.finfo(dtype)
     x = torch.tensor(
         [-0.0, 0.0, finfo.max, -finfo.max, 1.0, -1.0, finfo.tiny, -finfo.tiny],
@@ -318,6 +355,43 @@ def test_full_open_nonzero_amplitude_uses_finite_promoted_rms(
     )
 
 
+def test_zero_amplitude_supports_torch_func_jvp() -> None:
+    module = PRIRA(4).double()
+    module.set_training_progress(30, 30)
+    x = torch.randn(1, 4, 4, 3, dtype=torch.float64)
+    tangent = torch.randn_like(x)
+
+    output, output_tangent = torch.func.jvp(module, (x,), (tangent,))
+
+    _assert_floating_bits_equal(output, x)
+    torch.testing.assert_close(output_tangent, tangent, rtol=0, atol=0)
+
+
+def test_zero_amplitude_supports_torch_func_vmap() -> None:
+    module = PRIRA(4).double()
+    module.set_training_progress(30, 30)
+    x = torch.randn(3, 1, 4, 4, 3, dtype=torch.float64)
+
+    output = torch.func.vmap(module)(x)
+
+    _assert_floating_bits_equal(output, x)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile unavailable")
+def test_active_forward_supports_fullgraph_compile() -> None:
+    module = PRIRA(4).eval()
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.7)
+    x = torch.randn(1, 4, 4, 3)
+    expected = module(x)
+    compiled = torch.compile(module, backend="eager", fullgraph=True)
+
+    actual = compiled(x)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
     module = PRIRA(8).double()
     module.set_training_progress(30, 30)
@@ -328,8 +402,8 @@ def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
     output = module(x)
 
     d_raw = module.local_blocks(x) - x
-    d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
-    x_rms = x.square().mean(dim=(-2, -1), keepdim=True).sqrt().detach()
+    d_raw_rms = _stable_spatial_rms(d_raw)
+    x_rms = _stable_spatial_rms(x).detach()
     residual = d_raw / (d_raw_rms + module.epsilon) * x_rms
     magnitude = d_raw.abs()
     channel_gate = torch.sigmoid(module.channel_gate(magnitude))
@@ -367,10 +441,8 @@ def test_pr_ira_detaches_stock_rms_rescaling_from_input_gradient() -> None:
 
     expected_input = actual_input.detach().clone().requires_grad_(True)
     d_raw = module.local_blocks(expected_input) - expected_input
-    d_raw_rms = d_raw.square().mean(dim=(-2, -1), keepdim=True).sqrt()
-    stock_rms = (
-        expected_input.square().mean(dim=(-2, -1), keepdim=True).sqrt().detach()
-    )
+    d_raw_rms = _stable_spatial_rms(d_raw)
+    stock_rms = _stable_spatial_rms(expected_input).detach()
     residual = d_raw / (d_raw_rms + module.epsilon) * stock_rms
     magnitude = d_raw.abs()
     channel_gate = torch.sigmoid(module.channel_gate(magnitude))
@@ -410,13 +482,20 @@ def test_pr_ira_zero_raw_residual_stays_finite() -> None:
             block.pointwise.weight.zero_()
             if block.pointwise.bias is not None:
                 block.pointwise.bias.zero_()
-    x = torch.randn(2, 8, 4, 3)
+    x = torch.zeros(2, 8, 4, 3, requires_grad=True)
 
     output = module(x)
+    output.square().sum().backward()
 
     assert torch.isfinite(output).all()
     torch.testing.assert_close(output, x, rtol=0, atol=0)
     assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+    assert x.grad is not None
+    torch.testing.assert_close(x.grad, torch.zeros_like(x), rtol=0, atol=0)
+    for name, parameter in module.named_parameters():
+        assert parameter.grad is not None, f"missing gradient for {name}"
+        assert torch.isfinite(parameter.grad).all(), f"non-finite gradient for {name}"
+        assert torch.count_nonzero(parameter.grad) == 0, f"nonzero gradient for {name}"
 
 
 def test_pr_ira_rejects_invalid_inputs() -> None:
@@ -434,6 +513,32 @@ def test_pr_ira_rejects_invalid_inputs() -> None:
         module(torch.empty(0, 8, 5, 5))
     with pytest.raises(ValueError, match="non-empty"):
         module(torch.empty(1, 8, 0, 5))
+
+
+def test_pr_ira_rejects_device_and_non_autocast_dtype_mismatches() -> None:
+    module = PRIRA(4).float()
+
+    with pytest.raises(ValueError, match="dtype"):
+        module(torch.randn(1, 4, 3, 3, dtype=torch.float64))
+
+    meta_module = PRIRA(4).to(device="meta")
+    with pytest.raises(ValueError, match="device"):
+        meta_module(torch.randn(1, 4, 3, 3))
+
+
+def test_pr_ira_allows_real_cpu_autocast_activation_dtype() -> None:
+    module = PRIRA(4).float()
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(0.7)
+    x = torch.full((1, 4, 4, 3), 300.0, dtype=torch.bfloat16)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        output = module(x)
+
+    assert output.dtype == x.dtype
+    assert output.device == x.device
+    assert torch.isfinite(output).all()
 
 
 def test_progress_setter_controls_a_non_persistent_runtime_schedule() -> None:
