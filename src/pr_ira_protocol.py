@@ -131,6 +131,24 @@ PR_IRA_PROTOCOL: dict[str, Any] = {
 PR_IRA_PROTOCOL_SHA256 = public_state_sha256(PR_IRA_PROTOCOL)
 
 
+def validate_pr_ira_stage_epochs(stage: str, epochs: int) -> None:
+    """Require a run stage to use its exact frozen total epoch count."""
+
+    if not isinstance(stage, str):
+        raise TypeError("stage must be a string")
+    if stage not in PR_IRA_PROTOCOL["stages"]:
+        raise ValueError(f"unknown PR-IRA stage: {stage}")
+    if type(epochs) is not int:
+        raise TypeError("epochs must be an int")
+
+    expected_epochs = PR_IRA_PROTOCOL["stages"][stage]["schedule_epochs"]
+    if epochs != expected_epochs:
+        raise ValueError(
+            f"PR-IRA stage {stage!r} requires schedule epochs "
+            f"{expected_epochs}, got {epochs}"
+        )
+
+
 def pr_ira_private_update_enabled(epoch: int, epochs: int) -> bool:
     """Return whether the private branch may update in a frozen schedule."""
 
@@ -225,6 +243,20 @@ def validate_resume_authority(
             )
 
 
+def validate_pr_ira_run_identity(identity: object) -> None:
+    """Require a complete run identity with a known, well-formed stage."""
+
+    if not isinstance(identity, Mapping):
+        raise TypeError("pr_ira_run_identity must be a Mapping")
+    validate_resume_authority(identity, identity)
+
+    stage = identity["stage"]
+    if not isinstance(stage, str):
+        raise ValueError("pr_ira_run_identity stage must be a string")
+    if stage not in PR_IRA_PROTOCOL["stages"]:
+        raise ValueError(f"unknown PR-IRA stage in run identity: {stage}")
+
+
 __all__ = [
     "FDR_INITIAL_STATE_SHA256",
     "FDR_SOURCE_COMMIT",
@@ -234,6 +266,8 @@ __all__ = [
     "canonical_json_bytes",
     "pr_ira_private_update_enabled",
     "public_state_sha256",
+    "validate_pr_ira_run_identity",
+    "validate_pr_ira_stage_epochs",
     "validate_resume_authority",
     "write_create_only_manifest",
 ]

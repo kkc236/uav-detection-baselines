@@ -185,6 +185,125 @@ def test_private_update_helper_is_exported() -> None:
     assert "pr_ira_private_update_enabled" in pr_ira_protocol_module.__all__
 
 
+@pytest.mark.parametrize(
+    ("stage", "epochs"),
+    [
+        ("screen", 30),
+        ("formal", 100),
+    ],
+)
+def test_stage_epoch_authority_accepts_only_frozen_pairs(
+    stage: str,
+    epochs: int,
+) -> None:
+    assert (
+        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, epochs)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "epochs"),
+    [
+        ("screen", 100),
+        ("formal", 30),
+    ],
+)
+def test_stage_epoch_authority_rejects_mismatched_totals(
+    stage: str,
+    epochs: int,
+) -> None:
+    with pytest.raises(ValueError, match="schedule epochs"):
+        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, epochs)
+
+
+@pytest.mark.parametrize("stage", [None, True, 30, []])
+def test_stage_epoch_authority_rejects_non_string_stage(stage: object) -> None:
+    with pytest.raises(TypeError, match="stage"):
+        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, 30)  # type: ignore[arg-type]
+
+
+def test_stage_epoch_authority_rejects_unknown_stage() -> None:
+    with pytest.raises(ValueError, match="unknown PR-IRA stage"):
+        pr_ira_protocol_module.validate_pr_ira_stage_epochs("probe", 30)
+
+
+@pytest.mark.parametrize("epochs", [True, 30.0, "30", None])
+def test_stage_epoch_authority_rejects_non_integer_epochs(epochs: object) -> None:
+    with pytest.raises(TypeError, match="epochs"):
+        pr_ira_protocol_module.validate_pr_ira_stage_epochs("screen", epochs)  # type: ignore[arg-type]
+
+
+def test_stage_epoch_authority_helper_is_exported() -> None:
+    assert "validate_pr_ira_stage_epochs" in pr_ira_protocol_module.__all__
+
+
+@pytest.mark.parametrize("stage", ["screen", "formal"])
+def test_complete_run_identity_validation_accepts_built_identity(stage: str) -> None:
+    identity = build_run_identity(
+        _source(),
+        stage=stage,
+        variant="fdr_bpdd_pr_ira",
+        seed=0,
+    )
+
+    assert pr_ira_protocol_module.validate_pr_ira_run_identity(identity) is None
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "source_sha256",
+        "protocol_sha256",
+        "fdr_protocol_sha256",
+        "initial_state_sha256",
+        "dataset_sha256",
+        "screen_subset_sha256",
+        "run_id",
+        "stage",
+        "variant",
+        "seed",
+    ],
+)
+def test_run_identity_validation_rejects_every_missing_authority_field(
+    missing_field: str,
+) -> None:
+    identity = build_run_identity(
+        _source(),
+        stage="formal",
+        variant="fdr_bpdd_pr_ira",
+        seed=0,
+    )
+    del identity[missing_field]
+
+    with pytest.raises(ValueError, match=missing_field):
+        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+
+
+@pytest.mark.parametrize("identity", [None, "formal", ["formal"]])
+def test_run_identity_validation_rejects_non_mapping(identity: object) -> None:
+    with pytest.raises(TypeError, match="Mapping"):
+        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+
+
+@pytest.mark.parametrize("stage", [None, "probe"])
+def test_run_identity_validation_rejects_malformed_stage(stage: object) -> None:
+    identity = build_run_identity(
+        _source(),
+        stage="formal",
+        variant="fdr_bpdd_pr_ira",
+        seed=0,
+    )
+    identity["stage"] = stage
+
+    with pytest.raises(ValueError, match="stage"):
+        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+
+
+def test_run_identity_validation_helper_is_exported() -> None:
+    assert "validate_pr_ira_run_identity" in pr_ira_protocol_module.__all__
+
+
 def test_protocol_freezes_variants_stages_and_every_gate_threshold() -> None:
     assert PR_IRA_PROTOCOL["variants"] == {
         "fdr_bpdd": {"fdr_enabled": True, "bpdd_enabled": True, "pr_ira_enabled": False},

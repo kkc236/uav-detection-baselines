@@ -6,7 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import torch
 from torch import nn
@@ -17,6 +17,8 @@ from src.fdr_protocol import initialize_private_module, validate_fdr_initial_sta
 from src.pr_ira import PRIRA
 from src.pr_ira_protocol import (
     pr_ira_private_update_enabled,
+    validate_pr_ira_run_identity,
+    validate_pr_ira_stage_epochs,
     validate_resume_authority,
 )
 from src.rtdetr_fdr_bpdd import FDRBPDDDetectionModel, FDRBPDDTrainer
@@ -472,18 +474,16 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         pr_ira_run_identity: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.pr_ira_run_identity = (
-            dict(pr_ira_run_identity)
-            if pr_ira_run_identity is not None
-            else None
-        )
+        validate_pr_ira_run_identity(pr_ira_run_identity)
+        identity = cast(Mapping[str, Any], pr_ira_run_identity)
+        self.pr_ira_run_identity = dict(identity)
         super().__init__(*args, **kwargs)
-        if self.pr_ira_run_identity is not None:
-            setattr(
-                self.args,
-                "pr_ira_run_identity",
-                dict(self.pr_ira_run_identity),
-            )
+        self._validate_pr_ira_schedule_authority(self.epochs)
+        setattr(
+            self.args,
+            "pr_ira_run_identity",
+            dict(self.pr_ira_run_identity),
+        )
 
     def build_optimizer(
         self,
@@ -562,9 +562,21 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
             raise TypeError("trainer requires the combined FDR+BPDD+PR-IRA model")
         return model
 
+    def _validate_pr_ira_schedule_authority(self, epochs: int) -> bool:
+        """Validate stage authority when a production run identity is present."""
+
+        identity = getattr(self, "pr_ira_run_identity", None)
+        if identity is None:
+            return False
+        validate_pr_ira_run_identity(identity)
+        validate_pr_ira_stage_epochs(identity["stage"], epochs)
+        return True
+
     def _model_train(self) -> None:
         """Apply the immutable relative-progress schedule once per epoch."""
 
+        if not self._validate_pr_ira_schedule_authority(self.epochs):
+            raise RuntimeError("PR-IRA training requires a complete run identity")
         super()._model_train()
         self._firewall_model().pr_ira.set_training_progress(
             int(self.epoch) + 1,
@@ -574,7 +586,11 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
     def suppress_pr_ira_inactive_gradients(self) -> bool:
         """Prevent momentum or decay from moving inactive private state."""
 
-        if hasattr(self, "epoch") and hasattr(self, "epochs"):
+        if (
+            hasattr(self, "epoch")
+            and hasattr(self, "epochs")
+            and self._validate_pr_ira_schedule_authority(self.epochs)
+        ):
             current_epoch = int(self.epoch) + 1
             if pr_ira_private_update_enabled(current_epoch, int(self.epochs)):
                 return False
@@ -658,6 +674,14 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         if not self._firewall_model().pr_ira_firewall_buffer_empty:
             raise RuntimeError("PR-IRA firewall buffer must be empty before save")
         return super().save_model()
+
+    def resume_training(self, checkpoint: Any) -> Any:
+        """Revalidate stage authority before parent checkpoint restoration."""
+
+        if getattr(self, "resume", False):
+            if not self._validate_pr_ira_schedule_authority(self.epochs):
+                raise ValueError("resume requires a PR-IRA run identity")
+        return super().resume_training(checkpoint)
 
     def get_model(
         self,
