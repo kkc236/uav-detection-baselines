@@ -172,7 +172,7 @@ def test_identity_phase_suppresses_all_private_gradients_only(
     assert all(parameter.grad is not None for parameter in private)
 
 
-def test_memory_cleanup_clears_pending_firewall_before_retry(
+def test_memory_cleanup_preserves_normal_accumulation_and_resets_retry(
     combined_model: FDRBPDDPRIRADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,7 +191,16 @@ def test_memory_cleanup_clears_pending_firewall_before_retry(
     trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
     trainer.model = combined_model
 
+    for parameter in private:
+        parameter.grad = torch.ones_like(parameter)
     trainer._clear_memory(0.5)
 
     assert calls == [0.5]
+    assert not combined_model.pr_ira_firewall_buffer_empty
+    assert all(parameter.grad is not None for parameter in private)
+
+    trainer._clear_memory()
+
+    assert calls == [0.5, None]
     assert combined_model.pr_ira_firewall_buffer_empty
+    assert all(parameter.grad is None for parameter in private)

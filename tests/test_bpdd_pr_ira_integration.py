@@ -22,6 +22,18 @@ from src.rtdetr_fdr_bpdd_pr_ira import (
 
 
 BPDD_CFG = Path(__file__).resolve().parents[1] / "configs" / "rtdetr-l-fdr-bpdd.yaml"
+RUN_IDENTITY = {
+    "source_sha256": "source",
+    "protocol_sha256": "protocol",
+    "fdr_protocol_sha256": "fdr-protocol",
+    "initial_state_sha256": "initial-state",
+    "dataset_sha256": "dataset",
+    "screen_subset_sha256": "subset",
+    "run_id": "fdr-bpdd-pr-ira-formal100-seed0",
+    "stage": "formal",
+    "variant": "fdr_bpdd_pr_ira",
+    "seed": 0,
+}
 
 
 @pytest.fixture(scope="module")
@@ -328,6 +340,7 @@ def _bare_trainer() -> FDRBPDDPRIRATrainer:
     trainer.data = {"nc": 10, "channels": 3}
     trainer.experiment_seed = 0
     trainer.initial_state_path = None
+    trainer.pr_ira_run_identity = dict(RUN_IDENTITY)
     return trainer
 
 
@@ -338,7 +351,14 @@ def test_resume_requires_and_round_trips_exact_combined_state(
     with torch.no_grad():
         combined.pr_ira.amplitude.fill_(0.25)
 
-    resumed = _bare_trainer().get_model(weights=combined, verbose=False)
+    payload = {
+        "model": None,
+        "ema": combined,
+        "train_args": {
+            "pr_ira_run_identity": dict(RUN_IDENTITY),
+        },
+    }
+    resumed = _bare_trainer().get_model(weights=payload, verbose=False)
 
     assert isinstance(resumed, FDRBPDDPRIRADetectionModel)
     assert resumed.state_dict().keys() == combined.state_dict().keys()
@@ -351,13 +371,42 @@ def test_resume_requires_and_round_trips_exact_combined_state(
         )
 
     with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
-        _bare_trainer().get_model(weights=bpdd, verbose=False)
+        _bare_trainer().get_model(
+            weights={
+                "model": bpdd,
+                "pr_ira_run_identity": dict(RUN_IDENTITY),
+            },
+            verbose=False,
+        )
 
     incomplete = dict(combined.state_dict())
     incomplete.pop(next(iter(incomplete)))
     with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
         _bare_trainer().get_model(
-            weights={"state_dict": incomplete},
+            weights={
+                "state_dict": incomplete,
+                "pr_ira_run_identity": dict(RUN_IDENTITY),
+            },
+            verbose=False,
+        )
+
+
+def test_resume_rejects_missing_or_drifted_run_authority(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+) -> None:
+    _bpdd, combined = model_pair
+
+    with pytest.raises(ValueError, match="run identity"):
+        _bare_trainer().get_model(weights=combined, verbose=False)
+
+    drifted = dict(RUN_IDENTITY)
+    drifted["dataset_sha256"] = "foreign-dataset"
+    with pytest.raises(ValueError, match="resume authority mismatch for dataset_sha256"):
+        _bare_trainer().get_model(
+            weights={
+                "model": combined,
+                "pr_ira_run_identity": drifted,
+            },
             verbose=False,
         )
 

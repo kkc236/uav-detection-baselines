@@ -15,6 +15,7 @@ from ultralytics.utils.torch_utils import unwrap_model
 
 from src.fdr_protocol import initialize_private_module, validate_fdr_initial_state
 from src.pr_ira import PRIRA
+from src.pr_ira_protocol import validate_resume_authority
 from src.rtdetr_fdr_bpdd import FDRBPDDDetectionModel, FDRBPDDTrainer
 
 
@@ -115,8 +116,10 @@ def _exact_combined_resume_state(weights: Any) -> Mapping[str, torch.Tensor]:
 
     candidate = weights
     if isinstance(candidate, Mapping):
-        if "model" in candidate:
+        if candidate.get("model") is not None:
             candidate = candidate["model"]
+        elif candidate.get("ema") is not None:
+            candidate = candidate["ema"]
         elif "state_dict" in candidate:
             candidate = candidate["state_dict"]
 
@@ -175,6 +178,26 @@ def load_exact_fdr_bpdd_pr_ira_resume_state(
         raise ValueError(
             "resume requires an exact combined FDR+BPDD+PR-IRA model/state"
         ) from error
+
+
+def validate_pr_ira_resume_payload(
+    weights: Any,
+    expected_run_identity: Mapping[str, Any] | None,
+) -> None:
+    """Require exact source/protocol/data/run authority before tensor loading."""
+
+    if not isinstance(expected_run_identity, Mapping):
+        raise ValueError("resume requires an expected PR-IRA run identity")
+    if not isinstance(weights, Mapping):
+        raise ValueError("resume checkpoint is missing its PR-IRA run identity")
+    checkpoint_identity = weights.get("pr_ira_run_identity")
+    if not isinstance(checkpoint_identity, Mapping):
+        train_args = weights.get("train_args")
+        if isinstance(train_args, Mapping):
+            checkpoint_identity = train_args.get("pr_ira_run_identity")
+    if not isinstance(checkpoint_identity, Mapping):
+        raise ValueError("resume checkpoint is missing its PR-IRA run identity")
+    validate_resume_authority(checkpoint_identity, expected_run_identity)
 
 
 class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
@@ -440,6 +463,25 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
 class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
     """FDR+BPDD trainer with strict combined graph construction and resume."""
 
+    def __init__(
+        self,
+        *args: Any,
+        pr_ira_run_identity: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.pr_ira_run_identity = (
+            dict(pr_ira_run_identity)
+            if pr_ira_run_identity is not None
+            else None
+        )
+        super().__init__(*args, **kwargs)
+        if self.pr_ira_run_identity is not None:
+            setattr(
+                self.args,
+                "pr_ira_run_identity",
+                dict(self.pr_ira_run_identity),
+            )
+
     def build_optimizer(
         self,
         model: nn.Module,
@@ -537,12 +579,14 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         return True
 
     def _clear_memory(self, threshold: float | None = None) -> None:
-        """Clear pending firewall state on normal cleanup and OOM retries."""
+        """Reset accumulation only for OOM/final cleanup, never per epoch."""
 
         candidate = getattr(self, "model", None)
-        if candidate is not None:
+        if candidate is not None and threshold is None:
             unwrapped = unwrap_model(candidate)
             if isinstance(unwrapped, FDRBPDDPRIRADetectionModel):
+                for parameter in unwrapped.parameters():
+                    parameter.grad = None
                 unwrapped.clear_pr_ira_firewall_buffer()
         super()._clear_memory(threshold)
 
@@ -627,6 +671,10 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
             experiment_seed=self.experiment_seed,
         )
         if weights:
+            validate_pr_ira_resume_payload(
+                weights,
+                getattr(self, "pr_ira_run_identity", None),
+            )
             load_exact_fdr_bpdd_pr_ira_resume_state(model, weights)
         elif self.initial_state_path is not None:
             artifact = torch.load(
@@ -646,4 +694,5 @@ __all__ = [
     "load_exact_fdr_bpdd_pr_ira_resume_state",
     "load_fdr_bpdd_pr_ira_initial_state",
     "remap_bpdd_pr_ira_shared_key",
+    "validate_pr_ira_resume_payload",
 ]
