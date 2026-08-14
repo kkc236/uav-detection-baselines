@@ -351,6 +351,16 @@ def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
         lambda: events.append("subtract"),
         raising=False,
     )
+
+    def record_suppression() -> bool:
+        events.append("suppress")
+        return False
+
+    monkeypatch.setattr(
+        trainer,
+        "suppress_pr_ira_inactive_gradients",
+        record_suppression,
+    )
     monkeypatch.setattr(
         model,
         "clear_pr_ira_firewall_buffer",
@@ -374,6 +384,7 @@ def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
     assert events == [
         "unscale",
         "subtract",
+        "suppress",
         "clip",
         "step",
         "update",
