@@ -449,7 +449,7 @@ def test_optimizer_error_resets_gradients_and_firewall(
     ]
 
 
-def test_explicit_reset_optimizer_step_and_checkpoint_keep_buffer_empty(
+def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
     firewall_model: FDRBPDDPRIRADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -490,11 +490,49 @@ def test_explicit_reset_optimizer_step_and_checkpoint_keep_buffer_empty(
         "save_model",
         lambda _self: "saved",
     )
-    assert trainer.save_model() == "saved"
-    assert model.pr_ira_firewall_buffer_empty
-
     _main, pending = _synthetic_losses(parameters, 6)
     model.capture_pr_ira_firewall_gradient(pending)
-    with pytest.raises(RuntimeError, match="firewall buffer must be empty"):
+    scaler.scale(pending).backward()
+    gradients = [
+        None if parameter.grad is None else parameter.grad.detach().clone()
+        for parameter in parameters
+    ]
+    buffer = model._pr_ira_firewall_buffer
+    entries = dict(buffer)
+    firewall_gradients = {
+        identifier: entry.gradient.detach().clone()
+        for identifier, entry in entries.items()
+    }
+    optimizer_state = optimizer.state_dict()
+    scaler_state = scaler.state_dict()
+
+    assert model.pr_ira_firewall_checkpoint_safe is True
+    assert trainer.save_model() == "saved"
+    assert model._pr_ira_firewall_buffer is buffer
+    assert model._pr_ira_firewall_subtracted is False
+    assert optimizer.state_dict() == optimizer_state
+    assert scaler.state_dict() == scaler_state
+    for parameter, expected in zip(parameters, gradients, strict=True):
+        if expected is None:
+            assert parameter.grad is None
+        else:
+            torch.testing.assert_close(parameter.grad, expected, rtol=0, atol=0)
+    for identifier, entry in entries.items():
+        assert model._pr_ira_firewall_buffer[identifier] is entry
+        torch.testing.assert_close(
+            entry.gradient,
+            firewall_gradients[identifier],
+            rtol=0,
+            atol=0,
+        )
+
+    _main, continuation = _synthetic_losses(parameters, 7)
+    model.capture_pr_ira_firewall_gradient(continuation)
+    assert model._pr_ira_firewall_buffer is buffer
+
+    model._pr_ira_firewall_subtracted = True
+    assert model.pr_ira_firewall_checkpoint_safe is False
+    with pytest.raises(RuntimeError, match="half-complete"):
         trainer.save_model()
+    model._pr_ira_firewall_subtracted = False
     model.clear_pr_ira_firewall_buffer()

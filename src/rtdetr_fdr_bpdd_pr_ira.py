@@ -280,6 +280,12 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
         return not self._pr_ira_firewall_buffer and not self._pr_ira_firewall_subtracted
 
     @property
+    def pr_ira_firewall_checkpoint_safe(self) -> bool:
+        """Return whether checkpointing cannot capture a half-complete step."""
+
+        return not self._pr_ira_firewall_subtracted
+
+    @property
     def pr_ira_firewall_buffer_size(self) -> int:
         return len(self._pr_ira_firewall_buffer)
 
@@ -477,6 +483,7 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
         validate_pr_ira_run_identity(pr_ira_run_identity)
         identity = cast(Mapping[str, Any], pr_ira_run_identity)
         self.pr_ira_run_identity = dict(identity)
+        self._pr_ira_full_resume_authority_validated = False
         super().__init__(*args, **kwargs)
         self._validate_pr_ira_schedule_authority(self.epochs)
         setattr(
@@ -669,16 +676,47 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
             raise FloatingPointError("non-finite paired gradient norm")
 
     def save_model(self) -> Any:
-        """Allow checkpoints only between complete optimizer windows."""
+        """Save without touching a pending pre-subtraction optimizer window.
 
-        if not self._firewall_model().pr_ira_firewall_buffer_empty:
-            raise RuntimeError("PR-IRA firewall buffer must be empty before save")
+        Uninterrupted training retains pending gradients and firewall entries;
+        resume drops partial unsaved gradients and buffer state, like stock.
+        """
+
+        if not self._firewall_model().pr_ira_firewall_checkpoint_safe:
+            raise RuntimeError("PR-IRA firewall optimizer step is half-complete")
         return super().save_model()
 
+    def setup_model(self) -> Any:
+        """Delegate model setup, then authorize the full resume checkpoint."""
+
+        checkpoint = super().setup_model()
+        if getattr(self, "resume", False):
+            if not isinstance(checkpoint, Mapping):
+                raise ValueError("resume requires a full checkpoint Mapping")
+            validate_pr_ira_resume_payload(
+                checkpoint,
+                getattr(self, "pr_ira_run_identity", None),
+            )
+            if not self._validate_pr_ira_schedule_authority(self.epochs):
+                raise ValueError("resume requires a PR-IRA run identity")
+            self._pr_ira_full_resume_authority_validated = True
+        return checkpoint
+
     def resume_training(self, checkpoint: Any) -> Any:
-        """Revalidate stage authority before parent checkpoint restoration."""
+        """Require fully authorized, clean state before parent restoration."""
 
         if getattr(self, "resume", False):
+            if not getattr(
+                self,
+                "_pr_ira_full_resume_authority_validated",
+                False,
+            ):
+                raise RuntimeError("resume requires full checkpoint authority")
+            model = self._firewall_model()
+            if not model.pr_ira_firewall_buffer_empty:
+                raise RuntimeError("resume requires an empty PR-IRA firewall")
+            if any(parameter.grad is not None for parameter in model.parameters()):
+                raise RuntimeError("resume model gradients must be empty")
             if not self._validate_pr_ira_schedule_authority(self.epochs):
                 raise ValueError("resume requires a PR-IRA run identity")
         return super().resume_training(checkpoint)
@@ -699,10 +737,28 @@ class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
             experiment_seed=self.experiment_seed,
         )
         if weights:
-            validate_pr_ira_resume_payload(
-                weights,
-                getattr(self, "pr_ira_run_identity", None),
-            )
+            if isinstance(weights, nn.Module):
+                if not getattr(self, "resume", False):
+                    raise ValueError("module weights require resume")
+                if type(weights) is not FDRBPDDPRIRADetectionModel:
+                    raise ValueError(
+                        "resume requires an exact combined FDR+BPDD+PR-IRA model/state"
+                    )
+                module_args = getattr(weights, "args", None)
+                if not isinstance(module_args, Mapping):
+                    raise ValueError(
+                        "resume checkpoint is missing its PR-IRA run identity"
+                    )
+                validate_pr_ira_resume_payload(
+                    {"train_args": module_args},
+                    getattr(self, "pr_ira_run_identity", None),
+                )
+                self._pr_ira_full_resume_authority_validated = False
+            else:
+                validate_pr_ira_resume_payload(
+                    weights,
+                    getattr(self, "pr_ira_run_identity", None),
+                )
             load_exact_fdr_bpdd_pr_ira_resume_state(model, weights)
         elif self.initial_state_path is not None:
             artifact = torch.load(

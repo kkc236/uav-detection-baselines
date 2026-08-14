@@ -592,6 +592,7 @@ def test_late_freeze_preserves_private_sgd_parameter_and_momentum(
 
 def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
     monkeypatch: pytest.MonkeyPatch,
+    combined_model: FDRBPDDPRIRADetectionModel,
 ) -> None:
     calls: list[object] = []
     monkeypatch.setattr(
@@ -603,6 +604,11 @@ def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
     trainer.resume = True
     trainer.epochs = 30
     trainer.pr_ira_run_identity = _run_identity("formal")
+    trainer._pr_ira_full_resume_authority_validated = True
+    trainer.model = combined_model
+    combined_model.clear_pr_ira_firewall_buffer()
+    for parameter in combined_model.parameters():
+        parameter.grad = None
 
     with pytest.raises(ValueError, match="schedule epochs"):
         trainer.resume_training({"epoch": 1})
@@ -612,6 +618,7 @@ def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
 
 def test_resume_delegates_after_valid_stage_total_revalidation(
     monkeypatch: pytest.MonkeyPatch,
+    combined_model: FDRBPDDPRIRADetectionModel,
 ) -> None:
     checkpoint = {"epoch": 1}
     calls: list[object] = []
@@ -625,6 +632,11 @@ def test_resume_delegates_after_valid_stage_total_revalidation(
     trainer.resume = True
     trainer.epochs = 100
     trainer.pr_ira_run_identity = _run_identity("formal")
+    trainer._pr_ira_full_resume_authority_validated = True
+    trainer.model = combined_model
+    combined_model.clear_pr_ira_firewall_buffer()
+    for parameter in combined_model.parameters():
+        parameter.grad = None
 
     assert trainer.resume_training(checkpoint) is marker
     assert calls == [checkpoint]

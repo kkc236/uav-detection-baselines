@@ -396,8 +396,11 @@ def test_resume_rejects_missing_or_drifted_run_authority(
 ) -> None:
     _bpdd, combined = model_pair
 
+    trainer = _bare_trainer()
+    trainer.resume = True
+    combined.args = {}
     with pytest.raises(ValueError, match="run identity"):
-        _bare_trainer().get_model(weights=combined, verbose=False)
+        trainer.get_model(weights=combined, verbose=False)
 
     drifted = dict(RUN_IDENTITY)
     drifted["dataset_sha256"] = "foreign-dataset"
@@ -409,6 +412,130 @@ def test_resume_rejects_missing_or_drifted_run_authority(
             },
             verbose=False,
         )
+
+
+def test_real_resume_accepts_exact_module_handoff_only_with_module_authority(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+) -> None:
+    bpdd, combined = model_pair
+    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    trainer = _bare_trainer()
+    trainer.resume = True
+
+    resumed = trainer.get_model(weights=combined, verbose=False)
+
+    assert isinstance(resumed, FDRBPDDPRIRADetectionModel)
+    assert trainer._pr_ira_full_resume_authority_validated is False
+
+    trainer.resume = False
+    with pytest.raises(ValueError, match="module weights require resume"):
+        trainer.get_model(weights=combined, verbose=False)
+    trainer.resume = True
+    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
+        trainer.get_model(weights=bpdd, verbose=False)
+
+
+def test_module_resume_rejects_missing_or_drifted_args_authority(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+) -> None:
+    _bpdd, combined = model_pair
+    trainer = _bare_trainer()
+    trainer.resume = True
+    original_args = getattr(combined, "args", None)
+    try:
+        combined.args = {}
+        with pytest.raises(ValueError, match="run identity"):
+            trainer.get_model(weights=combined, verbose=False)
+
+        drifted = dict(RUN_IDENTITY)
+        drifted["dataset_sha256"] = "foreign-dataset"
+        combined.args = {"pr_ira_run_identity": drifted}
+        with pytest.raises(
+            ValueError,
+            match="resume authority mismatch for dataset_sha256",
+        ):
+            trainer.get_model(weights=combined, verbose=False)
+    finally:
+        combined.args = original_args
+
+
+def test_setup_model_validates_full_resume_payload_before_authorizing(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bpdd, combined = model_pair
+    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    drifted = dict(RUN_IDENTITY)
+    drifted["dataset_sha256"] = "foreign-dataset"
+    checkpoint = {
+        "ema": combined,
+        "train_args": {"pr_ira_run_identity": drifted},
+    }
+    calls: list[object] = []
+    monkeypatch.setattr(
+        FDRBPDDTrainer,
+        "setup_model",
+        lambda _self: calls.append("parent") or checkpoint,
+    )
+    trainer = _bare_trainer()
+    trainer.resume = True
+    trainer.epochs = 100
+    trainer._pr_ira_full_resume_authority_validated = False
+
+    with pytest.raises(
+        ValueError,
+        match="resume authority mismatch for dataset_sha256",
+    ):
+        trainer.setup_model()
+
+    assert calls == ["parent"]
+    assert trainer._pr_ira_full_resume_authority_validated is False
+
+
+def test_setup_then_resume_requires_clean_state_and_calls_parents_in_order(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bpdd, combined = model_pair
+    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    checkpoint = {
+        "epoch": 1,
+        "ema": combined,
+        "train_args": {"pr_ira_run_identity": dict(RUN_IDENTITY)},
+    }
+    calls: list[object] = []
+    monkeypatch.setattr(
+        FDRBPDDTrainer,
+        "setup_model",
+        lambda _self: calls.append("setup") or checkpoint,
+    )
+    monkeypatch.setattr(
+        FDRBPDDTrainer,
+        "resume_training",
+        lambda _self, value: calls.append(("resume", value)) or "resumed",
+    )
+    trainer = _bare_trainer()
+    trainer.resume = True
+    trainer.epochs = 100
+    trainer.model = combined
+    combined.clear_pr_ira_firewall_buffer()
+    for parameter in combined.parameters():
+        parameter.grad = None
+
+    assert trainer.setup_model() is checkpoint
+    assert trainer._pr_ira_full_resume_authority_validated is True
+    assert trainer.resume_training(checkpoint) == "resumed"
+    assert calls == ["setup", ("resume", checkpoint)]
+
+    trainer._pr_ira_full_resume_authority_validated = False
+    with pytest.raises(RuntimeError, match="full checkpoint authority"):
+        trainer.resume_training(checkpoint)
+    trainer._pr_ira_full_resume_authority_validated = True
+    next(combined.parameters()).grad = torch.zeros_like(next(combined.parameters()))
+    with pytest.raises(RuntimeError, match="gradients must be empty"):
+        trainer.resume_training(checkpoint)
+    for parameter in combined.parameters():
+        parameter.grad = None
 
 
 def test_combined_loss_exposes_exact_main_and_bpdd_components(
