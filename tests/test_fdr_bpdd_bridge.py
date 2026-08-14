@@ -36,9 +36,9 @@ def _yaml(path) -> dict:
 def _batch() -> dict[str, torch.Tensor]:
     return {
         "img": torch.rand(1, 3, 128, 128),
-        "cls": torch.tensor([[1.0]]),
-        "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2]]),
-        "batch_idx": torch.tensor([0.0]),
+        "cls": torch.tensor([[1.0], [-1.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2], [0.8, 0.8, 0.1, 0.1]]),
+        "batch_idx": torch.tensor([0.0, 0.0]),
     }
 
 
@@ -112,6 +112,7 @@ def test_bridge_initial_graph_is_tensor_identical_to_a() -> None:
     )
     assert isinstance(bridge.init_criterion(), BPDDDetectionLoss)
     assert bridge.bpdd_options == BPDDOptions()
+    assert issubclass(FDRBPDDBridgeDetectionModel, RAGLGMControlDetectionModel)
     assert issubclass(FDRBPDDBridgeTrainer, RAGLGMControlTrainer)
 
 

@@ -32,9 +32,11 @@ from src.rtdetr_ra_glgm import (  # noqa: E402
 def _batch(device: torch.device) -> dict[str, torch.Tensor]:
     return {
         "img": torch.rand(1, 3, 128, 128, device=device),
-        "cls": torch.tensor([[1.0]], device=device),
-        "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2]], device=device),
-        "batch_idx": torch.tensor([0.0], device=device),
+        "cls": torch.tensor([[1.0], [-1.0]], device=device),
+        "bboxes": torch.tensor(
+            [[0.5, 0.5, 0.2, 0.2], [0.8, 0.8, 0.1, 0.1]], device=device
+        ),
+        "batch_idx": torch.tensor([0.0, 0.0], device=device),
     }
 
 

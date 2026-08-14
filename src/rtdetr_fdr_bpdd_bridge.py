@@ -8,9 +8,12 @@ from torch import Tensor, nn
 from ultralytics.utils import RANK
 
 from src.bpdd_loss import BPDDDetectionLoss
-from src.rtdetr_fdr import FDRRTDETRDetectionModel
 from src.rtdetr_fdr_bpdd_ra_glgm import _BPDDEpochStatistics, _parse_bpdd_options
-from src.rtdetr_ra_glgm import RAGLGMControlTrainer, _load_pair_state
+from src.rtdetr_ra_glgm import (
+    RAGLGMControlDetectionModel,
+    RAGLGMControlTrainer,
+    _load_pair_state,
+)
 
 
 FDR_BPDD_BRIDGE_MODEL_CFG = (
@@ -18,7 +21,7 @@ FDR_BPDD_BRIDGE_MODEL_CFG = (
 )
 
 
-class FDRBPDDBridgeDetectionModel(FDRRTDETRDetectionModel):
+class FDRBPDDBridgeDetectionModel(RAGLGMControlDetectionModel):
     """RA-authority FDR graph with parameter-free training-only BPDD."""
 
     def __init__(
