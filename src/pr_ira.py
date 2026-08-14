@@ -89,16 +89,43 @@ def _stable_rms(
     promoted = _promote_for_rms(x)
     if dim is None:
         element_count = promoted.numel()
+        scale = promoted.abs().amax()
+        safe_scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+        normalized = promoted / safe_scale
     else:
+        normalized_dims = tuple(index % promoted.ndim for index in dim)
         element_count = 1
-        for index in dim:
+        for index in normalized_dims:
             element_count *= promoted.shape[index]
-    return torch.linalg.vector_norm(
-        promoted,
+        scale_for_division = promoted.abs().amax(
+            dim=normalized_dims,
+            keepdim=True,
+        )
+        safe_scale = torch.where(
+            scale_for_division == 0,
+            torch.ones_like(scale_for_division),
+            scale_for_division,
+        )
+        normalized = promoted / safe_scale
+        scale = scale_for_division
+        if not keepdim:
+            for index in sorted(normalized_dims, reverse=True):
+                scale = scale.squeeze(index)
+    normalized_rms = torch.linalg.vector_norm(
+        normalized,
         ord=2,
         dim=dim,
         keepdim=keepdim,
     ) / math.sqrt(element_count)
+    return normalized_rms * scale
+
+
+def _low_precision_amplitude_guard(dtype: torch.dtype) -> float:
+    """Leave one quantization margin below the configured residual cap."""
+
+    if dtype not in (torch.float16, torch.bfloat16):
+        return 1.0
+    return 1.0 - 2.0 * torch.finfo(dtype).eps
 
 
 def _assert_finite_when_active(x: Tensor, active: Tensor) -> Tensor:
@@ -340,6 +367,7 @@ class PRIRA(nn.Module):
         raw_effective_amplitude = (
             open_ratio
             * self.alpha_max
+            * _low_precision_amplitude_guard(x.dtype)
             * torch.tanh(self.amplitude).to(dtype=x.dtype, device=x.device)
         )
         raw_effective_amplitude = _assert_finite_when_active(

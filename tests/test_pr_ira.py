@@ -32,9 +32,14 @@ def _assert_floating_bits_equal(
 
 def _stable_spatial_rms(x: torch.Tensor) -> torch.Tensor:
     spatial_size = x.shape[-2] * x.shape[-1]
+    scale = x.abs().amax(dim=(-2, -1), keepdim=True)
+    safe_scale = torch.where(scale == 0, torch.ones_like(scale), scale)
     return torch.linalg.vector_norm(
-        x, ord=2, dim=(-2, -1), keepdim=True
-    ) / math.sqrt(spatial_size)
+        x / safe_scale,
+        ord=2,
+        dim=(-2, -1),
+        keepdim=True,
+    ) / math.sqrt(spatial_size) * scale
 
 
 @pytest.mark.parametrize(
@@ -353,6 +358,68 @@ def test_full_open_nonzero_amplitude_uses_finite_promoted_rms(
     assert module.diagnostics["residual_rms_ratio"].item() <= (
         module.alpha_max + 1e-5
     )
+
+
+@pytest.mark.parametrize(
+    ("dtype", "value"),
+    [
+        (torch.bfloat16, 1e19),
+        (torch.float32, 1e19),
+        (torch.float64, 1e200),
+    ],
+)
+def test_large_finite_stock_rms_stays_finite_for_zero_residual(
+    dtype: torch.dtype,
+    value: float,
+) -> None:
+    module = PRIRA(2).to(dtype=dtype)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(10.0)
+        for block in module.local_blocks:
+            block.depthwise.weight.zero_()
+            assert block.depthwise.bias is not None
+            block.depthwise.bias.zero_()
+            block.pointwise.weight.zero_()
+            assert block.pointwise.bias is not None
+            block.pointwise.bias.zero_()
+    x = torch.full((1, 2, 2, 2), value, dtype=dtype, requires_grad=True)
+
+    output = module(x)
+    (output / value).sum().backward()
+
+    _assert_floating_bits_equal(output, x)
+    assert all(torch.isfinite(item).item() for item in module.diagnostics.values())
+    assert module.diagnostics["residual_rms_ratio"].item() == 0.0
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    for parameter in module.parameters():
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_saturated_low_precision_increment_respects_strict_rms_cap(
+    dtype: torch.dtype,
+) -> None:
+    module = PRIRA(4).to(dtype=dtype)
+    module.set_training_progress(30, 30)
+    with torch.no_grad():
+        module.amplitude.fill_(20.0)
+        channel_final = module.channel_gate[-1]
+        channel_final.weight.zero_()
+        assert channel_final.bias is not None
+        channel_final.bias.fill_(20.0)
+        module.spatial_gate.weight.zero_()
+        assert module.spatial_gate.bias is not None
+        module.spatial_gate.bias.fill_(20.0)
+    x = torch.linspace(-2.0, 2.0, 4 * 6 * 5, dtype=dtype).reshape(1, 4, 6, 5)
+
+    output = module(x)
+
+    assert output.dtype == dtype
+    assert torch.isfinite(output).all()
+    ratio = module.diagnostics["residual_rms_ratio"].item()
+    assert 0.0 < ratio <= module.alpha_max + 1e-5
 
 
 def test_zero_amplitude_supports_torch_func_jvp() -> None:
