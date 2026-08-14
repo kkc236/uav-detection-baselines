@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 import torch
 from torch import nn
 from ultralytics.utils import RANK
+from ultralytics.utils.torch_utils import unwrap_model
 
 from src.fdr_protocol import initialize_private_module, validate_fdr_initial_state
 from src.pr_ira import PRIRA
@@ -23,6 +26,15 @@ BPDD_PR_IRA_MODEL_CFG = (
 PR_IRA_MODEL_INDEX = 22
 PR_IRA_STATE_PREFIX = f"model.{PR_IRA_MODEL_INDEX}."
 _MODEL_KEY = re.compile(r"^model\.(\d+)\.(.+)$")
+
+
+@dataclass
+class _PRIRAFirewallEntry:
+    parameter: nn.Parameter
+    parameter_shape: torch.Size
+    parameter_dtype: torch.dtype
+    parameter_device: torch.device
+    gradient: torch.Tensor
 
 
 def remap_bpdd_pr_ira_shared_key(name: str) -> str:
@@ -211,6 +223,12 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
             adapter.amplitude.zero_()
         self.last_main_loss: torch.Tensor | None = None
         self.last_bpdd_loss: torch.Tensor | None = None
+        private_parameters = tuple(adapter.parameters())
+        self._pr_ira_private_parameter_ids = tuple(
+            id(parameter) for parameter in private_parameters
+        )
+        self._pr_ira_firewall_buffer: dict[int, _PRIRAFirewallEntry] = {}
+        self._pr_ira_firewall_subtracted = False
 
     @property
     def pr_ira(self) -> PRIRA:
@@ -219,6 +237,171 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
             raise RuntimeError("PR-IRA graph layer was unexpectedly replaced")
         return module
 
+    def pr_ira_private_parameters(self) -> tuple[nn.Parameter, ...]:
+        """Return the identity-frozen private parameter tuple."""
+
+        parameters = tuple(self.pr_ira.parameters())
+        identifiers = tuple(id(parameter) for parameter in parameters)
+        if identifiers != self._pr_ira_private_parameter_ids:
+            raise RuntimeError("PR-IRA private parameter count or identity changed")
+        return parameters
+
+    @property
+    def pr_ira_firewall_buffer_empty(self) -> bool:
+        return not self._pr_ira_firewall_buffer and not self._pr_ira_firewall_subtracted
+
+    @property
+    def pr_ira_firewall_buffer_size(self) -> int:
+        return len(self._pr_ira_firewall_buffer)
+
+    def clear_pr_ira_firewall_buffer(self) -> None:
+        """Reset the complete private-gradient optimizer-window state."""
+
+        self._pr_ira_firewall_buffer.clear()
+        self._pr_ira_firewall_subtracted = False
+
+    def validate_pr_ira_firewall_buffer(self) -> None:
+        """Validate parameter identity and every accumulated FP32 contribution."""
+
+        parameters = self.pr_ira_private_parameters()
+        if len(self._pr_ira_firewall_buffer) != len(parameters):
+            raise RuntimeError("PR-IRA firewall buffer count mismatch")
+        for parameter in parameters:
+            entry = self._pr_ira_firewall_buffer.get(id(parameter))
+            if entry is None or entry.parameter is not parameter:
+                raise RuntimeError("PR-IRA firewall parameter identity changed")
+            if parameter.shape != entry.parameter_shape:
+                raise RuntimeError("PR-IRA firewall parameter shape changed")
+            if parameter.dtype != entry.parameter_dtype:
+                raise RuntimeError("PR-IRA firewall parameter dtype changed")
+            if parameter.device != entry.parameter_device:
+                raise RuntimeError("PR-IRA firewall parameter device changed")
+            if entry.gradient.shape != parameter.shape:
+                raise RuntimeError("PR-IRA firewall gradient shape mismatch")
+            if entry.gradient.dtype != torch.float32:
+                raise RuntimeError("PR-IRA firewall gradient dtype must be FP32")
+            if entry.gradient.device != parameter.device:
+                raise RuntimeError("PR-IRA firewall gradient device mismatch")
+            if not bool(torch.isfinite(entry.gradient).all().item()):
+                raise FloatingPointError("non-finite PR-IRA firewall gradient")
+
+    def capture_pr_ira_firewall_gradient(self, loss_bpdd: torch.Tensor) -> None:
+        """Accumulate one unscaled BPDD-private gradient contribution in FP32."""
+
+        if self._pr_ira_firewall_subtracted:
+            raise RuntimeError("PR-IRA firewall optimizer step is half-complete")
+        parameters = self.pr_ira_private_parameters()
+        try:
+            gradients = torch.autograd.grad(
+                loss_bpdd,
+                parameters,
+                retain_graph=True,
+                allow_unused=True,
+            )
+            if len(gradients) != len(parameters):
+                raise RuntimeError("PR-IRA firewall gradient count mismatch")
+
+            contributions: list[torch.Tensor] = []
+            for parameter, gradient in zip(parameters, gradients, strict=True):
+                if gradient is None:
+                    contribution = torch.zeros_like(
+                        parameter,
+                        dtype=torch.float32,
+                        memory_format=torch.preserve_format,
+                    )
+                else:
+                    if gradient.shape != parameter.shape:
+                        raise RuntimeError("PR-IRA firewall gradient shape mismatch")
+                    if gradient.dtype != parameter.dtype:
+                        raise RuntimeError("PR-IRA firewall gradient dtype mismatch")
+                    if gradient.device != parameter.device:
+                        raise RuntimeError("PR-IRA firewall gradient device mismatch")
+                    contribution = gradient.detach().to(dtype=torch.float32)
+                if not bool(torch.isfinite(contribution).all().item()):
+                    raise FloatingPointError("non-finite PR-IRA firewall gradient")
+                contributions.append(contribution)
+
+            if self._pr_ira_firewall_buffer:
+                self.validate_pr_ira_firewall_buffer()
+                accumulated = []
+                for parameter, contribution in zip(
+                    parameters,
+                    contributions,
+                    strict=True,
+                ):
+                    candidate = (
+                        self._pr_ira_firewall_buffer[id(parameter)].gradient
+                        + contribution
+                    )
+                    if not bool(torch.isfinite(candidate).all().item()):
+                        raise FloatingPointError(
+                            "non-finite accumulated PR-IRA firewall gradient"
+                        )
+                    accumulated.append(candidate)
+                for parameter, candidate in zip(
+                    parameters,
+                    accumulated,
+                    strict=True,
+                ):
+                    self._pr_ira_firewall_buffer[id(parameter)].gradient = candidate
+            else:
+                self._pr_ira_firewall_buffer = {
+                    id(parameter): _PRIRAFirewallEntry(
+                        parameter=parameter,
+                        parameter_shape=parameter.shape,
+                        parameter_dtype=parameter.dtype,
+                        parameter_device=parameter.device,
+                        gradient=contribution,
+                    )
+                    for parameter, contribution in zip(
+                        parameters,
+                        contributions,
+                        strict=True,
+                    )
+                }
+        except BaseException:
+            self.clear_pr_ira_firewall_buffer()
+            raise
+
+    def subtract_pr_ira_firewall_buffer(self) -> None:
+        """Subtract accumulated BPDD-private gradients after AMP unscale."""
+
+        if self._pr_ira_firewall_subtracted:
+            raise RuntimeError("PR-IRA firewall optimizer step is already half-complete")
+        if not self._pr_ira_firewall_buffer:
+            raise RuntimeError("PR-IRA firewall buffer is empty")
+        self.validate_pr_ira_firewall_buffer()
+        actions: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for parameter in self.pr_ira_private_parameters():
+            contribution = self._pr_ira_firewall_buffer[id(parameter)].gradient
+            gradient = parameter.grad
+            if gradient is None:
+                if torch.count_nonzero(contribution).item() != 0:
+                    raise RuntimeError(
+                        "PR-IRA parameter gradient is missing for a BPDD contribution"
+                    )
+                continue
+            if gradient.shape != parameter.shape:
+                raise RuntimeError("PR-IRA parameter gradient shape changed")
+            if gradient.dtype != parameter.dtype:
+                raise RuntimeError("PR-IRA parameter gradient dtype changed")
+            if gradient.device != parameter.device:
+                raise RuntimeError("PR-IRA parameter gradient device changed")
+            if not bool(torch.isfinite(gradient).all().item()):
+                raise FloatingPointError("non-finite unscaled PR-IRA gradient")
+            converted = contribution.to(dtype=gradient.dtype)
+            candidate = gradient.detach().float() - contribution
+            if not bool(torch.isfinite(converted).all().item()) or not bool(
+                torch.isfinite(candidate).all().item()
+            ):
+                raise FloatingPointError("non-finite PR-IRA firewall subtraction")
+            actions.append((gradient, converted))
+
+        with torch.no_grad():
+            for gradient, contribution in actions:
+                gradient.sub_(contribution)
+        self._pr_ira_firewall_subtracted = True
+
     def loss(
         self,
         batch: dict[str, torch.Tensor],
@@ -226,28 +409,105 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Expose the unchanged mature loss as exact main and BPDD components."""
 
-        result = super().loss(batch, preds)
-        bpdd_names = [
-            name for name in self.last_fdr_losses if name == "loss_bpdd"
-        ]
-        if not self.training and not bpdd_names:
-            self.last_main_loss = result[0]
-            self.last_bpdd_loss = None
-            return result
-        if len(bpdd_names) != 1:
-            raise RuntimeError("combined training loss requires exactly one loss_bpdd")
+        try:
+            result = super().loss(batch, preds)
+            bpdd_names = [
+                name for name in self.last_fdr_losses if name == "loss_bpdd"
+            ]
+            if not self.training and not bpdd_names:
+                self.last_main_loss = result[0]
+                self.last_bpdd_loss = None
+                return result
+            if len(bpdd_names) != 1:
+                raise RuntimeError(
+                    "combined training loss requires exactly one loss_bpdd"
+                )
 
-        self.last_bpdd_loss = self.last_fdr_losses["loss_bpdd"]
-        self.last_main_loss = sum(
-            value
-            for name, value in self.last_fdr_losses.items()
-            if name != "loss_bpdd"
-        )
-        return result
+            self.last_bpdd_loss = self.last_fdr_losses["loss_bpdd"]
+            self.last_main_loss = sum(
+                value
+                for name, value in self.last_fdr_losses.items()
+                if name != "loss_bpdd"
+            )
+            self.capture_pr_ira_firewall_gradient(self.last_bpdd_loss)
+            return result
+        except BaseException:
+            self.clear_pr_ira_firewall_buffer()
+            raise
 
 
 class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
     """FDR+BPDD trainer with strict combined graph construction and resume."""
+
+    def _firewall_model(self) -> FDRBPDDPRIRADetectionModel:
+        model = unwrap_model(self.model)
+        if not isinstance(model, FDRBPDDPRIRADetectionModel):
+            raise TypeError("trainer requires the combined FDR+BPDD+PR-IRA model")
+        return model
+
+    def reset_pr_ira_firewall_state(self) -> None:
+        """Clear gradients and pending private contributions before a retry."""
+
+        self.optimizer.zero_grad()
+        self._firewall_model().clear_pr_ira_firewall_buffer()
+
+    def optimizer_step(self) -> None:
+        """Subtract BPDD-private gradients within the frozen stock step order."""
+
+        model = self._firewall_model()
+        scale_before = float(self.scaler.get_scale())
+        try:
+            self.scaler.unscale_(self.optimizer)
+            model.subtract_pr_ira_firewall_buffer()
+            norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=10.0,
+            )
+            value = float(norm.detach().float().cpu())
+            finite_value = value if math.isfinite(value) else None
+            self.last_gradient_norms = {"gradient_norm": finite_value}
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.optimizer.zero_grad()
+            model.clear_pr_ira_firewall_buffer()
+            if self.ema:
+                self.ema.update(self.model)
+        except BaseException:
+            self.optimizer.zero_grad()
+            model.clear_pr_ira_firewall_buffer()
+            raise
+
+        scale_after = float(self.scaler.get_scale())
+        skipped = scale_after < scale_before
+        gradient_finite = finite_value is not None
+        self._record_optimizer_evidence(
+            {
+                "amp_scale_before": scale_before,
+                "amp_scale_after": scale_after,
+                "amp_step_skipped": skipped,
+                "gradient_norm": finite_value,
+                "gradient_norm_finite": gradient_finite,
+            }
+        )
+        if (
+            scale_before != self.controlled_amp_scale
+            or scale_after != self.controlled_amp_scale
+        ):
+            raise RuntimeError(
+                f"fixed AMP scale changed: before={scale_before}, "
+                f"after={scale_after}, expected={self.controlled_amp_scale}"
+            )
+        if skipped:
+            raise RuntimeError("fixed AMP skipped an optimizer attempt")
+        if not gradient_finite:
+            raise FloatingPointError("non-finite paired gradient norm")
+
+    def save_model(self) -> Any:
+        """Allow checkpoints only between complete optimizer windows."""
+
+        if not self._firewall_model().pr_ira_firewall_buffer_empty:
+            raise RuntimeError("PR-IRA firewall buffer must be empty before save")
+        return super().save_model()
 
     def get_model(
         self,
