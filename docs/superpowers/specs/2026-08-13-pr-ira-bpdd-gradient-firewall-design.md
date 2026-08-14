@@ -2,7 +2,7 @@
 
 日期：2026-08-13
 
-状态：已批准设计，等待实施计划
+状态：已批准设计；算法说明与实施计划已于 2026-08-14 完成
 目标组合：`RT-DETR-L + FDR + BPDD + PR-IRA`
 
 ## 1. 设计目标
@@ -130,7 +130,7 @@ G=G_c\odot G_s,\qquad G\in[0,1].
 
 这使平坦背景可以被压低，而局部纹理、边缘及小目标响应可以获得更高门值。第一版不增加目标框掩码监督或 gate sparsity loss，避免把多个变量混入兼容性验证。
 
-通道门和空间门的末层 bias 初始化为 0，初始门值分别为 0.5；两者乘积的初始有效门值为 0.25。全部 PR-IRA 私有参数使用独立 seed `20000 + experiment_seed`，构造过程不得消耗公共 CPU/CUDA RNG。
+通道门和空间门的末层 weight 与 bias 均初始化为 0，保证初始门值分别严格为 0.5、两者乘积严格为 0.25。该零化必须在私有 seed 初始化后执行，不能被通用初始化覆盖。全部 PR-IRA 私有参数使用独立 seed `20000 + experiment_seed`，构造过程不得消耗公共 CPU/CUDA RNG。
 
 ### 5.3 受保护增量输出
 
@@ -152,16 +152,19 @@ y=x+\rho(t)\cdot\alpha_{max}\tanh(a)\cdot G\odot d,
 
 ## 6. 启用调度与私有学习率
 
-调度使用训练总轮数的相对比例，以保持 Screen30 与 Formal100 的阶段一致性：
+调度使用训练总轮数的相对比例，并冻结为整数 epoch 里程碑，以保持 Screen30 与 Formal100 的阶段一致性且消除边界歧义。令 \(e\) 为从 1 开始的当前 epoch，\(E\) 为总 epoch 数：
+
+\[
+e_0=\lceil0.10E\rceil,\qquad e_1=\lfloor0.30E\rfloor+1.
+\]
 
 \[
 \rho(t)=
 \begin{cases}
-0,&p<0.10,\\
-\frac{p-0.10}{0.20},&0.10\le p<0.30,\\
-1,&p\ge0.30,
+0,&e\le e_0,\\
+\frac{e-e_0}{e_1-e_0},&e_0<e<e_1,\\
+1,&e\ge e_1,
 \end{cases}
-\qquad p=\frac{epoch+1}{epochs}.
 \]
 
 对应关系：
@@ -211,14 +214,14 @@ L=L_{stock}+L_{FGL}+L_{pre}+L_{BPDD}.
 4. 按原训练器执行 `scaler.scale(main_loss + loss_bpdd).backward()`；
 5. optimizer step 时先执行 `scaler.unscale_(optimizer)`；
 6. 在任何梯度裁剪之前，从 PR-IRA `.grad` 中减去累计 firewall buffer；
-7. 分组裁剪 common、FDR-private、PR-IRA-private 梯度，执行一次 MuSGD step；
+7. 严格复用 Ultralytics 8.4.90 既有的单次全模型 `clip_grad_norm_(..., 10.0)`，然后执行一次 MuSGD step；不得改成分组裁剪，否则会将优化器更新规则引入为额外变量；
 8. 清空普通梯度和 firewall buffer，再更新 EMA。
 
 固定协议为单卡，因此不存在 DDP world-size 缩放差异。`nbs=64` 带来的梯度累积必须同时累积 firewall buffer，不能只保存最后一个 micro-batch。
 
 ### 7.3 故障保护
 
-- firewall 必须在 AMP unscale 后、clip 前扣除；
+- firewall 必须在 AMP unscale 后、原版全模型 clip 前扣除；
 - buffer 数量、形状、dtype 和参数身份必须逐项匹配；
 - OOM 重建、异常 batch、resume 和 optimizer zero-grad 时必须同步清空 buffer；
 - epoch checkpoint 只能在 optimizer step 完成且 buffer 为空时保存；
@@ -282,6 +285,7 @@ L=L_{stock}+L_{FGL}+L_{pre}+L_{BPDD}.
 - MuSGD、AMP scale128、单 optimizer step；
 - stock/FGL/pre-box/BPDD 损失均有限；
 - common/FDR/PR-IRA 三组梯度均有限；
+- 防火墙扣除后仍只执行原版单次全模型梯度裁剪，不得分组裁剪；
 - 无 skipped step；
 - save/reload 后输出、调度状态和 EMA 一致。
 
