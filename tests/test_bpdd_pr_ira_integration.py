@@ -40,6 +40,25 @@ def model_pair() -> tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel]:
     return bpdd, combined
 
 
+@pytest.fixture(scope="module")
+def training_model_pair() -> tuple[
+    FDRBPDDDetectionModel,
+    FDRBPDDPRIRADetectionModel,
+]:
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(29_031)
+        bpdd = FDRBPDDDetectionModel(BPDD_CFG, nc=10, verbose=False)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(29_031)
+        combined = FDRBPDDPRIRADetectionModel(
+            BPDD_PR_IRA_MODEL_CFG,
+            nc=10,
+            verbose=False,
+            experiment_seed=0,
+        )
+    return bpdd, combined
+
+
 def _artifact(state: dict[str, torch.Tensor]) -> dict[str, object]:
     return {
         "fdr_public_state": dict(state),
@@ -65,6 +84,18 @@ def _private_state(*, ambient_seed: int, experiment_seed: int) -> dict[str, torc
     return {
         name: tensor.detach().clone()
         for name, tensor in model.pr_ira.state_dict().items()
+    }
+
+
+def _training_batch() -> dict[str, torch.Tensor]:
+    return {
+        "img": torch.zeros(2, 3, 128, 128),
+        "cls": torch.tensor([[1], [2]], dtype=torch.float32),
+        "bboxes": torch.tensor(
+            [[0.50, 0.50, 0.20, 0.20], [0.35, 0.40, 0.15, 0.10]],
+            dtype=torch.float32,
+        ),
+        "batch_idx": torch.tensor([0, 1], dtype=torch.float32),
     }
 
 
@@ -328,4 +359,95 @@ def test_resume_requires_and_round_trips_exact_combined_state(
         _bare_trainer().get_model(
             weights={"state_dict": incomplete},
             verbose=False,
+        )
+
+
+def test_combined_loss_exposes_exact_main_and_bpdd_components(
+    training_model_pair: tuple[
+        FDRBPDDDetectionModel,
+        FDRBPDDPRIRADetectionModel,
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bpdd, combined = training_model_pair
+    monkeypatch.setattr(
+        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        lambda _artifact: None,
+    )
+    load_fdr_bpdd_pr_ira_initial_state(combined, _artifact(bpdd.state_dict()))
+    combined.train()
+    combined.pr_ira.set_training_progress(30, 30)
+    with torch.no_grad():
+        combined.pr_ira.amplitude.zero_()
+
+    torch.manual_seed(44_021)
+    total, _displayed = combined.loss(_training_batch())
+    expected_main = sum(
+        value
+        for name, value in combined.last_fdr_losses.items()
+        if name != "loss_bpdd"
+    )
+
+    assert combined.last_bpdd_loss is combined.last_fdr_losses["loss_bpdd"]
+    torch.testing.assert_close(combined.last_main_loss, expected_main, rtol=0, atol=0)
+    torch.testing.assert_close(
+        total,
+        combined.last_main_loss + combined.last_bpdd_loss,
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_zero_amplitude_combined_loss_is_bit_exact_to_mature_bpdd(
+    training_model_pair: tuple[
+        FDRBPDDDetectionModel,
+        FDRBPDDPRIRADetectionModel,
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bpdd, combined = training_model_pair
+    monkeypatch.setattr(
+        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        lambda _artifact: None,
+    )
+    load_fdr_bpdd_pr_ira_initial_state(combined, _artifact(bpdd.state_dict()))
+    bpdd.train()
+    combined.train()
+    combined.pr_ira.set_training_progress(30, 30)
+    with torch.no_grad():
+        combined.pr_ira.amplitude.zero_()
+    batch = _training_batch()
+
+    torch.manual_seed(55_031)
+    public_rng = torch.random.get_rng_state().clone()
+    mature_total, mature_displayed = bpdd.loss(batch)
+    mature_losses = {
+        name: value.detach().clone()
+        for name, value in bpdd.last_fdr_losses.items()
+    }
+    mature_statistics = {
+        name: value.detach().clone()
+        for name, value in bpdd.last_bpdd_statistics.items()
+    }
+
+    torch.random.set_rng_state(public_rng)
+    combined_total, combined_displayed = combined.loss(batch)
+
+    assert combined.last_fdr_losses.keys() == mature_losses.keys()
+    torch.testing.assert_close(combined_total, mature_total, rtol=0, atol=0)
+    torch.testing.assert_close(combined_displayed, mature_displayed, rtol=0, atol=0)
+    for name, expected in mature_losses.items():
+        torch.testing.assert_close(
+            combined.last_fdr_losses[name],
+            expected,
+            rtol=0,
+            atol=0,
+        )
+    assert combined.last_bpdd_statistics.keys() == mature_statistics.keys()
+    for name, expected in mature_statistics.items():
+        torch.testing.assert_close(
+            combined.last_bpdd_statistics[name],
+            expected,
+            rtol=0,
+            atol=0,
         )

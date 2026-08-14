@@ -209,6 +209,8 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
         )
         with torch.no_grad():
             adapter.amplitude.zero_()
+        self.last_main_loss: torch.Tensor | None = None
+        self.last_bpdd_loss: torch.Tensor | None = None
 
     @property
     def pr_ira(self) -> PRIRA:
@@ -216,6 +218,32 @@ class FDRBPDDPRIRADetectionModel(FDRBPDDDetectionModel):
         if not isinstance(module, PRIRA):
             raise RuntimeError("PR-IRA graph layer was unexpectedly replaced")
         return module
+
+    def loss(
+        self,
+        batch: dict[str, torch.Tensor],
+        preds: tuple | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Expose the unchanged mature loss as exact main and BPDD components."""
+
+        result = super().loss(batch, preds)
+        bpdd_names = [
+            name for name in self.last_fdr_losses if name == "loss_bpdd"
+        ]
+        if not self.training and not bpdd_names:
+            self.last_main_loss = result[0]
+            self.last_bpdd_loss = None
+            return result
+        if len(bpdd_names) != 1:
+            raise RuntimeError("combined training loss requires exactly one loss_bpdd")
+
+        self.last_bpdd_loss = self.last_fdr_losses["loss_bpdd"]
+        self.last_main_loss = sum(
+            value
+            for name, value in self.last_fdr_losses.items()
+            if name != "loss_bpdd"
+        )
+        return result
 
 
 class FDRBPDDPRIRATrainer(FDRBPDDTrainer):
