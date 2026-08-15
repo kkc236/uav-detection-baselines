@@ -1,0 +1,1096 @@
+from __future__ import annotations
+
+import ast
+import inspect
+
+import pytest
+import torch
+from torch import nn
+
+import src.iber_head as iber_head
+from src.iber_head import IBEROutput, IBERRefiner, PROBES
+from src.iber_protocol import PROBES as PROTOCOL_PROBES
+from src.iber_protocol import module_state_sha256
+from src.iber_sampling import (
+    sample_f3_boundary_evidence,
+    sample_rgb_boundary_evidence,
+)
+from src.itber_geometry import apply_edge_update, xyxy_to_cxcywh
+from src.itber_loss import itber_private_loss
+
+
+def _refiner(probe: str = "b3") -> IBERRefiner:
+    return IBERRefiner(
+        hidden_dim=8,
+        f3_channels=4,
+        private_seed=17,
+        probe=probe,
+        image_size=640,
+        rho=0.05,
+    )
+
+
+def _inputs(
+    *,
+    batch: int = 2,
+    queries: int = 3,
+    requires_grad: bool = False,
+) -> tuple[torch.Tensor, ...]:
+    generator = torch.Generator().manual_seed(1234)
+    hidden = torch.randn(batch, queries, 8, generator=generator)
+    template = torch.tensor(
+        (
+            (0.50, 0.50, 0.20, 0.16),
+            (0.12, 0.82, 0.08, 0.12),
+            (0.88, 0.18, 0.10, 0.06),
+        )
+    )
+    stock_boxes = template[:queries].unsqueeze(0).expand(batch, -1, -1).clone()
+    stock_scores = torch.randn(batch, queries, 5, generator=generator)
+    f3 = torch.randn(batch, 4, 12, 10, generator=generator)
+
+    y = torch.linspace(-1.0, 1.0, 18).view(1, 1, 18, 1)
+    x = torch.linspace(-0.75, 1.25, 20).view(1, 1, 1, 20)
+    image_rgb = torch.cat(
+        (
+            x.expand(batch, 1, 18, 20),
+            y.expand(batch, 1, 18, 20),
+            (x + y).expand(batch, 1, 18, 20),
+        ),
+        dim=1,
+    ).clone()
+    values = (hidden, stock_boxes, stock_scores, f3, image_rgb)
+    if requires_grad:
+        for value in values:
+            value.requires_grad_()
+    return values
+
+
+def _assert_linear(module: nn.Module, in_features: int, out_features: int) -> None:
+    assert isinstance(module, nn.Linear)
+    assert module.in_features == in_features
+    assert module.out_features == out_features
+
+
+def test_probe_initialization_is_equal_capacity_reproducible_and_rng_private() -> None:
+    assert PROBES is PROTOCOL_PROBES
+    assert PROBES == frozenset(("b0", "b1", "b2", "b3"))
+    torch.manual_seed(91)
+    before = torch.random.get_rng_state().clone()
+
+    refiners = {probe: _refiner(probe) for probe in sorted(PROBES)}
+
+    torch.testing.assert_close(torch.random.get_rng_state(), before, rtol=0, atol=0)
+    counts = {
+        probe: sum(parameter.numel() for parameter in model.parameters())
+        for probe, model in refiners.items()
+    }
+    fingerprints = {
+        probe: module_state_sha256(model) for probe, model in refiners.items()
+    }
+    assert len(set(counts.values())) == 1
+    assert len(set(fingerprints.values())) == 1
+
+
+def test_candidate_c_uses_only_area_direction_calibration_on_boundary_evidence() -> None:
+    source = inspect.getsource(iber_head).lower()
+    for forbidden in ("trajectory", "query_path", "decoder"):
+        assert forbidden not in source
+    assert not any(token.lower() == "p3" for token in source.split())
+
+    model = _refiner()
+    assert hasattr(model, "area_calibration")
+    assert hasattr(model, "direction_calibration")
+    assert hasattr(model, "context_path")
+    assert len(model.scale_experts) == 3
+    assert len(model.edge_direction_experts) == 4
+    for expert in model.edge_direction_experts:
+        assert len(expert) == 4
+        _assert_linear(expert[0], 240, 128)
+        assert isinstance(expert[1], nn.SiLU)
+        _assert_linear(expert[2], 128, 64)
+        assert isinstance(expert[3], nn.SiLU)
+    assert len(model.scale_gate_heads) == 3
+    assert len(model.scale_residual_heads) == 3
+    assert model.boundary_gain.shape == torch.Size([])
+    assert float(model.boundary_gain.detach()) == pytest.approx(2.0)
+    parameter_names = dict(model.named_parameters())
+    assert any(name.startswith("f3_encoder.") for name in parameter_names)
+    assert any(name.startswith("rgb_encoder.") for name in parameter_names)
+
+
+def test_signed_evidence_paths_are_modality_separated_before_fusion() -> None:
+    model = _refiner()
+
+    assert not hasattr(model, "signed_evidence_path")
+    assert len(model.f3_signed_path) == 4
+    _assert_linear(model.f3_signed_path[0], 96, 64)
+    assert isinstance(model.f3_signed_path[1], nn.SiLU)
+    _assert_linear(model.f3_signed_path[2], 64, 64)
+    assert isinstance(model.f3_signed_path[3], nn.SiLU)
+    assert len(model.rgb_signed_path) == 4
+    _assert_linear(model.rgb_signed_path[0], 15, 32)
+    assert isinstance(model.rgb_signed_path[1], nn.SiLU)
+    _assert_linear(model.rgb_signed_path[2], 32, 64)
+    assert isinstance(model.rgb_signed_path[3], nn.SiLU)
+    assert len(model.f3_reliability_head) == 3
+    _assert_linear(model.f3_reliability_head[0], 128, 64)
+    assert isinstance(model.f3_reliability_head[1], nn.SiLU)
+    _assert_linear(model.f3_reliability_head[2], 64, 1)
+    torch.testing.assert_close(
+        model.f3_reliability_head[2].weight,
+        torch.zeros_like(model.f3_reliability_head[2].weight),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        model.f3_reliability_head[2].bias,
+        torch.zeros_like(model.f3_reliability_head[2].bias),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        model.f3_increment_gain,
+        torch.zeros_like(model.f3_increment_gain),
+        rtol=0,
+        atol=0,
+    )
+    _assert_linear(model.direction_calibration[0], 240, 96)
+    for expert in model.scale_experts:
+        _assert_linear(expert[0], 240, 64)
+    for expert in model.edge_direction_experts:
+        _assert_linear(expert[0], 240, 128)
+
+
+def test_b3_has_zero_initialized_per_edge_boundary_heads() -> None:
+    model = _refiner("b3")
+
+    for collection_name in (
+        "boundary_edge_gate_heads",
+        "boundary_edge_residual_heads",
+    ):
+        heads = getattr(model, collection_name)
+        assert isinstance(heads, nn.ModuleList)
+        assert len(heads) == 4
+        for head in heads:
+            _assert_linear(head, 64, 1)
+            torch.testing.assert_close(
+                head.weight, torch.zeros_like(head.weight), rtol=0, atol=0
+            )
+            torch.testing.assert_close(
+                head.bias, torch.zeros_like(head.bias), rtol=0, atol=0
+            )
+
+
+def test_b3_per_edge_boundary_heads_can_differ_from_shared_heads() -> None:
+    model = _refiner("b3")
+    edge_features = torch.ones(1, 4, 64)
+
+    with torch.no_grad():
+        for edge_index, (gate_head, residual_head) in enumerate(
+            zip(model.boundary_edge_gate_heads, model.boundary_edge_residual_heads)
+        ):
+            gate_head.weight.fill_(0.01 * (edge_index + 1))
+            residual_head.weight.fill_(0.02 * (edge_index + 1))
+
+    edge_gate_outputs = torch.cat(
+        [
+            head(edge_features[:, edge_index])
+            for edge_index, head in enumerate(model.boundary_edge_gate_heads)
+        ],
+        dim=-1,
+    )
+    edge_residual_outputs = torch.cat(
+        [
+            head(edge_features[:, edge_index])
+            for edge_index, head in enumerate(model.boundary_edge_residual_heads)
+        ],
+        dim=-1,
+    )
+    shared_gate_outputs = model.boundary_gate_head(edge_features).squeeze(-1)
+    shared_residual_outputs = model.boundary_residual_head(edge_features).squeeze(-1)
+
+    assert edge_gate_outputs.shape == (1, 4)
+    assert edge_residual_outputs.shape == (1, 4)
+    assert torch.unique(edge_gate_outputs).numel() == 4
+    assert torch.unique(edge_residual_outputs).numel() == 4
+    assert not torch.allclose(
+        edge_gate_outputs, shared_gate_outputs, rtol=0, atol=0
+    )
+    assert not torch.allclose(
+        edge_residual_outputs, shared_residual_outputs, rtol=0, atol=0
+    )
+
+
+def test_boundary_direction_uses_detached_hidden_context() -> None:
+    model = _refiner()
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    changed_hidden = hidden.clone()
+    changed_hidden[..., 0] += 17.0
+    with torch.no_grad():
+        model.boundary_residual_head.weight.fill_(0.05)
+        model.boundary_residual_head.bias.fill_(0.01)
+
+    first = model(hidden, boxes, scores, f3, image)
+    second = model(changed_hidden, boxes, scores, f3, image)
+
+    assert not torch.equal(first.refined_boxes, second.refined_boxes)
+    assert not torch.equal(first.residual_raw, second.residual_raw)
+    first.refined_boxes.sum().backward()
+    assert hidden.grad is None
+
+
+def test_private_initialization_never_seeds_accelerators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accelerator_seed_calls: list[int] = []
+    before = torch.random.get_rng_state().clone()
+    monkeypatch.setattr(
+        torch.cuda,
+        "manual_seed_all",
+        lambda seed: accelerator_seed_calls.append(int(seed)),
+    )
+
+    _refiner()
+
+    assert accelerator_seed_calls == []
+    torch.testing.assert_close(torch.random.get_rng_state(), before, rtol=0, atol=0)
+
+
+def test_exact_architecture_and_four_zero_initialized_final_heads() -> None:
+    model = _refiner()
+
+    assert isinstance(model.edge_embedding, nn.Embedding)
+    assert (model.edge_embedding.num_embeddings, model.edge_embedding.embedding_dim) == (
+        4,
+        8,
+    )
+
+    assert len(model.area_calibration) == 4
+    _assert_linear(model.area_calibration[0], 16, 96)
+    assert isinstance(model.area_calibration[1], nn.SiLU)
+    _assert_linear(model.area_calibration[2], 96, 64)
+    assert isinstance(model.area_calibration[3], nn.SiLU)
+
+    assert len(model.context_path) == 3
+    assert isinstance(model.context_path[0], nn.LayerNorm)
+    _assert_linear(model.context_path[1], 8, 64)
+    assert isinstance(model.context_path[2], nn.SiLU)
+
+    assert isinstance(model.f3_projection, nn.Conv2d)
+    assert model.f3_projection.in_channels == 4
+    assert model.f3_projection.out_channels == 32
+    assert model.f3_projection.kernel_size == (1, 1)
+    assert len(model.f3_encoder) == 2
+    _assert_linear(model.f3_encoder[0], 96, 32)
+    assert isinstance(model.f3_encoder[1], nn.SiLU)
+
+    assert len(model.rgb_encoder) == 3
+    _assert_linear(model.rgb_encoder[0], 15, 16)
+    assert isinstance(model.rgb_encoder[1], nn.LayerNorm)
+    assert model.rgb_encoder[1].normalized_shape == (16,)
+    assert isinstance(model.rgb_encoder[2], nn.SiLU)
+
+    assert len(model.direction_calibration) == 4
+    _assert_linear(model.direction_calibration[0], 240, 96)
+    assert isinstance(model.direction_calibration[1], nn.SiLU)
+    _assert_linear(model.direction_calibration[2], 96, 64)
+    assert isinstance(model.direction_calibration[3], nn.SiLU)
+    assert len(model.scale_experts) == 3
+    for expert in model.scale_experts:
+        assert len(expert) == 4
+        _assert_linear(expert[0], 240, 64)
+        assert isinstance(expert[1], nn.SiLU)
+        _assert_linear(expert[2], 64, 64)
+        assert isinstance(expert[3], nn.SiLU)
+    for head in (*model.scale_gate_heads, *model.scale_residual_heads):
+        _assert_linear(head, 64, 1)
+        torch.testing.assert_close(head.weight, torch.zeros_like(head.weight), rtol=0, atol=0)
+        torch.testing.assert_close(head.bias, torch.zeros_like(head.bias), rtol=0, atol=0)
+
+    head_names = {
+        "base_gate_head",
+        "boundary_gate_head",
+        "base_residual_head",
+        "boundary_residual_head",
+    }
+    assert {name for name, _ in model.named_children() if name.endswith("_head")} == head_names
+    for name in head_names:
+        head = getattr(model, name)
+        _assert_linear(head, 64, 1)
+        torch.testing.assert_close(head.weight, torch.zeros_like(head.weight), rtol=0, atol=0)
+        torch.testing.assert_close(head.bias, torch.zeros_like(head.bias), rtol=0, atol=0)
+
+
+def test_zero_initialization_is_exact_identity_even_outside_image() -> None:
+    hidden, _, scores, f3, image = _inputs(batch=1)
+    stock = torch.tensor(
+        [[
+            [1.02, -0.02, 0.08, 0.06],
+            [-0.01, 1.01, 0.04, 0.03],
+            [0.50, 0.50, 1e-12, 1e-12],
+        ]],
+        requires_grad=True,
+    )
+
+    output = _refiner()(hidden, stock, scores, f3, image)
+
+    torch.testing.assert_close(output.refined_boxes, output.stock_boxes, rtol=0, atol=0)
+    torch.testing.assert_close(
+        output.boundary_off_boxes, output.stock_boxes, rtol=0, atol=0
+    )
+    torch.testing.assert_close(output.refined_edges, output.stock_edges, rtol=0, atol=0)
+    torch.testing.assert_close(
+        output.boundary_off_edges, output.stock_edges, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        output.effective_correction,
+        torch.zeros_like(output.effective_correction),
+        rtol=0,
+        atol=0,
+    )
+    assert stock.grad is None
+
+
+def test_exposed_stock_storage_is_isolated_from_detector_inputs() -> None:
+    inputs = _inputs(requires_grad=True)
+    detector_boxes = inputs[1].detach().clone()
+    detector_scores = inputs[2].detach().clone()
+    output = _refiner()(*inputs)
+
+    output.stock_boxes.add_(7)
+    output.stock_scores.mul_(-3)
+
+    torch.testing.assert_close(inputs[1], detector_boxes, rtol=0, atol=0)
+    torch.testing.assert_close(inputs[2], detector_scores, rtol=0, atol=0)
+    assert output.stock_boxes.data_ptr() != inputs[1].data_ptr()
+    assert output.stock_scores.data_ptr() != inputs[2].data_ptr()
+    assert all(value.grad is None for value in inputs)
+
+
+def test_probe_masks_zero_raw_evidence_before_the_encoders() -> None:
+    inputs = tuple(value.detach() for value in _inputs(batch=1))
+    outputs = {probe: _refiner(probe)(*inputs) for probe in sorted(PROBES)}
+
+    projected = _refiner("b3").f3_projection(inputs[3])
+    expected_f3 = sample_f3_boundary_evidence(
+        projected, inputs[1], image_size=640
+    )
+    expected_rgb = sample_rgb_boundary_evidence(
+        inputs[4], inputs[1], image_size=640
+    )
+    assert torch.count_nonzero(expected_f3) > 0
+    assert torch.count_nonzero(expected_rgb) > 0
+
+    for probe, output in outputs.items():
+        expected_f3_for_probe = expected_f3 if probe in {"b1", "b3"} else torch.zeros_like(expected_f3)
+        expected_rgb_for_probe = expected_rgb if probe in {"b2", "b3"} else torch.zeros_like(expected_rgb)
+        torch.testing.assert_close(
+            output.f3_boundary_evidence,
+            expected_f3_for_probe,
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(
+            output.rgb_boundary_evidence,
+            expected_rgb_for_probe,
+            rtol=0,
+            atol=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("probe", "expected_f3_calls", "expected_rgb_calls"),
+    [
+        pytest.param("b0", 0, 0, id="b0-skips-both"),
+        pytest.param("b1", 1, 0, id="b1-skips-rgb"),
+        pytest.param("b2", 0, 1, id="b2-skips-f3"),
+    ],
+)
+def test_disabled_modality_samplers_are_never_called(
+    probe: str,
+    expected_f3_calls: int,
+    expected_rgb_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"f3": 0, "rgb": 0}
+    real_f3_sampler = iber_head.sample_f3_boundary_evidence
+    real_rgb_sampler = iber_head.sample_rgb_boundary_evidence
+
+    def counted_f3(*args: object, **kwargs: object) -> torch.Tensor:
+        calls["f3"] += 1
+        return real_f3_sampler(*args, **kwargs)  # type: ignore[arg-type]
+
+    def counted_rgb(*args: object, **kwargs: object) -> torch.Tensor:
+        calls["rgb"] += 1
+        return real_rgb_sampler(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", counted_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", counted_rgb)
+
+    _refiner(probe)(*_inputs(batch=1))
+
+    assert calls == {"f3": expected_f3_calls, "rgb": expected_rgb_calls}
+
+
+def test_f3_gradient_waits_for_the_zero_initialized_increment_gate() -> None:
+    model = _refiner("b3")
+    with torch.no_grad():
+        model.boundary_residual_head.weight.fill_(0.125)
+    inputs = _inputs(requires_grad=True)
+
+    output = model(*inputs)
+    target = output.stock_boxes + torch.tensor((0.01, -0.02, 0.015, 0.01))
+    loss = (output.refined_boxes - target).square().sum()
+    loss.backward()
+
+    assert all(value.grad is None for value in inputs)
+    f3_parameters = tuple(model.f3_projection.parameters()) + tuple(
+        model.f3_encoder.parameters()
+    )
+    f3_weight_parameters = tuple(
+        parameter
+        for name, parameter in model.named_parameters()
+        if name.startswith(("f3_projection.", "f3_encoder."))
+        and name.endswith("weight")
+    )
+    active_parameter_groups = (
+        tuple(model.rgb_encoder.parameters()),
+        tuple(model.area_calibration.parameters()),
+        tuple(model.context_path.parameters()),
+        tuple(model.direction_calibration.parameters()),
+    )
+    assert all(
+        parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
+        for parameter in f3_weight_parameters
+    )
+    assert max(
+        0.0
+        if parameter.grad is None
+        else float(parameter.grad.detach().abs().max())
+        for parameter in f3_parameters
+    ) <= 1e-6
+    assert model.f3_increment_gain.grad is not None
+    assert torch.isfinite(model.f3_increment_gain.grad)
+    assert float(model.f3_increment_gain.grad.abs()) > 0.0
+    for parameters in active_parameter_groups:
+        gradients = [parameter.grad for parameter in parameters]
+        assert all(gradient is not None for gradient in gradients)
+        assert all(torch.isfinite(gradient).all() for gradient in gradients)
+        assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
+
+    model.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        model.f3_increment_gain.fill_(0.03)
+    opened = model(*inputs)
+    (opened.refined_boxes - target).square().sum().backward()
+    f3_gradients = [parameter.grad for parameter in f3_parameters]
+    f3_weight_gradients = [parameter.grad for parameter in f3_weight_parameters]
+    assert all(gradient is not None for gradient in f3_gradients)
+    assert all(torch.isfinite(gradient).all() for gradient in f3_gradients)
+    assert sum(float(gradient.abs().sum()) for gradient in f3_gradients) > 0
+    assert sum(float(gradient.abs().sum()) for gradient in f3_weight_gradients) > 0
+
+
+def test_eval_reuses_boundary_raw_without_auxiliary_graph_or_extra_parameters() -> None:
+    model = _refiner("b3").eval()
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+
+    output = model(*_inputs())
+
+    torch.testing.assert_close(
+        output.boundary_aux_gate_raw, output.boundary_gate_raw, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        output.boundary_aux_residual_raw,
+        output.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    assert output.boundary_aux_gate_raw.requires_grad is False
+    assert output.boundary_aux_residual_raw.requires_grad is False
+    assert sum(parameter.numel() for parameter in model.parameters()) == parameter_count
+
+
+def test_first_private_loss_step_updates_all_four_zero_initialized_heads() -> None:
+    model = _refiner()
+    head_names = (
+        "base_gate_head",
+        "boundary_gate_head",
+        "base_residual_head",
+        "boundary_residual_head",
+    )
+    for name in head_names:
+        head = getattr(model, name)
+        assert torch.count_nonzero(head.weight) == 0
+        assert torch.count_nonzero(head.bias) == 0
+
+    output = model(*_inputs(batch=2))
+    losses = itber_private_loss(
+        output,
+        target_edges=torch.tensor(
+            [[0.39, 0.40, 0.61, 0.58], [0.07, 0.75, 0.17, 0.87]]
+        ),
+        match_indices=[
+            (torch.tensor([0]), torch.tensor([0])),
+            (torch.tensor([1]), torch.tensor([1])),
+        ],
+        rho=0.05,
+    )
+    losses.total.backward()
+
+    for name in head_names:
+        gradients = [parameter.grad for parameter in getattr(model, name).parameters()]
+        assert all(gradient is not None for gradient in gradients)
+        assert all(torch.isfinite(gradient).all() for gradient in gradients)
+        assert sum(float(gradient.abs().sum()) for gradient in gradients) > 0
+
+
+def test_head_is_trajectory_independent_and_has_exact_public_signatures() -> None:
+    constructor = inspect.signature(IBERRefiner)
+    assert tuple(constructor.parameters) == (
+        "hidden_dim",
+        "f3_channels",
+        "private_seed",
+        "probe",
+        "image_size",
+        "rho",
+    )
+    assert constructor.parameters["probe"].default == "b3"
+    assert constructor.parameters["image_size"].default == 640
+    assert constructor.parameters["rho"].default == 0.05
+    assert tuple(inspect.signature(IBERRefiner.forward).parameters) == (
+        "self",
+        "hidden",
+        "stock_boxes",
+        "stock_scores",
+        "f3",
+        "image_rgb",
+    )
+
+    source = inspect.getsource(iber_head)
+    tree = ast.parse(source)
+    imports = [
+        node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    geometry_import = next(
+        node
+        for node in imports
+        if isinstance(node, ast.ImportFrom) and node.module == "src.itber_geometry"
+    )
+    assert {alias.name for alias in geometry_import.names} == {
+        "apply_edge_update",
+        "cxcywh_to_xyxy",
+        "xyxy_to_cxcywh",
+    }
+    assert not any(
+        isinstance(node, ast.ImportFrom)
+        and node.module in {"src.itber_head", "src.rtdetr_itber"}
+        for node in imports
+    )
+    identifiers = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    } | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+    assert identifiers.isdisjoint(
+        {"ITBERRefiner", "ITBERRecordingDecoder", "trajectory_state", "trajectory", "box_l1", "box_l2"}
+    )
+    assert not any("trajectory" in name for name, _ in _refiner().named_modules())
+    assert not any("trajectory" in name for name, _ in _refiner().named_parameters())
+
+
+def test_tiny_border_outside_boxes_and_extreme_scores_are_finite() -> None:
+    hidden, _, _, f3, image = _inputs(batch=1)
+    boxes = torch.tensor(
+        [[
+            [0.0, 0.0, 1e-12, 1e-12],
+            [1.0, 1.0, 1e-12, 1e-12],
+            [1.05, -0.05, 0.10, 0.08],
+        ]]
+    )
+    scores = torch.tensor(
+        [[[1000.0, -1000.0], [-1000.0, 1000.0], [1000.0, 1000.0]]]
+    )
+
+    output = _refiner()(hidden, boxes, scores, f3, image)
+
+    for value in vars(output).values():
+        if isinstance(value, torch.Tensor):
+            assert torch.isfinite(value).all()
+
+
+@pytest.mark.parametrize("score_dtype", [torch.float16, torch.bfloat16])
+def test_low_precision_extreme_scores_keep_outputs_and_private_loss_finite(
+    score_dtype: torch.dtype,
+) -> None:
+    hidden, boxes, _, f3, image = _inputs(batch=1)
+    scores = torch.tensor(
+        [[[1000.0, -1000.0], [-1000.0, 1000.0], [1000.0, 1000.0]]],
+        dtype=score_dtype,
+    )
+
+    output = _refiner()(hidden, boxes, scores, f3, image)
+
+    assert output.quality.dtype == torch.float32
+    assert output.entropy.dtype == torch.float32
+    for value in vars(output).values():
+        if isinstance(value, torch.Tensor):
+            assert torch.isfinite(value).all()
+    torch.testing.assert_close(output.refined_boxes, boxes, rtol=0, atol=0)
+    torch.testing.assert_close(output.boundary_off_boxes, boxes, rtol=0, atol=0)
+
+    losses = itber_private_loss(
+        output,
+        target_edges=torch.tensor([[0.39, 0.40, 0.61, 0.58]]),
+        match_indices=[(torch.tensor([0]), torch.tensor([0]))],
+        rho=0.05,
+    )
+    for value in vars(losses).values():
+        if isinstance(value, torch.Tensor):
+            assert torch.isfinite(value)
+
+
+@pytest.mark.parametrize(("batch", "queries"), [(1, 0), (0, 2)])
+def test_empty_batch_or_query_dimensions_return_well_shaped_outputs(
+    batch: int, queries: int
+) -> None:
+    hidden = torch.empty(batch, queries, 8)
+    boxes = torch.empty(batch, queries, 4)
+    scores = torch.empty(batch, queries, 3)
+    f3 = torch.empty(batch, 4, 8, 8)
+    image = torch.empty(batch, 3, 16, 16)
+
+    output = _refiner()(hidden, boxes, scores, f3, image)
+
+    assert output.refined_boxes.shape == (batch, queries, 4)
+    assert output.boundary_off_boxes.shape == (batch, queries, 4)
+    assert output.f3_boundary_evidence.shape == (batch, queries, 4, 96)
+    assert output.rgb_boundary_evidence.shape == (batch, queries, 4, 15)
+    assert output.boundary_features.shape == (batch, queries, 4, 32)
+
+
+@pytest.mark.parametrize(
+    ("factory", "error", "message"),
+    [
+        (lambda: IBERRefiner(0, 4, 17), ValueError, "positive"),
+        (lambda: IBERRefiner(8, 0, 17), ValueError, "positive"),
+        (lambda: IBERRefiner(8, 4, 17, probe="p3"), ValueError, "probe"),
+        (lambda: IBERRefiner(8, 4, 17, image_size=0), ValueError, "positive"),
+        (lambda: IBERRefiner(8, 4, 17, rho=0), ValueError, "positive"),
+    ],
+)
+def test_constructor_rejects_invalid_configuration(
+    factory: object, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
+        factory()  # type: ignore[operator]
+
+
+@pytest.mark.parametrize(
+    ("index", "replacement", "error", "message"),
+    [
+        (0, torch.ones(2, 3, 8, dtype=torch.int64), TypeError, "hidden"),
+        (0, torch.ones(2, 3, 7), ValueError, "hidden"),
+        (1, torch.ones(2, 2, 4), ValueError, "stock_boxes"),
+        (2, torch.ones(2, 2, 5), ValueError, "stock_scores"),
+        (2, torch.ones(2, 3), ValueError, "stock_scores"),
+        (3, torch.ones(2, 5, 12, 10), ValueError, "F3"),
+        (3, torch.ones(1, 4, 12, 10), ValueError, "F3"),
+        (4, torch.ones(2, 4, 18, 20), ValueError, "image_rgb"),
+        (4, torch.ones(1, 3, 18, 20), ValueError, "image_rgb"),
+    ],
+)
+def test_forward_rejects_invalid_inputs_clearly(
+    index: int,
+    replacement: torch.Tensor,
+    error: type[Exception],
+    message: str,
+) -> None:
+    inputs = list(_inputs())
+    inputs[index] = replacement
+
+    with pytest.raises(error, match=message):
+        _refiner()(*inputs)
+
+
+def test_select_boxes_is_exact_and_stock_scores_are_never_modified() -> None:
+    inputs = _inputs()
+    output = _refiner()(*inputs)
+
+    assert isinstance(output, IBEROutput)
+    assert output.select_boxes("stock") is output.stock_boxes
+    assert output.select_boxes("refined") is output.refined_boxes
+    assert output.select_boxes("boundary_off") is output.boundary_off_boxes
+    with pytest.raises(ValueError, match="mode"):
+        output.select_boxes("unknown")
+    torch.testing.assert_close(output.stock_scores, inputs[2].detach(), rtol=0, atol=0)
+    assert output.stock_scores.requires_grad is False
+
+
+def test_boundary_off_uses_only_nonzero_base_heads() -> None:
+    first = _refiner()
+    second = _refiner()
+    with torch.no_grad():
+        for model in (first, second):
+            model.base_gate_head.weight.fill_(0.04)
+            model.base_gate_head.bias.fill_(0.10)
+            model.base_residual_head.weight.fill_(-0.03)
+            model.base_residual_head.bias.fill_(0.20)
+        first.boundary_gate_head.weight.fill_(0.02)
+        first.boundary_gate_head.bias.fill_(-0.15)
+        first.boundary_residual_head.weight.fill_(0.01)
+        first.boundary_residual_head.bias.fill_(0.25)
+        second.boundary_gate_head.weight.fill_(-0.05)
+        second.boundary_gate_head.bias.fill_(0.35)
+        second.boundary_residual_head.weight.fill_(-0.04)
+        second.boundary_residual_head.bias.fill_(-0.30)
+    inputs = _inputs(batch=1)
+
+    first_output = first(*inputs)
+    second_output = second(*inputs)
+    expected_edges = apply_edge_update(
+        first_output.stock_edges,
+        first_output.base_gate_raw.sigmoid(),
+        first_output.base_residual_raw.tanh(),
+        rho=0.05,
+    )
+    expected_boxes = first_output.stock_boxes + (
+        xyxy_to_cxcywh(expected_edges)
+        - xyxy_to_cxcywh(first_output.stock_edges)
+    )
+
+    assert torch.count_nonzero(expected_edges - first_output.stock_edges) > 0
+    torch.testing.assert_close(
+        first_output.boundary_off_edges, expected_edges, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_boxes, expected_boxes, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_edges,
+        second_output.boundary_off_edges,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        first_output.boundary_off_boxes,
+        second_output.boundary_off_boxes,
+        rtol=0,
+        atol=0,
+    )
+    assert not torch.equal(first_output.refined_edges, second_output.refined_edges)
+
+
+def test_b0_disables_boundary_outputs_even_when_boundary_heads_are_nonzero() -> None:
+    model = _refiner("b0")
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_gate_head.bias.fill_(0.13)
+        model.boundary_residual_head.weight.fill_(-0.05)
+        model.boundary_residual_head.bias.fill_(0.21)
+
+    output = model(*_inputs(batch=1))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_features,
+        torch.zeros_like(output.boundary_features),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+def test_b0_boundary_outputs_are_exact_zero_for_arbitrary_model_parameters() -> None:
+    model = _refiner("b0")
+    generator = torch.Generator().manual_seed(90210)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.copy_(
+                torch.empty_like(parameter).uniform_(-0.25, 0.25, generator=generator)
+            )
+
+    output = model(*_inputs(batch=1))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+def test_sampled_boundary_evidence_is_not_masked_by_raw_input_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner("b3")
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_residual_head.weight.fill_(-0.05)
+
+    def nonzero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_ones((features.shape[0], boxes.shape[1], 4, 96))
+
+    def nonzero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_ones((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", nonzero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", nonzero_rgb)
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+
+    output = model(
+        hidden,
+        boxes,
+        scores,
+        torch.zeros_like(f3),
+        torch.zeros_like(image),
+    )
+
+    assert torch.count_nonzero(output.boundary_gate_raw) > 0
+    assert torch.count_nonzero(output.boundary_residual_raw) > 0
+
+
+@pytest.mark.parametrize("probe", sorted(PROBES))
+def test_zero_boundary_evidence_has_no_counterfactual_boundary_delta(
+    probe: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner(probe)
+    with torch.no_grad():
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_gate_head.bias.fill_(0.13)
+        model.boundary_residual_head.weight.fill_(-0.05)
+        model.boundary_residual_head.bias.fill_(0.21)
+
+    def zero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_zeros((features.shape[0], boxes.shape[1], 4, 96))
+
+    def zero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_zeros((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", zero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", zero_rgb)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    output = model(hidden, boxes, scores, f3, image)
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+
+
+def test_b3_zero_sampled_evidence_exactly_degrades_to_boundary_off_for_arbitrary_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _refiner("b3")
+    generator = torch.Generator().manual_seed(314159)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.copy_(
+                torch.empty_like(parameter).uniform_(-0.20, 0.20, generator=generator)
+            )
+
+    def zero_f3(
+        features: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return features.new_zeros((features.shape[0], boxes.shape[1], 4, 96))
+
+    def zero_rgb(
+        images: torch.Tensor, boxes: torch.Tensor, *, image_size: int
+    ) -> torch.Tensor:
+        return images.new_zeros((images.shape[0], boxes.shape[1], 4, 15))
+
+    monkeypatch.setattr(iber_head, "sample_f3_boundary_evidence", zero_f3)
+    monkeypatch.setattr(iber_head, "sample_rgb_boundary_evidence", zero_rgb)
+
+    output = model(*_inputs(batch=1))
+
+    torch.testing.assert_close(
+        output.boundary_gate_raw,
+        torch.zeros_like(output.boundary_gate_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        output.boundary_residual_raw,
+        torch.zeros_like(output.boundary_residual_raw),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(output.refined_edges, output.boundary_off_edges, rtol=0, atol=0)
+    torch.testing.assert_close(output.refined_boxes, output.boundary_off_boxes, rtol=0, atol=0)
+
+
+def test_b3_starts_from_the_rgb_anchor_without_f3_interference() -> None:
+    models = {probe: _refiner(probe) for probe in ("b2", "b3")}
+    with torch.no_grad():
+        for model in models.values():
+            model.boundary_gate_head.weight.fill_(0.07)
+            model.boundary_gate_head.bias.fill_(0.13)
+            model.boundary_residual_head.weight.fill_(-0.05)
+            model.boundary_residual_head.bias.fill_(0.21)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    b2 = models["b2"](hidden, boxes, scores, f3, image)
+    b3_full = models["b3"](hidden, boxes, scores, f3, image)
+
+    torch.testing.assert_close(
+        b3_full.boundary_gate_raw,
+        b2.boundary_gate_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        b3_full.boundary_residual_raw,
+        b2.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(b3_full.refined_edges, b2.refined_edges, rtol=0, atol=0)
+
+
+def test_b3_adds_f3_only_through_the_explicit_reliability_gate() -> None:
+    model = _refiner("b3")
+    with torch.no_grad():
+        model.f3_increment_gain.fill_(2.0)
+        model.f3_reliability_head[2].bias.fill_(8.0)
+        model.boundary_gate_head.weight.fill_(0.07)
+        model.boundary_residual_head.weight.fill_(-0.05)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    full = model(hidden, boxes, scores, f3, image)
+    no_f3 = model(hidden, boxes, scores, torch.zeros_like(f3), image)
+
+    assert not torch.allclose(
+        full.boundary_residual_raw,
+        no_f3.boundary_residual_raw,
+        rtol=0,
+        atol=1e-6,
+    )
+    assert not torch.allclose(
+        full.boundary_gate_raw,
+        no_f3.boundary_gate_raw,
+        rtol=0,
+        atol=1e-6,
+    )
+
+
+def test_b3_degrades_exactly_to_rgb_only_path_when_f3_evidence_is_absent() -> None:
+    models = {probe: _refiner(probe) for probe in ("b2", "b3")}
+    with torch.no_grad():
+        for model in models.values():
+            model.boundary_gate_head.weight.fill_(0.07)
+            model.boundary_gate_head.bias.fill_(0.13)
+            model.boundary_residual_head.weight.fill_(-0.05)
+            model.boundary_residual_head.bias.fill_(0.21)
+            for head in (
+                *model.scale_gate_heads,
+                *model.scale_residual_heads,
+                *model.boundary_edge_gate_heads,
+                *model.boundary_edge_residual_heads,
+            ):
+                head.weight.fill_(0.03)
+                head.bias.fill_(0.01)
+
+    hidden, boxes, scores, f3, image = _inputs(batch=1)
+    zero_f3 = torch.zeros_like(f3)
+    b2_output = models["b2"](hidden, boxes, scores, zero_f3, image)
+    b3_output = models["b3"](hidden, boxes, scores, zero_f3, image)
+
+    torch.testing.assert_close(
+        b3_output.boundary_gate_raw, b2_output.boundary_gate_raw, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        b3_output.boundary_residual_raw,
+        b2_output.boundary_residual_raw,
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        b3_output.refined_edges, b2_output.refined_edges, rtol=0, atol=0
+    )
+
+
+def test_existing_private_loss_accepts_real_iber_output() -> None:
+    model = _refiner()
+    output = model(*_inputs(batch=2))
+    target_edges = torch.tensor(
+        [[0.39, 0.40, 0.61, 0.58], [0.07, 0.75, 0.17, 0.87]]
+    )
+    matches = [
+        (torch.tensor([0]), torch.tensor([0])),
+        (torch.tensor([1]), torch.tensor([1])),
+    ]
+
+    losses = itber_private_loss(
+        output,
+        target_edges=target_edges,
+        match_indices=matches,
+        rho=0.05,
+    )
+
+    assert torch.isfinite(losses.total)
+    assert losses.matched_queries == 2
+    losses.total.backward()
+    assert model.base_gate_head.weight.grad is not None
+    assert model.boundary_residual_head.weight.grad is not None
+
+
+def test_only_f3_projection_is_convolutional_and_rgb_is_pointwise_calibrated() -> None:
+    model = _refiner()
+    convolutions = {
+        name: module
+        for name, module in model.named_modules()
+        if isinstance(module, nn.Conv2d)
+    }
+    assert convolutions == {"f3_projection": model.f3_projection}
+    assert not any(isinstance(module, nn.Conv2d) for module in model.rgb_encoder.modules())
+    assert not any(isinstance(module, nn.MultiheadAttention) for module in model.modules())
+
+    source_without_docstrings = ast.parse(inspect.getsource(iber_head))
+    for node in ast.walk(source_without_docstrings):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.body and isinstance(node.body[0], ast.Expr):
+                value = node.body[0].value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    node.body.pop(0)
+    lowered = ast.unparse(source_without_docstrings).lower()
+    for forbidden in ("attention", "learned_offset", "pyramid", "sobel", "p2"):
+        assert forbidden not in lowered
