@@ -10,7 +10,7 @@ import torch
 import yaml
 from torch import nn
 
-from scripts import evaluate_bpdd_ira_formal as formal
+from scripts import evaluate_bpdd_fia_formal as formal
 
 
 CLASS_NAMES = (
@@ -63,13 +63,13 @@ def _identity() -> dict[str, object]:
     return formal.build_run_identity(
         {"git_commit": "a" * 40, "tree_sha256": "B" * 64},
         stage="formal",
-        variant="fdr_bpdd_ira",
+        variant="fdr_bpdd_fia",
         seed=0,
     )
 
 
 def _run_authority(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
-    run = tmp_path / "formal-seed0-fdr_bpdd_ira-v1"
+    run = tmp_path / "formal-seed0-fdr_bpdd_fia-v1"
     weights = run / "weights"
     weights.mkdir(parents=True)
     data_yaml = tmp_path / "formal.yaml"
@@ -88,7 +88,7 @@ def _run_authority(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     manifest = {
         "format_version": 1,
-        "protocol_sha256": formal.BPDD_IRA_PROTOCOL_SHA256,
+        "protocol_sha256": formal.BPDD_FIA_PROTOCOL_SHA256,
         "source": {"git_commit": "a" * 40, "tree_sha256": "B" * 64},
         "run_identity": _identity(),
         "initial_state": {
@@ -98,7 +98,7 @@ def _run_authority(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "data": str(data_yaml.resolve()),
         "publication_queue": str((run / "publication-queue.jsonl").resolve()),
     }
-    (run / "bpdd-ira-run.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run / "bpdd-fia-run.json").write_text(json.dumps(manifest), encoding="utf-8")
     checkpoint = weights / "epoch99.pt"
     checkpoint.write_bytes(b"combined-final")
     records = run / "fdr-epochs.jsonl"
@@ -106,7 +106,7 @@ def _run_authority(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         {
             "completed_epoch": epoch,
             "run_id": _identity()["run_id"],
-            "variant": "fdr_bpdd_ira",
+            "variant": "fdr_bpdd_fia",
             "stage": "formal",
             "gradients_finite": True,
             "precision": 0.1,
@@ -147,7 +147,7 @@ def _evaluation(
             "stage": "formal",
             "variant": variant,
             "seed": 0,
-            "dataset_sha256": formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"],
+            "dataset_sha256": formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"],
             "fdr_protocol_sha256": formal.FDR_PROTOCOL_SHA256,
             "protocol_sha256": protocol_sha256,
             "split": "val",
@@ -230,8 +230,8 @@ def test_cli_exposes_authorities_but_no_test_or_metric_overrides() -> None:
             "fdr.json",
             "--bpdd-evaluation",
             "bpdd.json",
-            "--ira-evaluation",
-            "ira.json",
+            "--fia-evaluation",
+            "fia.json",
             "--output",
             "report.json",
         ]
@@ -242,7 +242,7 @@ def test_cli_exposes_authorities_but_no_test_or_metric_overrides() -> None:
     assert args.dataset_root == Path("VisDrone")
     assert args.fdr_evaluation == Path("fdr.json")
     assert args.bpdd_evaluation == Path("bpdd.json")
-    assert args.ira_evaluation == Path("ira.json")
+    assert args.fia_evaluation == Path("fia.json")
     assert args.output == Path("report.json")
     assert not any(
         option in parser._option_string_actions
@@ -342,7 +342,7 @@ def test_val_authority_rejects_test_yaml_and_requires_frozen_548_images(
         "utf-8",
     )
     signature = lambda _root: {  # noqa: E731
-        "sha256": formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"],
+        "sha256": formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"],
         "file_count": 14038,
     }
 
@@ -375,7 +375,7 @@ def test_val_authority_rejects_test_yaml_and_requires_frozen_548_images(
     )
     assert authority["split"] == "val"
     assert authority["images"] == 548
-    assert authority["dataset_sha256"] == formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"]
+    assert authority["dataset_sha256"] == formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"]
     assert authority["yaml_sha256"] == _sha(val_yaml)
 
     with pytest.raises(ValueError, match="548"):
@@ -413,7 +413,7 @@ def test_exact_final_loader_requires_epoch100_ema_and_strict_combined_graph(
     torch.testing.assert_close(loaded.model.weight, torch.tensor([2.0]))
     assert loaded.metadata["kind"] == "exact-final-ema"
     assert loaded.metadata["completed_epoch"] == 100
-    assert loaded.metadata["strict_fdr_bpdd_ira_graph"] is True
+    assert loaded.metadata["strict_fdr_bpdd_fia_graph"] is True
     assert loaded.metadata["ema_state_sha256"] == formal.state_sha256(ema.state_dict())
 
 
@@ -456,15 +456,15 @@ def test_preliminary_comparison_reports_core_scale_and_class_deltas(
     current = _validation_payload(0.31)
     fdr = _evaluation(tmp_path / "fdr.json", variant="fdr", map_value=0.28)
     bpdd = _evaluation(tmp_path / "bpdd.json", variant="fdr_bpdd", map_value=0.30)
-    ira = _evaluation(
-        tmp_path / "ira.json", variant="fdr_ira", map_value=0.305, strict=False
+    fia = _evaluation(
+        tmp_path / "fia.json", variant="fdr_fia", map_value=0.305, strict=False
     )
 
     comparison = formal.build_preliminary_comparisons(
         current,
         fdr_evaluation=fdr,
         bpdd_evaluation=bpdd,
-        ira_evaluation=ira,
+        fia_evaluation=fia,
     )
 
     assert comparison["comparison_scope"] == "preliminary_cross_run"
@@ -472,8 +472,8 @@ def test_preliminary_comparison_reports_core_scale_and_class_deltas(
     assert [row["method"] for row in comparison["four_row_summary"]] == [
         "FDR",
         "FDR+BPDD",
-        "FDR+IRA",
-        "FDR+BPDD+IRA",
+        "FDR+FIA",
+        "FDR+BPDD+FIA",
     ]
     assert [row["method"] for row in comparison["strict_delta_table"]] == [
         "FDR",
@@ -487,7 +487,7 @@ def test_preliminary_comparison_reports_core_scale_and_class_deltas(
     )
     assert comparison["four_row_summary"][3]["evidence_level"] == "current_exact"
     assert [row["method"] for row in comparison["non_strict_historical_reference"]] == [
-        "FDR+IRA"
+        "FDR+FIA"
     ]
     assert comparison["against_fdr"]["metrics_delta"]["map"] == pytest.approx(0.03)
     assert comparison["against_fdr_bpdd"]["metrics_delta"]["map"] == pytest.approx(0.01)
@@ -496,7 +496,7 @@ def test_preliminary_comparison_reports_core_scale_and_class_deltas(
     assert comparison["against_fdr"]["authority_sha256"] == _sha(fdr)
 
 
-def test_missing_historical_ira_authority_is_explicitly_unavailable(
+def test_missing_historical_fia_authority_is_explicitly_unavailable(
     tmp_path: Path,
 ) -> None:
     current = _validation_payload(0.31)
@@ -507,12 +507,12 @@ def test_missing_historical_ira_authority_is_explicitly_unavailable(
         current,
         fdr_evaluation=fdr,
         bpdd_evaluation=bpdd,
-        ira_evaluation=None,
+        fia_evaluation=None,
     )
 
-    ira = comparison["four_row_summary"][2]
-    assert ira == {
-        "method": "FDR+IRA",
+    fia = comparison["four_row_summary"][2]
+    assert fia == {
+        "method": "FDR+FIA",
         "evidence_level": "unavailable",
         "strict_validation_failures": ["authority_unavailable"],
         "precision": None,
@@ -522,11 +522,11 @@ def test_missing_historical_ira_authority_is_explicitly_unavailable(
         "map75": None,
         "map": None,
     }
-    assert comparison["unavailable_references"] == [ira]
-    assert "against_fdr_ira" not in comparison
+    assert comparison["unavailable_references"] == [fia]
+    assert "against_fdr_fia" not in comparison
 
 
-def test_cli_allows_missing_historical_ira_authority() -> None:
+def test_cli_allows_missing_historical_fia_authority() -> None:
     args = formal.build_parser().parse_args(
         [
             "--run-dir",
@@ -544,7 +544,7 @@ def test_cli_allows_missing_historical_ira_authority() -> None:
         ]
     )
 
-    assert args.ira_evaluation is None
+    assert args.fia_evaluation is None
 
 
 @pytest.mark.parametrize("drift", ["split", "evaluator", "protocol", "images"])
@@ -581,8 +581,8 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
     dataset_root = tmp_path / "VisDrone"
     fdr = _evaluation(tmp_path / "fdr.json", variant="fdr", map_value=0.28)
     bpdd = _evaluation(tmp_path / "bpdd.json", variant="fdr_bpdd", map_value=0.30)
-    ira = _evaluation(
-        tmp_path / "ira.json", variant="fdr_ira", map_value=0.305, strict=False
+    fia = _evaluation(
+        tmp_path / "fia.json", variant="fdr_fia", map_value=0.305, strict=False
     )
     output = tmp_path / "combined-evaluation.json"
     validation_model = object()
@@ -597,7 +597,7 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
             "sha256_verified": True,
             "source_field": "ema",
             "ema_state_sha256": "E" * 64,
-            "strict_fdr_bpdd_ira_graph": True,
+            "strict_fdr_bpdd_fia_graph": True,
         },
     )
     efficiency_loaded = SimpleNamespace(
@@ -633,7 +633,7 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
         return {
             "split": "val",
             "images": 548,
-            "dataset_sha256": formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"],
+            "dataset_sha256": formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"],
             "yaml": str(Path(path).resolve()),
             "yaml_sha256": _sha(Path(path)),
         }
@@ -644,7 +644,7 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
         dataset_root=dataset_root,
         fdr_evaluation=fdr,
         bpdd_evaluation=bpdd,
-        ira_evaluation=ira,
+        fia_evaluation=fia,
         output=output,
         device="cuda:0",
         checkpoint_loader=fake_loader,
@@ -667,13 +667,13 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
     assert report["evaluation_identity"] == {
         **_identity(),
         "data": str(data_yaml.resolve()),
-        "dataset_sha256": formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"],
+        "dataset_sha256": formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"],
         "split": "val",
         "images": 548,
     }
     assert report["epoch_records"]["count"] == 100
     assert report["epoch_records"]["sha256"] == _sha(records)
-    assert report["checkpoint"]["strict_fdr_bpdd_ira_graph"] is True
+    assert report["checkpoint"]["strict_fdr_bpdd_fia_graph"] is True
     assert report["metrics"]["map"] == pytest.approx(0.31)
     assert len(report["class_details"]) == 10
     assert list(report["scales"]) == list(formal.SCALE_NAMES)
@@ -686,8 +686,8 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
         "data_yaml_sha256": _sha(data_yaml),
         "fdr_evaluation_sha256": _sha(fdr),
         "bpdd_evaluation_sha256": _sha(bpdd),
-        "ira_evaluation_sha256": _sha(ira),
-        "dataset_sha256": formal.BPDD_IRA_PROTOCOL["dataset"]["sha256"],
+        "fia_evaluation_sha256": _sha(fia),
+        "dataset_sha256": formal.BPDD_FIA_PROTOCOL["dataset"]["sha256"],
     }
     assert json.loads(output.read_text("utf-8")) == report
     with pytest.raises(FileExistsError):
@@ -697,7 +697,7 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
             dataset_root=dataset_root,
             fdr_evaluation=fdr,
             bpdd_evaluation=bpdd,
-            ira_evaluation=ira,
+            fia_evaluation=fia,
             output=output,
             checkpoint_loader=fake_loader,
             validation_runner=fake_val,
@@ -708,7 +708,7 @@ def test_formal_evaluation_binds_all_authorities_and_emits_complete_report(
 
 def test_run_manifest_rejects_test_data_and_wrong_combined_identity(tmp_path: Path) -> None:
     run, _, _, _ = _run_authority(tmp_path)
-    manifest_path = run / "bpdd-ira-run.json"
+    manifest_path = run / "bpdd-fia-run.json"
     payload = json.loads(manifest_path.read_text("utf-8"))
     payload["run_identity"]["variant"] = "fdr_bpdd"
     manifest_path.write_text(json.dumps(payload), "utf-8")

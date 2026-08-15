@@ -7,15 +7,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-# 自定义模块 IRA / FDRRTDETRDecoder 在 src/ 中，通过该 trainer 注册进 ultralytics。
+# 自定义模块 FIA / FDRRTDETRDecoder 在 src/ 中，通过该 trainer 注册进 ultralytics。
 # initial_state_path=None 即不加载任何预训练/初始权重，完全从头训练。
-from src.rtdetr_fdr_bpdd_ira import FDRBPDDIRATrainer
+from src.rtdetr_fdr_bpdd_fia import FDRBPDDFIATrainer
 
 
 if __name__ == '__main__':
-    trainer = FDRBPDDIRATrainer(
+    trainer = FDRBPDDFIATrainer(
         overrides={
-            'model': 'configs/rtdetr-l-fdr-bpdd-ira.yaml',
+            'model': 'configs/rtdetr-l-fdr-bpdd-fia.yaml',
             'data': 'configs/VisDrone.yaml',
             'cache': False,
             'imgsz': 640,

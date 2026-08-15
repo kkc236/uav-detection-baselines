@@ -18,15 +18,15 @@ from src.state_hash import state_sha256
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "train_rtdetr_bpdd_ira.py"
+SCRIPT = ROOT / "scripts" / "train_rtdetr_bpdd_fia.py"
 EXPECTED_INITIAL_STATE_SHA256 = (
     "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D"
 )
 
 
 def _load_module():
-    assert SCRIPT.is_file(), "BPDD IRA training CLI has not been implemented"
-    spec = importlib.util.spec_from_file_location("train_rtdetr_bpdd_ira", SCRIPT)
+    assert SCRIPT.is_file(), "BPDD FIA training CLI has not been implemented"
+    spec = importlib.util.spec_from_file_location("train_rtdetr_bpdd_fia", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -65,7 +65,7 @@ def _rehash_manifest(module, manifest: dict) -> dict:
 def _manifest(module, state: Path) -> dict:
     source = _source()
     identity = module.build_run_identity(
-        source, stage="formal", variant="fdr_bpdd_ira", seed=0
+        source, stage="formal", variant="fdr_bpdd_fia", seed=0
     )
     return _rehash_manifest(
         module,
@@ -73,21 +73,21 @@ def _manifest(module, state: Path) -> dict:
             "format_version": 1,
             "source": source,
             "source_sha256": module.public_state_sha256(source),
-            "protocol": module.BPDD_IRA_PROTOCOL,
-            "protocol_sha256": module.BPDD_IRA_PROTOCOL_SHA256,
+            "protocol": module.BPDD_FIA_PROTOCOL,
+            "protocol_sha256": module.BPDD_FIA_PROTOCOL_SHA256,
             "initial_state": {
                 "path": str(state.resolve()),
                 "sha256": EXPECTED_INITIAL_STATE_SHA256,
             },
-            "run_identities": {"fdr_bpdd_ira_formal": identity},
+            "run_identities": {"fdr_bpdd_fia_formal": identity},
         },
     )
 
 
 def _fake_trainer(run: Path, *, epoch: int = 0):
-    ira = SimpleNamespace(residual_scale=torch.nn.Parameter(torch.tensor(0.125)))
+    fia = SimpleNamespace(residual_scale=torch.nn.Parameter(torch.tensor(0.125)))
     model = SimpleNamespace(
-        ira=ira,
+        fia=fia,
         last_fdr_losses={
             "loss_fgl": torch.tensor(0.15),
             "loss_fgl_aux": torch.tensor(0.05),
@@ -123,13 +123,13 @@ def _fake_trainer(run: Path, *, epoch: int = 0):
         last_gradient_norms={
             "gradient_norm": 4.0,
             "fdr_gradient_norm": 5.0,
-            "ira_gradient_norm": 6.0,
+            "fia_gradient_norm": 6.0,
         },
     )
 
 
 def test_cli_is_formal_only_and_exposes_no_scientific_knobs() -> None:
-    assert SCRIPT.is_file(), "BPDD IRA training CLI has not been implemented"
+    assert SCRIPT.is_file(), "BPDD FIA training CLI has not been implemented"
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--help"],
         cwd=ROOT,
@@ -159,7 +159,7 @@ def test_cli_is_formal_only_and_exposes_no_scientific_knobs() -> None:
         "--imgsz",
         "--optimizer",
         "--bpdd-weight",
-        "--ira-seed",
+        "--fia-seed",
     ):
         assert forbidden not in result.stdout
 
@@ -173,13 +173,13 @@ def test_formal100_settings_are_exact_frozen_fdr_settings(tmp_path: Path) -> Non
     expected = {
         **fdr_cli.FROZEN_SETTINGS,
         "model": str(
-            (ROOT / "configs" / "rtdetr-l-fdr-bpdd-ira.yaml").resolve()
+            (ROOT / "configs" / "rtdetr-l-fdr-bpdd-fia.yaml").resolve()
         ),
         "data": str(data_yaml.resolve()),
         "epochs": 100,
         "seed": 0,
         "project": str(args.output_root.resolve()),
-        "name": "formal-seed0-fdr_bpdd_ira-v1",
+        "name": "formal-seed0-fdr_bpdd_fia-v1",
         "exist_ok": False,
     }
     assert settings == expected
@@ -217,13 +217,13 @@ def test_manifest_binds_only_combined_formal_identity(tmp_path: Path) -> None:
     path.write_bytes(module.canonical_json_bytes(manifest) + b"\n")
 
     loaded = module.load_authority(path)
-    assert set(loaded["run_identities"]) == {"fdr_bpdd_ira_formal"}
+    assert set(loaded["run_identities"]) == {"fdr_bpdd_fia_formal"}
     assert loaded["initial_state"]["sha256"] == EXPECTED_INITIAL_STATE_SHA256
-    assert loaded["protocol"] == module.BPDD_IRA_PROTOCOL
+    assert loaded["protocol"] == module.BPDD_FIA_PROTOCOL
 
     changed = deepcopy(manifest)
     changed["run_identities"]["extra"] = changed["run_identities"][
-        "fdr_bpdd_ira_formal"
+        "fdr_bpdd_fia_formal"
     ]
     _rehash_manifest(module, changed)
     path.write_bytes(module.canonical_json_bytes(changed) + b"\n")
@@ -248,23 +248,23 @@ def test_epoch_evidence_is_create_only_and_contains_all_module_signals(
     first = module.write_epoch_evidence(trainer, context)
     repeated = module.write_epoch_evidence(trainer, context)
     assert repeated == first
-    assert first["variant"] == "fdr_bpdd_ira"
+    assert first["variant"] == "fdr_bpdd_fia"
     assert first["stage"] == "formal"
     assert first["loss_bpdd"] == pytest.approx(0.45)
     assert first["bpdd_active_edge_ratio"] == pytest.approx(0.25)
     assert first["bpdd_mean_reliability"] == pytest.approx(0.75)
-    assert first["ira_gradient_norm"] == pytest.approx(6.0)
-    assert first["ira_residual_scale"] == pytest.approx(0.125)
+    assert first["fia_gradient_norm"] == pytest.approx(6.0)
+    assert first["fia_residual_scale"] == pytest.approx(0.125)
     assert first["gradients_finite"] is True
 
-    trainer.model.ira.residual_scale.data.fill_(0.25)
-    with pytest.raises(ValueError, match="changed BPDD IRA evidence"):
+    trainer.model.fia.residual_scale.data.fill_(0.25)
+    with pytest.raises(ValueError, match="changed BPDD FIA evidence"):
         module.write_epoch_evidence(trainer, context)
 
     with (run / "fdr-epochs.csv").open(encoding="utf-8", newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 1
-    assert float(rows[0]["ira_residual_scale"]) == pytest.approx(0.125)
+    assert float(rows[0]["fia_residual_scale"]) == pytest.approx(0.125)
 
 
 def test_finalize_epoch_records_checkpoint_and_ema_hashes_and_queues_artifacts(
@@ -281,7 +281,7 @@ def test_finalize_epoch_records_checkpoint_and_ema_hashes_and_queues_artifacts(
         '{"optimizer_attempt":1,"amp_scale_before":128.0,"amp_scale_after":128.0}\n',
         encoding="utf-8",
     )
-    (run / "bpdd-ira-run.json").write_text("{}\n", encoding="utf-8")
+    (run / "bpdd-fia-run.json").write_text("{}\n", encoding="utf-8")
     trainer = _fake_trainer(run)
     context = {
         "run_identity": {"run_id": "combined-formal-seed0"},
@@ -298,7 +298,7 @@ def test_finalize_epoch_records_checkpoint_and_ema_hashes_and_queues_artifacts(
     assert {Path(path).name for path in result["publication"]["artifacts"]} == {
         "fdr-epochs.jsonl",
         "fdr-epochs.csv",
-        "bpdd-ira-run.json",
+        "bpdd-fia-run.json",
         "optimizer-evidence.jsonl",
     }
 
@@ -308,7 +308,7 @@ def test_resume_requires_exact_identity_and_registered_checkpoint_hash(
 ) -> None:
     module = _load_module()
     identity = module.build_run_identity(
-        _source(), stage="formal", variant="fdr_bpdd_ira", seed=0
+        _source(), stage="formal", variant="fdr_bpdd_fia", seed=0
     )
     run = tmp_path / "run"
     weights = run / "weights"
@@ -329,7 +329,7 @@ def test_resume_requires_exact_identity_and_registered_checkpoint_hash(
         + "\n",
         encoding="utf-8",
     )
-    (run / "bpdd-ira-run.json").write_text(
+    (run / "bpdd-fia-run.json").write_text(
         json.dumps(
             {
                 "run_identity": identity,
@@ -376,5 +376,5 @@ def test_dry_run_validates_without_constructing_trainer(
     result = module.execute(args)
     assert result["status"] == "dry-run-passed"
     assert result["settings"]["epochs"] == 100
-    assert result["variant"] == "fdr_bpdd_ira"
+    assert result["variant"] == "fdr_bpdd_fia"
     assert json.loads(capsys.readouterr().out)["stage"] == "formal"

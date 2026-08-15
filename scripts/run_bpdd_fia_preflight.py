@@ -1,4 +1,4 @@
-"""Run immutable fail-closed I0-I4 gates before BPDD+IRA Formal100."""
+"""Run immutable fail-closed I0-I4 gates before BPDD+FIA Formal100."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ FORMAL_AUTHORITY = {
     "stage": "formal",
     "epochs": 100,
     "seed": 0,
-    "variant": "fdr_bpdd_ira",
+    "variant": "fdr_bpdd_fia",
     "pretrained": False,
 }
 GateRunner = Callable[["PreflightContext"], Mapping[str, Any]]
@@ -102,7 +102,7 @@ def _write_create_only(path: Path, payload: Mapping[str, Any]) -> None:
 def _validate_inputs(context: PreflightContext) -> None:
     if not context.protocol_manifest.is_file() or context.protocol_manifest.is_symlink():
         raise FileNotFoundError(
-            f"BPDD IRA protocol manifest not found or unsafe: {context.protocol_manifest}"
+            f"BPDD FIA protocol manifest not found or unsafe: {context.protocol_manifest}"
         )
     if not context.initial_state.is_file() or context.initial_state.is_symlink():
         raise FileNotFoundError(
@@ -114,7 +114,7 @@ def _validate_inputs(context: PreflightContext) -> None:
         raise FileNotFoundError(f"repository root not found: {context.repository_root}")
     if context.report_root.exists():
         raise FileExistsError(
-            f"BPDD IRA preflight report root already exists: {context.report_root}"
+            f"BPDD FIA preflight report root already exists: {context.report_root}"
         )
 
 
@@ -156,7 +156,7 @@ def run_preflight(
     supplied = dict(gate_runners or {})
     unknown = set(supplied) - set(GATE_ORDER)
     if unknown:
-        raise ValueError(f"unknown BPDD IRA preflight gates: {sorted(unknown)}")
+        raise ValueError(f"unknown BPDD FIA preflight gates: {sorted(unknown)}")
     context.report_root.mkdir(parents=True, exist_ok=False)
     states: dict[str, str] = {}
     hashes: dict[str, str] = {}
@@ -215,28 +215,28 @@ def _manifest_and_artifact(context: PreflightContext) -> tuple[dict[str, Any], d
 
     manifest = json.loads(context.protocol_manifest.read_text(encoding="utf-8"))
     if manifest.get("format_version") != 1:
-        raise ValueError("BPDD IRA protocol manifest format must be 1")
+        raise ValueError("BPDD FIA protocol manifest format must be 1")
     declared_hash = manifest.get("manifest_sha256")
     if declared_hash is not None:
         unhashed = dict(manifest)
         unhashed.pop("manifest_sha256", None)
         actual_hash = hashlib.sha256(_canonical(unhashed)).hexdigest().upper()
         if str(declared_hash).upper() != actual_hash:
-            raise ValueError("BPDD IRA protocol manifest SHA256 mismatch")
+            raise ValueError("BPDD FIA protocol manifest SHA256 mismatch")
     initial = manifest.get("initial_state")
     if not isinstance(initial, Mapping):
-        raise ValueError("BPDD IRA protocol has no initial-state authority")
+        raise ValueError("BPDD FIA protocol has no initial-state authority")
     expected_path = context.initial_state.resolve()
     manifest_path = Path(str(initial.get("path", ""))).resolve()
     if manifest_path != expected_path:
-        raise ValueError("BPDD IRA initial-state path differs from authority")
+        raise ValueError("BPDD FIA initial-state path differs from authority")
     actual_sha = _file_sha256(expected_path)
     if actual_sha != str(initial.get("sha256", "")).upper():
-        raise ValueError("BPDD IRA initial-state SHA256 mismatch")
+        raise ValueError("BPDD FIA initial-state SHA256 mismatch")
     artifact = torch.load(expected_path, map_location="cpu", weights_only=False)
     validate_fdr_initial_state(artifact)
     if artifact.get("fingerprints") != initial.get("fingerprints"):
-        raise ValueError("BPDD IRA initial-state fingerprints differ")
+        raise ValueError("BPDD FIA initial-state fingerprints differ")
     return manifest, artifact
 
 
@@ -268,10 +268,10 @@ def _models(context: PreflightContext, device: Any) -> tuple[Any, Any, dict[str,
 
     from src.fdr_protocol import load_fdr_initial_state
     from src.rtdetr_fdr_bpdd import BPDD_MODEL_CFG, FDRBPDDDetectionModel
-    from src.rtdetr_fdr_bpdd_ira import (
-        BPDD_IRA_MODEL_CFG,
-        FDRBPDDIRADetectionModel,
-        load_fdr_bpdd_ira_initial_state,
+    from src.rtdetr_fdr_bpdd_fia import (
+        BPDD_FIA_MODEL_CFG,
+        FDRBPDDFIADetectionModel,
+        load_fdr_bpdd_fia_initial_state,
     )
 
     _manifest, artifact = _manifest_and_artifact(context)
@@ -286,26 +286,26 @@ def _models(context: PreflightContext, device: Any) -> tuple[Any, Any, dict[str,
         )
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
-        combined = FDRBPDDIRADetectionModel(
-            BPDD_IRA_MODEL_CFG,
+        combined = FDRBPDDFIADetectionModel(
+            BPDD_FIA_MODEL_CFG,
             ch=3,
             nc=10,
             verbose=False,
             private_seed=10_000,
-            ira_private_seed=20_000,
+            fia_private_seed=20_000,
         )
     load_fdr_initial_state(bpdd, artifact, variant="fdr")
-    load_report = load_fdr_bpdd_ira_initial_state(combined, artifact)
+    load_report = load_fdr_bpdd_fia_initial_state(combined, artifact)
     return bpdd.to(device), combined.to(device), artifact, load_report
 
 
 def _protocol_dataset(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
     protocol = manifest.get("protocol")
     if not isinstance(protocol, Mapping):
-        raise ValueError("BPDD IRA protocol payload is missing")
+        raise ValueError("BPDD FIA protocol payload is missing")
     dataset = protocol.get("dataset")
     if not isinstance(dataset, Mapping):
-        raise ValueError("BPDD IRA dataset authority is missing")
+        raise ValueError("BPDD FIA dataset authority is missing")
     return dataset
 
 
@@ -342,35 +342,35 @@ def run_i0(context: PreflightContext) -> dict[str, Any]:
     expected_source = manifest.get("source")
     actual_source = current_source_identity(context.repository_root.resolve())
     if not isinstance(expected_source, Mapping) or dict(expected_source) != actual_source:
-        raise ValueError("checked-out source differs from BPDD IRA authority")
+        raise ValueError("checked-out source differs from BPDD FIA authority")
 
     expected_dataset = _protocol_dataset(manifest)
     actual_dataset = dataset_signature(context.dataset_root.resolve())
     train_count = len(list((context.dataset_root / "images" / "train").glob("*.jpg")))
     val_count = len(list((context.dataset_root / "images" / "val").glob("*.jpg")))
     if str(actual_dataset.get("sha256")) != str(expected_dataset.get("sha256")):
-        raise ValueError("VisDrone dataset SHA256 differs from BPDD IRA authority")
+        raise ValueError("VisDrone dataset SHA256 differs from BPDD FIA authority")
     if train_count != int(expected_dataset.get("train_images", -1)):
         raise ValueError("VisDrone train image count differs from authority")
     if val_count != int(expected_dataset.get("val_images", -1)):
         raise ValueError("VisDrone val image count differs from authority")
 
-    combined_path = context.repository_root / "configs" / "rtdetr-l-fdr-bpdd-ira.yaml"
+    combined_path = context.repository_root / "configs" / "rtdetr-l-fdr-bpdd-fia.yaml"
     bpdd_path = context.repository_root / "configs" / "rtdetr-l-fdr-bpdd.yaml"
     combined = yaml.safe_load(combined_path.read_text(encoding="utf-8"))
     bpdd = yaml.safe_load(bpdd_path.read_text(encoding="utf-8"))
-    ira_rows = [row for row in combined.get("head", []) if row[2] == "IRA"]
+    fia_rows = [row for row in combined.get("head", []) if row[2] == "FIA"]
     decoder = combined.get("head", [])[-1]
     yaml_checks = {
-        "one_ira_layer": len(ira_rows) == 1,
-        "ira_on_p3": bool(ira_rows and ira_rows[0] == [21, 1, "IRA", [256]]),
+        "one_fia_layer": len(fia_rows) == 1,
+        "fia_on_p3": bool(fia_rows and fia_rows[0] == [21, 1, "FIA", [256]]),
         "decoder_sources": decoder[0] == [22, 25, 28],
         "decoder_queries": decoder[3][-1]["num_queries"] == 300,
         "fdr_loss_unchanged": combined.get("fdr_loss") == bpdd.get("fdr_loss"),
         "bpdd_loss_unchanged": combined.get("bpdd_loss") == bpdd.get("bpdd_loss"),
     }
     if not all(yaml_checks.values()):
-        raise RuntimeError(f"BPDD IRA YAML contract failed: {yaml_checks}")
+        raise RuntimeError(f"BPDD FIA YAML contract failed: {yaml_checks}")
 
     driver = subprocess.run(
         ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -414,11 +414,11 @@ def run_i0(context: PreflightContext) -> dict[str, Any]:
 
 
 def run_i1(context: PreflightContext) -> dict[str, Any]:
-    """Prove exact shared/FDR state and isolate every new tensor to IRA."""
+    """Prove exact shared/FDR state and isolate every new tensor to FIA."""
 
     import torch
 
-    from src.rtdetr_fdr_bpdd_ira import remap_bpdd_ira_shared_key
+    from src.rtdetr_fdr_bpdd_fia import remap_bpdd_fia_shared_key
 
     bpdd, combined, artifact, load_report = _models(context, torch.device("cpu"))
     bpdd_state = _cpu_state(bpdd)
@@ -426,25 +426,25 @@ def run_i1(context: PreflightContext) -> dict[str, Any]:
     mismatches = [
         name
         for name, expected in bpdd_state.items()
-        if not torch.equal(combined_state[remap_bpdd_ira_shared_key(name)], expected)
+        if not torch.equal(combined_state[remap_bpdd_fia_shared_key(name)], expected)
     ]
-    private = list(load_report["ira_private_keys"])
+    private = list(load_report["fia_private_keys"])
     checks = {
         "shared_keys_complete": int(load_report["shared_tensor_count"]) == len(bpdd_state),
         "shared_tensors_exact": not mismatches,
         "shared_mismatch_zero": int(load_report["shared_mismatch_count"]) == 0,
-        "ira_private_nonempty": bool(private),
-        "ira_only_private": all(name.startswith("model.22.") for name in private),
-        "rezero_gate_zero": bool(torch.equal(combined.ira.residual_scale, torch.zeros_like(combined.ira.residual_scale))),
+        "fia_private_nonempty": bool(private),
+        "fia_only_private": all(name.startswith("model.22.") for name in private),
+        "rezero_gate_zero": bool(torch.equal(combined.fia.residual_scale, torch.zeros_like(combined.fia.residual_scale))),
     }
     if not all(checks.values()):
-        raise RuntimeError(f"BPDD IRA I1 state isolation failed: {checks}")
+        raise RuntimeError(f"BPDD FIA I1 state isolation failed: {checks}")
     return {
         "status": "passed",
         "gate": "I1",
         "checks": checks,
         "shared_tensor_count": len(bpdd_state),
-        "ira_private_tensor_count": len(private),
+        "fia_private_tensor_count": len(private),
         "initial_fdr_state_sha256": artifact["fingerprints"]["fdr"],
     }
 
@@ -472,9 +472,9 @@ def summarize_gradient_group(parameters: Sequence[Any]) -> dict[str, Any]:
 
 
 def _gradient_groups(model: Any) -> dict[str, list[Any]]:
-    from src.rtdetr_fdr_bpdd_ira import FDRBPDDIRATrainer
+    from src.rtdetr_fdr_bpdd_fia import FDRBPDDFIATrainer
 
-    trainer = FDRBPDDIRATrainer.__new__(FDRBPDDIRATrainer)
+    trainer = FDRBPDDFIATrainer.__new__(FDRBPDDFIATrainer)
     trainer.model = model
     return trainer.gradient_parameter_groups()
 
@@ -522,20 +522,20 @@ def run_i2(context: PreflightContext) -> dict[str, Any]:
 
     pristine = _cpu_state(model)
     with torch.no_grad():
-        model.ira.residual_scale.fill_(0.1)
+        model.fia.residual_scale.fill_(0.1)
     open_loss, open_groups = _backward(model, batch, scaler)
     open_reports = {
         name: summarize_gradient_group(parameters)
         for name, parameters in open_groups.items()
     }
-    open_all_ira = open_reports["ira_gradient_norm"]
+    open_all_fia = open_reports["fia_gradient_norm"]
     if not (
         bool(torch.isfinite(open_loss.detach()))
-        and open_all_ira["finite"]
-        and open_all_ira["gradient_tensors"] == open_all_ira["parameter_tensors"]
-        and open_all_ira["nonzero_tensors"] == open_all_ira["parameter_tensors"]
+        and open_all_fia["finite"]
+        and open_all_fia["gradient_tensors"] == open_all_fia["parameter_tensors"]
+        and open_all_fia["nonzero_tensors"] == open_all_fia["parameter_tensors"]
     ):
-        raise RuntimeError(f"I2 open-gate IRA gradients failed: {open_all_ira}")
+        raise RuntimeError(f"I2 open-gate FIA gradients failed: {open_all_fia}")
 
     model.load_state_dict(pristine, strict=True)
     optimizer.zero_grad(set_to_none=True)
@@ -546,8 +546,8 @@ def run_i2(context: PreflightContext) -> dict[str, Any]:
         name: summarize_gradient_group(parameters)
         for name, parameters in groups.items()
     }
-    ira_parameters = dict(model.ira.named_parameters())
-    gate_gradient = ira_parameters["residual_scale"].grad
+    fia_parameters = dict(model.fia.named_parameters())
+    gate_gradient = fia_parameters["residual_scale"].grad
     gate_live = bool(
         gate_gradient is not None
         and torch.isfinite(gate_gradient).all()
@@ -555,7 +555,7 @@ def run_i2(context: PreflightContext) -> dict[str, Any]:
     )
     non_gate_finite = all(
         parameter.grad is None or bool(torch.isfinite(parameter.grad).all())
-        for name, parameter in ira_parameters.items()
+        for name, parameter in fia_parameters.items()
         if name != "residual_scale"
     )
     common_live = zero_reports["gradient_norm"]["finite"] and zero_reports["gradient_norm"]["nonzero_tensors"] > 0
@@ -589,13 +589,13 @@ def run_i2(context: PreflightContext) -> dict[str, Any]:
         "fdr_gradient_live": fdr_live,
         "rezero_gate_gradient_live": gate_live,
         "rezero_private_gradients_finite": non_gate_finite,
-        "open_gate_all_ira_gradients_live": True,
+        "open_gate_all_fia_gradients_live": True,
         "optimizer_coverage_exact": optimizer_coverage["tensor_count"] > 0,
         "amp_scale_128": scale_before == scale_after == 128.0,
         "optimizer_step_not_skipped": scale_after >= scale_before,
     }
     if not all(checks.values()):
-        raise RuntimeError(f"BPDD IRA I2 runtime failed: {checks}")
+        raise RuntimeError(f"BPDD FIA I2 runtime failed: {checks}")
     return {
         "status": "passed",
         "gate": "I2",
@@ -658,14 +658,14 @@ def run_i3(context: PreflightContext) -> dict[str, Any]:
     contract = validate_prediction_contract(actual, batch_size=8)
     parity = _tree_equal(actual, expected)
     checks = {
-        "zero_gate": bool(torch.count_nonzero(combined.ira.residual_scale) == 0),
+        "zero_gate": bool(torch.count_nonzero(combined.fia.residual_scale) == 0),
         "zero_gate_parity_exact": parity,
         "batch8": contract["batch"] == 8,
         "queries_300": contract["queries"] == 300,
         "prediction_finite": contract["finite"],
     }
     if not all(checks.values()):
-        raise RuntimeError(f"BPDD IRA I3 evaluation parity failed: {checks}")
+        raise RuntimeError(f"BPDD FIA I3 evaluation parity failed: {checks}")
     return {
         "status": "passed",
         "gate": "I3",
@@ -681,48 +681,48 @@ def run_i4(context: PreflightContext) -> dict[str, Any]:
     import torch
 
     from src.fdr_protocol import public_state_sha256
-    from src.rtdetr_fdr_bpdd_ira import (
-        BPDD_IRA_MODEL_CFG,
-        FDRBPDDIRADetectionModel,
-        load_exact_fdr_bpdd_ira_resume_state,
+    from src.rtdetr_fdr_bpdd_fia import (
+        BPDD_FIA_MODEL_CFG,
+        FDRBPDDFIADetectionModel,
+        load_exact_fdr_bpdd_fia_resume_state,
     )
 
     _bpdd, model, _artifact, _report = _models(context, torch.device("cpu"))
     del _bpdd
     with torch.no_grad():
-        model.ira.residual_scale.fill_(0.125)
+        model.fia.residual_scale.fill_(0.125)
     expected = _cpu_state(model)
     buffer = io.BytesIO()
     torch.save({"state_dict": expected}, buffer)
     buffer.seek(0)
     checkpoint = torch.load(buffer, map_location="cpu", weights_only=True)
-    resumed = FDRBPDDIRADetectionModel(
-        BPDD_IRA_MODEL_CFG,
+    resumed = FDRBPDDFIADetectionModel(
+        BPDD_FIA_MODEL_CFG,
         ch=3,
         nc=10,
         verbose=False,
         private_seed=10_000,
-        ira_private_seed=20_000,
+        fia_private_seed=20_000,
     )
-    load_exact_fdr_bpdd_ira_resume_state(resumed, checkpoint)
+    load_exact_fdr_bpdd_fia_resume_state(resumed, checkpoint)
     restored = _cpu_state(resumed)
 
     incomplete_rejected = False
     incomplete = dict(expected)
     incomplete.pop(next(iter(incomplete)))
     try:
-        load_exact_fdr_bpdd_ira_resume_state(resumed, {"state_dict": incomplete})
+        load_exact_fdr_bpdd_fia_resume_state(resumed, {"state_dict": incomplete})
     except ValueError:
         incomplete_rejected = True
     checks = {
         "state_keys_exact": set(expected) == set(restored),
         "state_tensors_exact": _tree_equal(expected, restored),
         "state_hash_exact": public_state_sha256(expected) == public_state_sha256(restored),
-        "ira_gate_restored": float(resumed.ira.residual_scale) == 0.125,
+        "fia_gate_restored": float(resumed.fia.residual_scale) == 0.125,
         "incomplete_resume_rejected": incomplete_rejected,
     }
     if not all(checks.values()):
-        raise RuntimeError(f"BPDD IRA I4 checkpoint/resume failed: {checks}")
+        raise RuntimeError(f"BPDD FIA I4 checkpoint/resume failed: {checks}")
     return {
         "status": "passed",
         "gate": "I4",

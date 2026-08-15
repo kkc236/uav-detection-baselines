@@ -12,11 +12,11 @@ from prettytable import PrettyTable
 from ultralytics import RTDETR
 from ultralytics.utils.torch_utils import model_info
 
-# train.py 用 src/rtdetr_fdr_bpdd_ira.py 中的 FDRBPDDIRATrainer 训练，
-# 保存的 best.pt 依赖自定义模块 (IRA / FDRRTDETRDecoder) 和自定义模型类。
+# train.py 用 src/rtdetr_fdr_bpdd_fia.py 中的 FDRBPDDFIATrainer 训练，
+# 保存的 best.pt 依赖自定义模块 (FIA / FDRRTDETRDecoder) 和自定义模型类。
 # 加载权重前必须让 src 包可导入（反序列化用）并把自定义模块注册进 ultralytics（YAML 解析用）。
 from src.rtdetr_fdr import register_fdr_module
-from src.rtdetr_fdr_bpdd_ira import FDRBPDDIRADetectionModel  # noqa: F401
+from src.rtdetr_fdr_bpdd_fia import FDRBPDDFIADetectionModel  # noqa: F401
 
 register_fdr_module()
 

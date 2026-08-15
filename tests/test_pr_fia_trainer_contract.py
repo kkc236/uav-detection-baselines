@@ -5,19 +5,19 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from src.pr_ira_protocol import build_run_identity
+from src.pr_fia_protocol import build_run_identity
 from src.rtdetr_fdr_bpdd import FDRBPDDTrainer
-from src.rtdetr_fdr_bpdd_pr_ira import (
-    FDRBPDDPRIRADetectionModel,
-    FDRBPDDPRIRATrainer,
+from src.rtdetr_fdr_bpdd_pr_fia import (
+    FDRBPDDPRFIADetectionModel,
+    FDRBPDDPRFIATrainer,
 )
 
 
 @pytest.fixture(scope="module")
-def combined_model() -> FDRBPDDPRIRADetectionModel:
+def combined_model() -> FDRBPDDPRFIADetectionModel:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(91_031)
-        return FDRBPDDPRIRADetectionModel(
+        return FDRBPDDPRFIADetectionModel(
             nc=10,
             verbose=False,
             experiment_seed=0,
@@ -28,7 +28,7 @@ def _run_identity(stage: str) -> dict[str, object]:
     return build_run_identity(
         {"git_commit": "a" * 40, "tree_sha256": "B" * 64},
         stage=stage,
-        variant="fdr_bpdd_pr_ira",
+        variant="fdr_bpdd_pr_fia",
         seed=0,
     )
 
@@ -44,10 +44,10 @@ def test_schedule_authority_accepts_only_the_stage_total(
     stage: str,
     epochs: int,
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = _run_identity(stage)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = _run_identity(stage)
 
-    assert trainer._validate_pr_ira_schedule_authority(epochs) is True
+    assert trainer._validate_pr_fia_schedule_authority(epochs) is True
 
 
 @pytest.mark.parametrize(
@@ -61,11 +61,11 @@ def test_schedule_authority_rejects_the_other_stage_total(
     stage: str,
     epochs: int,
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = _run_identity(stage)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = _run_identity(stage)
 
     with pytest.raises(ValueError, match="schedule epochs"):
-        trainer._validate_pr_ira_schedule_authority(epochs)
+        trainer._validate_pr_fia_schedule_authority(epochs)
 
 
 @pytest.mark.parametrize("missing_field", ["source_sha256", "stage"])
@@ -74,36 +74,36 @@ def test_schedule_authority_rejects_incomplete_identity(
 ) -> None:
     identity = _run_identity("formal")
     del identity[missing_field]
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = identity
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = identity
 
     with pytest.raises(ValueError, match=missing_field):
-        trainer._validate_pr_ira_schedule_authority(100)
+        trainer._validate_pr_fia_schedule_authority(100)
 
 
 def test_schedule_authority_rejects_non_mapping_identity() -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = "formal"  # type: ignore[assignment]
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = "formal"  # type: ignore[assignment]
 
     with pytest.raises(TypeError, match="Mapping"):
-        trainer._validate_pr_ira_schedule_authority(100)
+        trainer._validate_pr_fia_schedule_authority(100)
 
 
 @pytest.mark.parametrize("stage", [None, "probe"])
 def test_schedule_authority_rejects_malformed_stage(stage: object) -> None:
     identity = _run_identity("formal")
     identity["stage"] = stage
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = identity
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = identity
 
     with pytest.raises(ValueError, match="stage"):
-        trainer._validate_pr_ira_schedule_authority(100)
+        trainer._validate_pr_fia_schedule_authority(100)
 
 
 def test_schedule_authority_absence_fails_closed() -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
 
-    assert trainer._validate_pr_ira_schedule_authority(100) is False
+    assert trainer._validate_pr_fia_schedule_authority(100) is False
 
 
 @pytest.mark.parametrize("identity", [None, "formal"])
@@ -119,7 +119,7 @@ def test_trainer_init_rejects_non_mapping_before_parent_initialization(
     )
 
     with pytest.raises(TypeError, match="Mapping"):
-        FDRBPDDPRIRATrainer(pr_ira_run_identity=identity)  # type: ignore[arg-type]
+        FDRBPDDPRFIATrainer(pr_fia_run_identity=identity)  # type: ignore[arg-type]
 
     assert calls == []
 
@@ -137,7 +137,7 @@ def test_trainer_init_rejects_stage_only_identity_before_parent_initialization(
     stage_only_identity = {"stage": complete_identity["stage"]}
 
     with pytest.raises(ValueError, match="source_sha256"):
-        FDRBPDDPRIRATrainer(pr_ira_run_identity=stage_only_identity)
+        FDRBPDDPRFIATrainer(pr_fia_run_identity=stage_only_identity)
 
     assert calls == []
 
@@ -159,7 +159,7 @@ def test_trainer_init_copies_and_validates_identity_after_parent_initialization(
 
     def fake_parent_init(trainer: object, *args: object, **kwargs: object) -> None:
         del args, kwargs
-        stored_identity = getattr(trainer, "pr_ira_run_identity")
+        stored_identity = getattr(trainer, "pr_fia_run_identity")
         assert stored_identity == source_identity
         assert stored_identity is not source_identity
         parent_observations.append(stored_identity)
@@ -168,13 +168,13 @@ def test_trainer_init_copies_and_validates_identity_after_parent_initialization(
 
     monkeypatch.setattr(FDRBPDDTrainer, "__init__", fake_parent_init)
 
-    trainer = FDRBPDDPRIRATrainer(pr_ira_run_identity=source_identity)
+    trainer = FDRBPDDPRFIATrainer(pr_fia_run_identity=source_identity)
 
     assert parent_observations == [source_identity]
-    assert trainer.pr_ira_run_identity == source_identity
-    assert trainer.pr_ira_run_identity is not source_identity
-    assert trainer.args.pr_ira_run_identity == source_identity
-    assert trainer.args.pr_ira_run_identity is not trainer.pr_ira_run_identity
+    assert trainer.pr_fia_run_identity == source_identity
+    assert trainer.pr_fia_run_identity is not source_identity
+    assert trainer.args.pr_fia_run_identity == source_identity
+    assert trainer.args.pr_fia_run_identity is not trainer.pr_fia_run_identity
 
 
 def test_trainer_init_rejects_identity_total_mismatch_after_parent_initialization(
@@ -191,13 +191,13 @@ def test_trainer_init_rejects_identity_total_mismatch_after_parent_initializatio
     monkeypatch.setattr(FDRBPDDTrainer, "__init__", fake_parent_init)
 
     with pytest.raises(ValueError, match="schedule epochs"):
-        FDRBPDDPRIRATrainer(pr_ira_run_identity=_run_identity("formal"))
+        FDRBPDDPRFIATrainer(pr_fia_run_identity=_run_identity("formal"))
 
     assert calls == ["parent"]
 
 
 def test_build_optimizer_splits_private_groups_at_one_tenth_lr(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_build(
@@ -240,7 +240,7 @@ def test_build_optimizer_splits_private_groups_at_one_tenth_lr(
         )
 
     monkeypatch.setattr(FDRBPDDTrainer, "build_optimizer", fake_build)
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
 
     optimizer = trainer.build_optimizer(
         combined_model,
@@ -251,7 +251,7 @@ def test_build_optimizer_splits_private_groups_at_one_tenth_lr(
         iterations=1000,
     )
 
-    private_ids = {id(parameter) for parameter in combined_model.pr_ira.parameters()}
+    private_ids = {id(parameter) for parameter in combined_model.pr_fia.parameters()}
     all_group_ids: list[int] = []
     private_group_ids: set[int] = set()
     public_group_ids: set[int] = set()
@@ -259,7 +259,7 @@ def test_build_optimizer_splits_private_groups_at_one_tenth_lr(
     for group in optimizer.param_groups:
         identifiers = {id(parameter) for parameter in group["params"]}
         all_group_ids.extend(identifiers)
-        if group.get("pr_ira_private"):
+        if group.get("pr_fia_private"):
             assert group["lr"] == pytest.approx(0.001)
             assert identifiers <= private_ids
             private_group_ids |= identifiers
@@ -295,7 +295,7 @@ def test_build_optimizer_splits_private_groups_at_one_tenth_lr(
     ],
 )
 def test_model_train_applies_the_frozen_relative_schedule(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
     epoch_zero_based: int,
     epochs: int,
@@ -307,22 +307,22 @@ def test_model_train_applies_the_frozen_relative_schedule(
         "_model_train",
         lambda _self: calls.append("stock_train"),
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     trainer.epoch = epoch_zero_based
     trainer.epochs = epochs
-    trainer.pr_ira_run_identity = _run_identity(
+    trainer.pr_fia_run_identity = _run_identity(
         "screen" if epochs == 30 else "formal"
     )
 
     trainer._model_train()
 
     assert calls == ["stock_train"]
-    assert combined_model.pr_ira.open_ratio == pytest.approx(expected)
+    assert combined_model.pr_fia.open_ratio == pytest.approx(expected)
 
 
 def test_model_train_without_identity_fails_before_parent_or_schedule_mutation(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -331,9 +331,9 @@ def test_model_train_without_identity_fails_before_parent_or_schedule_mutation(
         "_model_train",
         lambda _self: calls.append("stock_train"),
     )
-    combined_model.pr_ira.set_training_progress(10, 30)
-    open_ratio_before = combined_model.pr_ira.open_ratio
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    combined_model.pr_fia.set_training_progress(10, 30)
+    open_ratio_before = combined_model.pr_fia.open_ratio
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     trainer.epoch = 0
     trainer.epochs = 30
@@ -342,7 +342,7 @@ def test_model_train_without_identity_fails_before_parent_or_schedule_mutation(
         trainer._model_train()
 
     assert calls == []
-    assert combined_model.pr_ira.open_ratio == pytest.approx(open_ratio_before)
+    assert combined_model.pr_fia.open_ratio == pytest.approx(open_ratio_before)
 
 
 @pytest.mark.parametrize(
@@ -363,8 +363,8 @@ def test_model_train_rejects_stage_total_mismatch_before_parent_activity(
         "_model_train",
         lambda _self: calls.append("stock_train"),
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
-    trainer.pr_ira_run_identity = _run_identity(stage)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
+    trainer.pr_fia_run_identity = _run_identity(stage)
     trainer.epoch = 0
     trainer.epochs = epochs
 
@@ -388,19 +388,19 @@ def test_model_train_rejects_stage_total_mismatch_before_parent_activity(
     ],
 )
 def test_inactive_phases_suppress_all_private_gradients_only(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     epoch_zero_based: int,
     epochs: int,
     expected_suppressed: bool,
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     trainer.epoch = epoch_zero_based
     trainer.epochs = epochs
-    trainer.pr_ira_run_identity = _run_identity(
+    trainer.pr_fia_run_identity = _run_identity(
         "screen" if epochs == 30 else "formal"
     )
-    private = combined_model.pr_ira_private_parameters()
+    private = combined_model.pr_fia_private_parameters()
     private_ids = {id(parameter) for parameter in private}
     public = next(
         parameter
@@ -415,7 +415,7 @@ def test_inactive_phases_suppress_all_private_gradients_only(
         public_gradient = torch.ones_like(public)
         public.grad = public_gradient
 
-        assert trainer.suppress_pr_ira_inactive_gradients() is expected_suppressed
+        assert trainer.suppress_pr_fia_inactive_gradients() is expected_suppressed
         if expected_suppressed:
             assert all(parameter.grad is None for parameter in private)
         else:
@@ -439,19 +439,19 @@ def test_inactive_phases_suppress_all_private_gradients_only(
     "schedule_context",
     [
         {},
-        {"pr_ira_run_identity": _run_identity("formal")},
+        {"pr_fia_run_identity": _run_identity("formal")},
         {"epoch": 10, "epochs": 100},
     ],
 )
 def test_missing_schedule_context_or_authority_suppresses_private_gradients_only(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     schedule_context: dict[str, object],
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     for name, value in schedule_context.items():
         setattr(trainer, name, value)
-    private = combined_model.pr_ira_private_parameters()
+    private = combined_model.pr_fia_private_parameters()
     private_ids = {id(parameter) for parameter in private}
     public = next(
         parameter
@@ -465,7 +465,7 @@ def test_missing_schedule_context_or_authority_suppresses_private_gradients_only
         public_gradient = torch.ones_like(public)
         public.grad = public_gradient
 
-        assert trainer.suppress_pr_ira_inactive_gradients() is True
+        assert trainer.suppress_pr_fia_inactive_gradients() is True
         assert all(parameter.grad is None for parameter in private)
         assert public.grad is not None
         assert torch.equal(public.grad, public_gradient)
@@ -482,16 +482,16 @@ def test_missing_schedule_context_or_authority_suppresses_private_gradients_only
     ],
 )
 def test_suppression_rejects_stage_total_mismatch_before_gradient_activity(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     stage: str,
     epochs: int,
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     trainer.epoch = 10
     trainer.epochs = epochs
-    trainer.pr_ira_run_identity = _run_identity(stage)
-    private = combined_model.pr_ira_private_parameters()
+    trainer.pr_fia_run_identity = _run_identity(stage)
+    private = combined_model.pr_fia_private_parameters()
     private_ids = {id(parameter) for parameter in private}
     public = next(
         parameter
@@ -507,7 +507,7 @@ def test_suppression_rejects_stage_total_mismatch_before_gradient_activity(
         public.grad = public_gradient
 
         with pytest.raises(ValueError, match="schedule epochs"):
-            trainer.suppress_pr_ira_inactive_gradients()
+            trainer.suppress_pr_fia_inactive_gradients()
 
         assert all(
             parameter.grad is not None
@@ -526,14 +526,14 @@ def test_suppression_rejects_stage_total_mismatch_before_gradient_activity(
 
 
 def test_late_freeze_preserves_private_sgd_parameter_and_momentum(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
     trainer.epoch = 60
     trainer.epochs = 100
-    trainer.pr_ira_run_identity = _run_identity("formal")
-    private_parameters = combined_model.pr_ira_private_parameters()
+    trainer.pr_fia_run_identity = _run_identity("formal")
+    private_parameters = combined_model.pr_fia_private_parameters()
     private_ids = {id(parameter) for parameter in private_parameters}
     private = private_parameters[0]
     public = next(
@@ -569,7 +569,7 @@ def test_late_freeze_preserves_private_sgd_parameter_and_momentum(
         private.grad = torch.full_like(private, 2.0)
         public.grad = torch.full_like(public, 2.0)
 
-        assert trainer.suppress_pr_ira_inactive_gradients() is True
+        assert trainer.suppress_pr_fia_inactive_gradients() is True
         assert private.grad is None
         assert public.grad is not None
         optimizer.step()
@@ -592,7 +592,7 @@ def test_late_freeze_preserves_private_sgd_parameter_and_momentum(
 
 def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
     monkeypatch: pytest.MonkeyPatch,
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     calls: list[object] = []
     monkeypatch.setattr(
@@ -600,13 +600,13 @@ def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
         "resume_training",
         lambda _self, checkpoint: calls.append(checkpoint),
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.resume = True
     trainer.epochs = 30
-    trainer.pr_ira_run_identity = _run_identity("formal")
-    trainer._pr_ira_full_resume_authority_validated = True
+    trainer.pr_fia_run_identity = _run_identity("formal")
+    trainer._pr_fia_full_resume_authority_validated = True
     trainer.model = combined_model
-    combined_model.clear_pr_ira_firewall_buffer()
+    combined_model.clear_pr_fia_firewall_buffer()
     for parameter in combined_model.parameters():
         parameter.grad = None
 
@@ -618,7 +618,7 @@ def test_resume_revalidates_stage_total_before_parent_checkpoint_restoration(
 
 def test_resume_delegates_after_valid_stage_total_revalidation(
     monkeypatch: pytest.MonkeyPatch,
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     checkpoint = {"epoch": 1}
     calls: list[object] = []
@@ -628,13 +628,13 @@ def test_resume_delegates_after_valid_stage_total_revalidation(
         "resume_training",
         lambda _self, value: calls.append(value) or marker,
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.resume = True
     trainer.epochs = 100
-    trainer.pr_ira_run_identity = _run_identity("formal")
-    trainer._pr_ira_full_resume_authority_validated = True
+    trainer.pr_fia_run_identity = _run_identity("formal")
+    trainer._pr_fia_full_resume_authority_validated = True
     trainer.model = combined_model
-    combined_model.clear_pr_ira_firewall_buffer()
+    combined_model.clear_pr_fia_firewall_buffer()
     for parameter in combined_model.parameters():
         parameter.grad = None
 
@@ -643,14 +643,14 @@ def test_resume_delegates_after_valid_stage_total_revalidation(
 
 
 def test_memory_cleanup_preserves_normal_accumulation_and_resets_retry(
-    combined_model: FDRBPDDPRIRADetectionModel,
+    combined_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    combined_model.clear_pr_ira_firewall_buffer()
-    private = combined_model.pr_ira_private_parameters()
+    combined_model.clear_pr_fia_firewall_buffer()
+    private = combined_model.pr_fia_private_parameters()
     loss = sum(parameter.square().mean() for parameter in private)
-    combined_model.capture_pr_ira_firewall_gradient(loss)
-    assert not combined_model.pr_ira_firewall_buffer_empty
+    combined_model.capture_pr_fia_firewall_gradient(loss)
+    assert not combined_model.pr_fia_firewall_buffer_empty
 
     calls: list[object] = []
     monkeypatch.setattr(
@@ -658,7 +658,7 @@ def test_memory_cleanup_preserves_normal_accumulation_and_resets_retry(
         "_clear_memory",
         lambda _self, threshold=None: calls.append(threshold),
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = combined_model
 
     for parameter in private:
@@ -666,11 +666,11 @@ def test_memory_cleanup_preserves_normal_accumulation_and_resets_retry(
     trainer._clear_memory(0.5)
 
     assert calls == [0.5]
-    assert not combined_model.pr_ira_firewall_buffer_empty
+    assert not combined_model.pr_fia_firewall_buffer_empty
     assert all(parameter.grad is not None for parameter in private)
 
     trainer._clear_memory()
 
     assert calls == [0.5, None]
-    assert combined_model.pr_ira_firewall_buffer_empty
+    assert combined_model.pr_fia_firewall_buffer_empty
     assert all(parameter.grad is None for parameter in private)

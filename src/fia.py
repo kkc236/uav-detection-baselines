@@ -14,15 +14,15 @@ def _validate_channels(channels: int) -> int:
 
 def _validate_feature(x: Tensor, channels: int) -> None:
     if not isinstance(x, Tensor):
-        raise TypeError("IRA input must be a torch.Tensor")
+        raise TypeError("FIA input must be a torch.Tensor")
     if x.ndim != 4:
-        raise ValueError("IRA input must use BCHW layout")
+        raise ValueError("FIA input must use BCHW layout")
     if x.shape[1] != channels:
-        raise ValueError(f"IRA input must have {channels} channels")
+        raise ValueError(f"FIA input must have {channels} channels")
 
 
-def _ira_construction_cuda_devices() -> list[int]:
-    """Return CUDA RNG devices that IRA construction could consume."""
+def _fia_construction_cuda_devices() -> list[int]:
+    """Return CUDA RNG devices that FIA construction could consume."""
 
     if not torch.cuda.is_available():
         return []
@@ -36,7 +36,7 @@ def _ira_construction_cuda_devices() -> list[int]:
     ]
 
 
-class IRABaseBlock(nn.Module):
+class FIABaseBlock(nn.Module):
     """Depth-wise feature refinement with two internal residual paths."""
 
     internal_residuals = 2
@@ -61,7 +61,7 @@ class IRABaseBlock(nn.Module):
         return local + self.project_out(self.activation(local))
 
 
-class IRAAttention(nn.Module):
+class FIAAttention(nn.Module):
     """Joint channel-mean and spatial mean/max feature attention."""
 
     uses_spatial_attention = True
@@ -94,7 +94,7 @@ class IRAAttention(nn.Module):
         return x * channel_gate * spatial_gate
 
 
-class IRA(nn.Module):
+class FIA(nn.Module):
     """Identity-safe image representation enhancement for BCHW features."""
 
     def __init__(self, channels: int) -> None:
@@ -103,13 +103,13 @@ class IRA(nn.Module):
         # Do not perturb the initialization trajectory of modules constructed
         # after this private YAML layer (stock P4/P5 and the FDR decoder).
         with torch.random.fork_rng(
-            devices=_ira_construction_cuda_devices(),
+            devices=_fia_construction_cuda_devices(),
             enabled=True,
         ):
             self.refine = nn.Sequential(
-                IRABaseBlock(self.channels),
-                IRABaseBlock(self.channels),
-                IRAAttention(self.channels),
+                FIABaseBlock(self.channels),
+                FIABaseBlock(self.channels),
+                FIAAttention(self.channels),
             )
         self.residual_scale = nn.Parameter(torch.zeros(()))
 
@@ -119,4 +119,4 @@ class IRA(nn.Module):
         return x + self.residual_scale * (refined - x)
 
 
-__all__ = ["IRA", "IRAAttention", "IRABaseBlock"]
+__all__ = ["FIA", "FIAAttention", "FIABaseBlock"]

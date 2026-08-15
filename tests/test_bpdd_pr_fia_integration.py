@@ -9,15 +9,15 @@ import yaml
 from ultralytics.nn import tasks as ultralytics_tasks
 
 from src.fdr_head import FDRRTDETRDecoder
-from src.pr_ira import PRIRA
+from src.pr_fia import PRFIA
 from src.rtdetr_fdr_bpdd import FDRBPDDDetectionModel, FDRBPDDTrainer
-from src.rtdetr_fdr_bpdd_ira import remap_bpdd_ira_shared_key
-from src.rtdetr_fdr_bpdd_pr_ira import (
-    BPDD_PR_IRA_MODEL_CFG,
-    FDRBPDDPRIRADetectionModel,
-    FDRBPDDPRIRATrainer,
-    load_fdr_bpdd_pr_ira_initial_state,
-    remap_bpdd_pr_ira_shared_key,
+from src.rtdetr_fdr_bpdd_fia import remap_bpdd_fia_shared_key
+from src.rtdetr_fdr_bpdd_pr_fia import (
+    BPDD_PR_FIA_MODEL_CFG,
+    FDRBPDDPRFIADetectionModel,
+    FDRBPDDPRFIATrainer,
+    load_fdr_bpdd_pr_fia_initial_state,
+    remap_bpdd_pr_fia_shared_key,
 )
 
 
@@ -29,22 +29,22 @@ RUN_IDENTITY = {
     "initial_state_sha256": "initial-state",
     "dataset_sha256": "dataset",
     "screen_subset_sha256": "subset",
-    "run_id": "fdr-bpdd-pr-ira-formal100-seed0",
+    "run_id": "fdr-bpdd-pr-fia-formal100-seed0",
     "stage": "formal",
-    "variant": "fdr_bpdd_pr_ira",
+    "variant": "fdr_bpdd_pr_fia",
     "seed": 0,
 }
 
 
 @pytest.fixture(scope="module")
-def model_pair() -> tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel]:
+def model_pair() -> tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel]:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(19_031)
         bpdd = FDRBPDDDetectionModel(BPDD_CFG, nc=10, verbose=False)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(19_031)
-        combined = FDRBPDDPRIRADetectionModel(
-            BPDD_PR_IRA_MODEL_CFG,
+        combined = FDRBPDDPRFIADetectionModel(
+            BPDD_PR_FIA_MODEL_CFG,
             nc=10,
             verbose=False,
             experiment_seed=0,
@@ -55,15 +55,15 @@ def model_pair() -> tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel]:
 @pytest.fixture(scope="module")
 def training_model_pair() -> tuple[
     FDRBPDDDetectionModel,
-    FDRBPDDPRIRADetectionModel,
+    FDRBPDDPRFIADetectionModel,
 ]:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(29_031)
         bpdd = FDRBPDDDetectionModel(BPDD_CFG, nc=10, verbose=False)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(29_031)
-        combined = FDRBPDDPRIRADetectionModel(
-            BPDD_PR_IRA_MODEL_CFG,
+        combined = FDRBPDDPRFIADetectionModel(
+            BPDD_PR_FIA_MODEL_CFG,
             nc=10,
             verbose=False,
             experiment_seed=0,
@@ -88,14 +88,14 @@ def _yaml(path: Path) -> dict[str, object]:
 def _private_state(*, ambient_seed: int, experiment_seed: int) -> dict[str, torch.Tensor]:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(ambient_seed)
-        model = FDRBPDDPRIRADetectionModel(
+        model = FDRBPDDPRFIADetectionModel(
             nc=10,
             verbose=False,
             experiment_seed=experiment_seed,
         )
     return {
         name: tensor.detach().clone()
-        for name, tensor in model.pr_ira.state_dict().items()
+        for name, tensor in model.pr_fia.state_dict().items()
     }
 
 
@@ -111,29 +111,29 @@ def _training_batch() -> dict[str, torch.Tensor]:
     }
 
 
-def test_combined_model_has_exactly_one_declarative_p3_pr_ira(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+def test_combined_model_has_exactly_one_declarative_p3_pr_fia(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
 ) -> None:
     _bpdd, combined = model_pair
 
     assert isinstance(combined, FDRBPDDDetectionModel)
     assert len(combined.model) == 30
-    assert combined.pr_ira is combined.model[22]
+    assert combined.pr_fia is combined.model[22]
     assert combined.model[22].f == 21
     assert combined.model[23].f == 21
     assert isinstance(combined.model[29], FDRRTDETRDecoder)
     assert combined.model[29].f == [22, 25, 28]
-    assert sum(isinstance(module, PRIRA) for module in combined.modules()) == 1
-    assert ultralytics_tasks.PRIRA is PRIRA
+    assert sum(isinstance(module, PRFIA) for module in combined.modules()) == 1
+    assert ultralytics_tasks.PRFIA is PRFIA
 
 
 def test_yaml_layer_is_a_reversible_fdr_bpdd_ablation() -> None:
     mature = _yaml(BPDD_CFG)
-    combined = _yaml(BPDD_PR_IRA_MODEL_CFG)
+    combined = _yaml(BPDD_PR_FIA_MODEL_CFG)
     head = combined["head"]
     assert isinstance(head, list)
 
-    assert head[12] == [21, 1, "PRIRA", [256, 0.20]]
+    assert head[12] == [21, 1, "PRFIA", [256, 0.20]]
     ablated = deepcopy(combined)
     ablated_head = ablated["head"]
     assert isinstance(ablated_head, list)
@@ -145,32 +145,32 @@ def test_yaml_layer_is_a_reversible_fdr_bpdd_ablation() -> None:
 
 
 def test_shared_state_uses_the_mature_post_insertion_key_shift(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bpdd, combined = model_pair
     monkeypatch.setattr(
-        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        "src.rtdetr_fdr_bpdd_pr_fia.validate_fdr_initial_state",
         lambda _artifact: None,
     )
 
-    report = load_fdr_bpdd_pr_ira_initial_state(
+    report = load_fdr_bpdd_pr_fia_initial_state(
         combined,
         _artifact(bpdd.state_dict()),
     )
 
     assert report["shared_mismatch_count"] == 0
     assert report["shared_tensor_count"] == len(bpdd.state_dict())
-    assert report["missing_keys"] == report["pr_ira_private_keys"]
-    assert report["pr_ira_private_keys"]
+    assert report["missing_keys"] == report["pr_fia_private_keys"]
+    assert report["pr_fia_private_keys"]
     assert all(
         name.startswith("model.22.")
-        for name in report["pr_ira_private_keys"]
+        for name in report["pr_fia_private_keys"]
     )
     combined_state = combined.state_dict()
     for name, expected in bpdd.state_dict().items():
-        shifted = remap_bpdd_pr_ira_shared_key(name)
-        assert shifted == remap_bpdd_ira_shared_key(name)
+        shifted = remap_bpdd_pr_fia_shared_key(name)
+        assert shifted == remap_bpdd_fia_shared_key(name)
         torch.testing.assert_close(
             combined_state[shifted],
             expected,
@@ -179,16 +179,16 @@ def test_shared_state_uses_the_mature_post_insertion_key_shift(
         )
 
 
-def test_identity_pr_ira_preserves_outputs_and_all_raw_decoder_tensors(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+def test_identity_pr_fia_preserves_outputs_and_all_raw_decoder_tensors(
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bpdd, combined = model_pair
     monkeypatch.setattr(
-        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        "src.rtdetr_fdr_bpdd_pr_fia.validate_fdr_initial_state",
         lambda _artifact: None,
     )
-    load_fdr_bpdd_pr_ira_initial_state(combined, _artifact(bpdd.state_dict()))
+    load_fdr_bpdd_pr_fia_initial_state(combined, _artifact(bpdd.state_dict()))
     bpdd.eval()
     combined.eval()
     image = torch.zeros((1, 3, 128, 128))
@@ -227,12 +227,12 @@ def test_private_initialization_is_ambient_independent_and_seed_sensitive() -> N
 
 
 def test_generic_private_initialization_keeps_both_gates_exactly_half() -> None:
-    model = FDRBPDDPRIRADetectionModel(
+    model = FDRBPDDPRFIADetectionModel(
         nc=10,
         verbose=False,
         experiment_seed=31,
     )
-    module = model.pr_ira
+    module = model.pr_fia
     feature = torch.randn(1, module.channels, 5, 7)
 
     with torch.inference_mode():
@@ -287,14 +287,14 @@ def test_combined_construction_preserves_the_public_rng_trajectory() -> None:
     torch.random.set_rng_state(initial_cpu)
     if initial_cuda:
         torch.cuda.set_rng_state_all(initial_cuda)
-    combined = FDRBPDDPRIRADetectionModel(
-        BPDD_PR_IRA_MODEL_CFG,
+    combined = FDRBPDDPRFIADetectionModel(
+        BPDD_PR_FIA_MODEL_CFG,
         nc=10,
         verbose=False,
         experiment_seed=0,
     )
 
-    assert combined.pr_ira_private_seed == 20_000
+    assert combined.pr_fia_private_seed == 20_000
     assert torch.equal(torch.random.get_rng_state(), expected_cpu)
     actual_cuda = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
     assert len(actual_cuda) == len(expected_cuda)
@@ -321,46 +321,46 @@ def test_trainer_derives_both_private_seed_namespaces(
             seen["experiment"] = experiment_seed
 
     monkeypatch.setattr(
-        "src.rtdetr_fdr_bpdd_pr_ira.FDRBPDDPRIRADetectionModel",
+        "src.rtdetr_fdr_bpdd_pr_fia.FDRBPDDPRFIADetectionModel",
         FakeModel,
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.data = {"nc": 10, "channels": 3}
     trainer.experiment_seed = 17
     trainer.initial_state_path = None
 
     trainer.get_model(verbose=False)
 
-    assert issubclass(FDRBPDDPRIRATrainer, FDRBPDDTrainer)
+    assert issubclass(FDRBPDDPRFIATrainer, FDRBPDDTrainer)
     assert seen == {"fdr": 10_017, "experiment": 17}
 
 
-def _bare_trainer() -> FDRBPDDPRIRATrainer:
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+def _bare_trainer() -> FDRBPDDPRFIATrainer:
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.data = {"nc": 10, "channels": 3}
     trainer.experiment_seed = 0
     trainer.initial_state_path = None
-    trainer.pr_ira_run_identity = dict(RUN_IDENTITY)
+    trainer.pr_fia_run_identity = dict(RUN_IDENTITY)
     return trainer
 
 
 def test_resume_requires_and_round_trips_exact_combined_state(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
 ) -> None:
     bpdd, combined = model_pair
     with torch.no_grad():
-        combined.pr_ira.amplitude.fill_(0.25)
+        combined.pr_fia.amplitude.fill_(0.25)
 
     payload = {
         "model": None,
         "ema": combined,
         "train_args": {
-            "pr_ira_run_identity": dict(RUN_IDENTITY),
+            "pr_fia_run_identity": dict(RUN_IDENTITY),
         },
     }
     resumed = _bare_trainer().get_model(weights=payload, verbose=False)
 
-    assert isinstance(resumed, FDRBPDDPRIRADetectionModel)
+    assert isinstance(resumed, FDRBPDDPRFIADetectionModel)
     assert resumed.state_dict().keys() == combined.state_dict().keys()
     for name, expected in combined.state_dict().items():
         torch.testing.assert_close(
@@ -370,29 +370,29 @@ def test_resume_requires_and_round_trips_exact_combined_state(
             atol=0,
         )
 
-    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
+    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-FIA"):
         _bare_trainer().get_model(
             weights={
                 "model": bpdd,
-                "pr_ira_run_identity": dict(RUN_IDENTITY),
+                "pr_fia_run_identity": dict(RUN_IDENTITY),
             },
             verbose=False,
         )
 
     incomplete = dict(combined.state_dict())
     incomplete.pop(next(iter(incomplete)))
-    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
+    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-FIA"):
         _bare_trainer().get_model(
             weights={
                 "state_dict": incomplete,
-                "pr_ira_run_identity": dict(RUN_IDENTITY),
+                "pr_fia_run_identity": dict(RUN_IDENTITY),
             },
             verbose=False,
         )
 
 
 def test_resume_rejects_missing_or_drifted_run_authority(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
 ) -> None:
     _bpdd, combined = model_pair
 
@@ -408,35 +408,35 @@ def test_resume_rejects_missing_or_drifted_run_authority(
         _bare_trainer().get_model(
             weights={
                 "model": combined,
-                "pr_ira_run_identity": drifted,
+                "pr_fia_run_identity": drifted,
             },
             verbose=False,
         )
 
 
 def test_real_resume_accepts_exact_module_handoff_only_with_module_authority(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
 ) -> None:
     bpdd, combined = model_pair
-    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    combined.args = {"pr_fia_run_identity": dict(RUN_IDENTITY)}
     trainer = _bare_trainer()
     trainer.resume = True
 
     resumed = trainer.get_model(weights=combined, verbose=False)
 
-    assert isinstance(resumed, FDRBPDDPRIRADetectionModel)
-    assert trainer._pr_ira_full_resume_authority_validated is False
+    assert isinstance(resumed, FDRBPDDPRFIADetectionModel)
+    assert trainer._pr_fia_full_resume_authority_validated is False
 
     trainer.resume = False
     with pytest.raises(ValueError, match="module weights require resume"):
         trainer.get_model(weights=combined, verbose=False)
     trainer.resume = True
-    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-IRA"):
+    with pytest.raises(ValueError, match=r"exact combined FDR\+BPDD\+PR-FIA"):
         trainer.get_model(weights=bpdd, verbose=False)
 
 
 def test_module_resume_rejects_missing_or_drifted_args_authority(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
 ) -> None:
     _bpdd, combined = model_pair
     trainer = _bare_trainer()
@@ -449,7 +449,7 @@ def test_module_resume_rejects_missing_or_drifted_args_authority(
 
         drifted = dict(RUN_IDENTITY)
         drifted["dataset_sha256"] = "foreign-dataset"
-        combined.args = {"pr_ira_run_identity": drifted}
+        combined.args = {"pr_fia_run_identity": drifted}
         with pytest.raises(
             ValueError,
             match="resume authority mismatch for dataset_sha256",
@@ -460,16 +460,16 @@ def test_module_resume_rejects_missing_or_drifted_args_authority(
 
 
 def test_setup_model_validates_full_resume_payload_before_authorizing(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _bpdd, combined = model_pair
-    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    combined.args = {"pr_fia_run_identity": dict(RUN_IDENTITY)}
     drifted = dict(RUN_IDENTITY)
     drifted["dataset_sha256"] = "foreign-dataset"
     checkpoint = {
         "ema": combined,
-        "train_args": {"pr_ira_run_identity": drifted},
+        "train_args": {"pr_fia_run_identity": drifted},
     }
     calls: list[object] = []
     monkeypatch.setattr(
@@ -480,7 +480,7 @@ def test_setup_model_validates_full_resume_payload_before_authorizing(
     trainer = _bare_trainer()
     trainer.resume = True
     trainer.epochs = 100
-    trainer._pr_ira_full_resume_authority_validated = False
+    trainer._pr_fia_full_resume_authority_validated = False
 
     with pytest.raises(
         ValueError,
@@ -489,19 +489,19 @@ def test_setup_model_validates_full_resume_payload_before_authorizing(
         trainer.setup_model()
 
     assert calls == ["parent"]
-    assert trainer._pr_ira_full_resume_authority_validated is False
+    assert trainer._pr_fia_full_resume_authority_validated is False
 
 
 def test_setup_then_resume_requires_clean_state_and_calls_parents_in_order(
-    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRIRADetectionModel],
+    model_pair: tuple[FDRBPDDDetectionModel, FDRBPDDPRFIADetectionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _bpdd, combined = model_pair
-    combined.args = {"pr_ira_run_identity": dict(RUN_IDENTITY)}
+    combined.args = {"pr_fia_run_identity": dict(RUN_IDENTITY)}
     checkpoint = {
         "epoch": 1,
         "ema": combined,
-        "train_args": {"pr_ira_run_identity": dict(RUN_IDENTITY)},
+        "train_args": {"pr_fia_run_identity": dict(RUN_IDENTITY)},
     }
     calls: list[object] = []
     monkeypatch.setattr(
@@ -518,19 +518,19 @@ def test_setup_then_resume_requires_clean_state_and_calls_parents_in_order(
     trainer.resume = True
     trainer.epochs = 100
     trainer.model = combined
-    combined.clear_pr_ira_firewall_buffer()
+    combined.clear_pr_fia_firewall_buffer()
     for parameter in combined.parameters():
         parameter.grad = None
 
     assert trainer.setup_model() is checkpoint
-    assert trainer._pr_ira_full_resume_authority_validated is True
+    assert trainer._pr_fia_full_resume_authority_validated is True
     assert trainer.resume_training(checkpoint) == "resumed"
     assert calls == ["setup", ("resume", checkpoint)]
 
-    trainer._pr_ira_full_resume_authority_validated = False
+    trainer._pr_fia_full_resume_authority_validated = False
     with pytest.raises(RuntimeError, match="full checkpoint authority"):
         trainer.resume_training(checkpoint)
-    trainer._pr_ira_full_resume_authority_validated = True
+    trainer._pr_fia_full_resume_authority_validated = True
     next(combined.parameters()).grad = torch.zeros_like(next(combined.parameters()))
     with pytest.raises(RuntimeError, match="gradients must be empty"):
         trainer.resume_training(checkpoint)
@@ -541,20 +541,20 @@ def test_setup_then_resume_requires_clean_state_and_calls_parents_in_order(
 def test_combined_loss_exposes_exact_main_and_bpdd_components(
     training_model_pair: tuple[
         FDRBPDDDetectionModel,
-        FDRBPDDPRIRADetectionModel,
+        FDRBPDDPRFIADetectionModel,
     ],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bpdd, combined = training_model_pair
     monkeypatch.setattr(
-        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        "src.rtdetr_fdr_bpdd_pr_fia.validate_fdr_initial_state",
         lambda _artifact: None,
     )
-    load_fdr_bpdd_pr_ira_initial_state(combined, _artifact(bpdd.state_dict()))
+    load_fdr_bpdd_pr_fia_initial_state(combined, _artifact(bpdd.state_dict()))
     combined.train()
-    combined.pr_ira.set_training_progress(30, 30)
+    combined.pr_fia.set_training_progress(30, 30)
     with torch.no_grad():
-        combined.pr_ira.amplitude.zero_()
+        combined.pr_fia.amplitude.zero_()
 
     torch.manual_seed(44_021)
     total, _displayed = combined.loss(_training_batch())
@@ -577,21 +577,21 @@ def test_combined_loss_exposes_exact_main_and_bpdd_components(
 def test_zero_amplitude_combined_loss_is_bit_exact_to_mature_bpdd(
     training_model_pair: tuple[
         FDRBPDDDetectionModel,
-        FDRBPDDPRIRADetectionModel,
+        FDRBPDDPRFIADetectionModel,
     ],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bpdd, combined = training_model_pair
     monkeypatch.setattr(
-        "src.rtdetr_fdr_bpdd_pr_ira.validate_fdr_initial_state",
+        "src.rtdetr_fdr_bpdd_pr_fia.validate_fdr_initial_state",
         lambda _artifact: None,
     )
-    load_fdr_bpdd_pr_ira_initial_state(combined, _artifact(bpdd.state_dict()))
+    load_fdr_bpdd_pr_fia_initial_state(combined, _artifact(bpdd.state_dict()))
     bpdd.train()
     combined.train()
-    combined.pr_ira.set_training_progress(30, 30)
+    combined.pr_fia.set_training_progress(30, 30)
     with torch.no_grad():
-        combined.pr_ira.amplitude.zero_()
+        combined.pr_fia.amplitude.zero_()
     batch = _training_batch()
 
     torch.manual_seed(55_031)

@@ -53,23 +53,23 @@ def relative_open_ratio(epoch: int, epochs: int) -> float:
 
 def _validate_feature(x: Tensor, channels: int, reference: Tensor) -> None:
     if not isinstance(x, Tensor):
-        raise TypeError("PRIRA input must be a torch.Tensor")
+        raise TypeError("PRFIA input must be a torch.Tensor")
     if x.ndim != 4:
-        raise ValueError("PRIRA input must use BCHW layout")
+        raise ValueError("PRFIA input must use BCHW layout")
     if x.shape[1] != channels:
-        raise ValueError(f"PRIRA input must have {channels} channels")
+        raise ValueError(f"PRFIA input must have {channels} channels")
     if not torch.is_floating_point(x):
-        raise TypeError("PRIRA input must use a floating dtype")
+        raise TypeError("PRFIA input must use a floating dtype")
     if any(size <= 0 for size in (x.shape[0], x.shape[2], x.shape[3])):
-        raise ValueError("PRIRA input must have non-empty batch and spatial dimensions")
+        raise ValueError("PRFIA input must have non-empty batch and spatial dimensions")
     if x.device != reference.device:
-        raise ValueError("PRIRA input and module parameters must use the same device")
+        raise ValueError("PRFIA input and module parameters must use the same device")
     if (
         x.dtype != reference.dtype
         and not torch.is_autocast_enabled(x.device.type)
     ):
         raise ValueError(
-            "PRIRA input dtype must match module floating parameter dtype "
+            "PRFIA input dtype must match module floating parameter dtype "
             "outside autocast"
         )
 
@@ -132,7 +132,7 @@ def _assert_finite_when_active(x: Tensor, active: Tensor) -> Tensor:
     condition = torch.logical_or(torch.logical_not(active), x.isfinite().all())
     token = torch._functional_assert_async(
         condition,
-        "PRIRA produced non-finite values",
+        "PRFIA produced non-finite values",
         x.new_zeros(()),
     )
     return x + token
@@ -209,7 +209,7 @@ def _exact_add(x: Tensor, increment: Tensor) -> Tensor:
     return _ExactAdd.apply(x, increment)
 
 
-class PRIRA(nn.Module):
+class PRFIA(nn.Module):
     """Protected local residual adapter for floating BCHW feature maps."""
 
     _DIAGNOSTIC_NAMES = (
@@ -404,4 +404,4 @@ class PRIRA(nn.Module):
         return output
 
 
-__all__ = ["PRIRA", "relative_open_ratio"]
+__all__ = ["PRFIA", "relative_open_ratio"]

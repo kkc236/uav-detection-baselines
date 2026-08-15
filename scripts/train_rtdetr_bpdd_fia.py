@@ -1,4 +1,4 @@
-"""Train the formal seed0 FDR+BPDD+IRA RT-DETR-L arm."""
+"""Train the formal seed0 FDR+BPDD+FIA RT-DETR-L arm."""
 
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ from scripts import train_rtdetr_fdr as fdr_cli  # noqa: E402
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
 from src.bpdd_formal_evaluation import state_sha256  # noqa: E402
 
-from src.bpdd_ira_protocol import (  # noqa: E402
-    BPDD_IRA_PROTOCOL,
-    BPDD_IRA_PROTOCOL_SHA256,
+from src.bpdd_fia_protocol import (  # noqa: E402
+    BPDD_FIA_PROTOCOL,
+    BPDD_FIA_PROTOCOL_SHA256,
     FDR_INITIAL_STATE_SHA256,
     build_run_identity,
     canonical_json_bytes,
@@ -36,16 +36,16 @@ from src.bpdd_ira_protocol import (  # noqa: E402
 )
 
 
-MODEL_CONFIG = (ROOT / "configs" / "rtdetr-l-fdr-bpdd-ira.yaml").resolve()
+MODEL_CONFIG = (ROOT / "configs" / "rtdetr-l-fdr-bpdd-fia.yaml").resolve()
 FORMAL_EPOCHS = 100
-VARIANT = "fdr_bpdd_ira"
+VARIANT = "fdr_bpdd_fia"
 STAGE = "formal"
 FROZEN_SETTINGS = dict(fdr_cli.FROZEN_SETTINGS)
 
 EVIDENCE_FIELDS = (
     *bpdd_cli.EVIDENCE_FIELDS,
-    "ira_gradient_norm",
-    "ira_residual_scale",
+    "fia_gradient_norm",
+    "fia_residual_scale",
     "checkpoint_sha256",
     "ema_state_sha256",
 )
@@ -53,7 +53,7 @@ EVIDENCE_FIELDS = (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train the immutable formal seed0 FDR+BPDD+IRA arm."
+        description="Train the immutable formal seed0 FDR+BPDD+FIA arm."
     )
     parser.add_argument("--protocol-manifest", type=Path, required=True)
     parser.add_argument("--initial-state", type=Path, required=True)
@@ -97,11 +97,11 @@ def _append_epoch_record(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     same = [row for row in rows if int(row["completed_epoch"]) == epoch]
     if same:
         if len(same) != 1 or same[0] != record:
-            raise ValueError(f"changed BPDD IRA evidence for completed epoch {epoch}")
+            raise ValueError(f"changed BPDD FIA evidence for completed epoch {epoch}")
         return same[0]
     expected = int(rows[-1]["completed_epoch"]) + 1 if rows else 1
     if epoch != expected:
-        raise ValueError(f"BPDD IRA evidence gap: expected {expected}, got {epoch}")
+        raise ValueError(f"BPDD FIA evidence gap: expected {expected}, got {epoch}")
     rows.append(record)
     _atomic_text(
         path,
@@ -124,7 +124,7 @@ def _append_queue_record(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     ]
     if same:
         if len(same) != 1 or same[0] != record:
-            raise ValueError(f"changed BPDD IRA publication entry for {key}")
+            raise ValueError(f"changed BPDD FIA publication entry for {key}")
         return same[0]
     rows.append(record)
     _atomic_text(
@@ -141,35 +141,35 @@ def _append_queue_record(path: Path, record: dict[str, Any]) -> dict[str, Any]:
 def load_authority(path: Path) -> dict[str, Any]:
     path = Path(path).resolve()
     if not path.is_file():
-        raise FileNotFoundError(f"BPDD IRA protocol manifest not found: {path}")
+        raise FileNotFoundError(f"BPDD FIA protocol manifest not found: {path}")
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("format_version") != 1:
-        raise ValueError("BPDD IRA protocol manifest format must be 1")
+        raise ValueError("BPDD FIA protocol manifest format must be 1")
     unhashed = dict(manifest)
     manifest_hash = unhashed.pop("manifest_sha256", None)
     actual_hash = hashlib.sha256(canonical_json_bytes(unhashed)).hexdigest().upper()
     if manifest_hash != actual_hash:
-        raise ValueError("BPDD IRA protocol manifest SHA256 mismatch")
-    if manifest.get("protocol") != BPDD_IRA_PROTOCOL:
-        raise ValueError("BPDD IRA protocol payload does not match frozen authority")
-    if manifest.get("protocol_sha256") != BPDD_IRA_PROTOCOL_SHA256:
-        raise ValueError("BPDD IRA protocol SHA256 mismatch")
+        raise ValueError("BPDD FIA protocol manifest SHA256 mismatch")
+    if manifest.get("protocol") != BPDD_FIA_PROTOCOL:
+        raise ValueError("BPDD FIA protocol payload does not match frozen authority")
+    if manifest.get("protocol_sha256") != BPDD_FIA_PROTOCOL_SHA256:
+        raise ValueError("BPDD FIA protocol SHA256 mismatch")
     source = manifest.get("source")
     if not isinstance(source, Mapping):
-        raise ValueError("BPDD IRA source authority is missing")
+        raise ValueError("BPDD FIA source authority is missing")
     if manifest.get("source_sha256") != public_state_sha256(source):
-        raise ValueError("BPDD IRA source SHA256 mismatch")
+        raise ValueError("BPDD FIA source SHA256 mismatch")
     initial = manifest.get("initial_state")
     if not isinstance(initial, Mapping) or initial.get("sha256") != FDR_INITIAL_STATE_SHA256:
-        raise ValueError("BPDD IRA initial-state SHA256 mismatch")
+        raise ValueError("BPDD FIA initial-state SHA256 mismatch")
     identities = manifest.get("run_identities")
     if not isinstance(identities, Mapping) or set(identities) != {
-        "fdr_bpdd_ira_formal"
+        "fdr_bpdd_fia_formal"
     }:
-        raise ValueError("BPDD IRA run identities must contain only the formal arm")
+        raise ValueError("BPDD FIA run identities must contain only the formal arm")
     expected = build_run_identity(source, stage=STAGE, variant=VARIANT, seed=0)
-    if identities["fdr_bpdd_ira_formal"] != expected:
-        raise ValueError("BPDD IRA formal run identity mismatch")
+    if identities["fdr_bpdd_fia_formal"] != expected:
+        raise ValueError("BPDD FIA formal run identity mismatch")
     return manifest
 
 
@@ -182,11 +182,11 @@ def validate_source_authority(
 ) -> dict[str, str]:
     expected = manifest.get("source")
     if not isinstance(expected, Mapping):
-        raise ValueError("BPDD IRA source authority is missing")
+        raise ValueError("BPDD FIA source authority is missing")
     actual = current_source_identity(root)
     if dict(expected) != actual:
         raise ValueError(
-            "checked-out source differs from BPDD IRA authority: "
+            "checked-out source differs from BPDD FIA authority: "
             f"expected={dict(expected)}, actual={actual}"
         )
     return actual
@@ -208,7 +208,7 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
         "epochs": FORMAL_EPOCHS,
         "seed": 0,
         "project": str(Path(args.output_root).resolve()),
-        "name": args.name or "formal-seed0-fdr_bpdd_ira-v1",
+        "name": args.name or "formal-seed0-fdr_bpdd_fia-v1",
         "exist_ok": False,
     }
     if args.resume is not None:
@@ -217,9 +217,9 @@ def build_settings(args: argparse.Namespace, data_yaml: Path) -> dict[str, Any]:
 
 
 def _load_trainer_type():
-    from src.rtdetr_fdr_bpdd_ira import FDRBPDDIRATrainer
+    from src.rtdetr_fdr_bpdd_fia import FDRBPDDFIATrainer
 
-    return FDRBPDDIRATrainer
+    return FDRBPDDFIATrainer
 
 
 def create_trainer(settings: dict[str, Any], initial_state: Path):
@@ -235,21 +235,21 @@ def validate_resume_checkpoint(
 ) -> Path:
     checkpoint = Path(checkpoint).resolve()
     if not checkpoint.is_file():
-        raise FileNotFoundError(f"BPDD IRA resume checkpoint not found: {checkpoint}")
+        raise FileNotFoundError(f"BPDD FIA resume checkpoint not found: {checkpoint}")
     if checkpoint.parent.name != "weights":
-        raise ValueError("BPDD IRA resume checkpoint must be in a weights directory")
-    runtime_path = checkpoint.parent.parent / "bpdd-ira-run.json"
+        raise ValueError("BPDD FIA resume checkpoint must be in a weights directory")
+    runtime_path = checkpoint.parent.parent / "bpdd-fia-run.json"
     if not runtime_path.is_file():
-        raise FileNotFoundError(f"BPDD IRA resume authority not found: {runtime_path}")
+        raise FileNotFoundError(f"BPDD FIA resume authority not found: {runtime_path}")
     runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     identity = runtime.get("run_identity")
     if not isinstance(identity, Mapping):
-        raise ValueError("BPDD IRA resume authority is missing run_identity")
+        raise ValueError("BPDD FIA resume authority is missing run_identity")
     validate_resume_authority(identity, expected_identity)
 
     queue_value = runtime.get("publication_queue")
     if not isinstance(queue_value, str):
-        raise ValueError("BPDD IRA resume authority is missing publication_queue")
+        raise ValueError("BPDD FIA resume authority is missing publication_queue")
     queue = Path(queue_value)
     rows = _read_jsonl(queue)
     registered = [
@@ -261,7 +261,7 @@ def validate_resume_checkpoint(
     if len(registered) != 1:
         raise ValueError("resume checkpoint is not uniquely registered in publication queue")
     if registered[0].get("checkpoint_sha256") != _file_sha256(checkpoint):
-        raise ValueError("BPDD IRA resume checkpoint SHA256 mismatch")
+        raise ValueError("BPDD FIA resume checkpoint SHA256 mismatch")
     return checkpoint
 
 
@@ -286,11 +286,11 @@ def _unwrap_model(model: Any) -> Any:
 def _checkpoint_ema_state_sha256(checkpoint: Path) -> str:
     artifact = torch.load(checkpoint, map_location="cpu", weights_only=False)
     if not isinstance(artifact, Mapping) or artifact.get("ema") is None:
-        raise RuntimeError("BPDD IRA epoch checkpoint requires saved EMA state")
+        raise RuntimeError("BPDD FIA epoch checkpoint requires saved EMA state")
     ema = artifact["ema"]
     state = ema if isinstance(ema, Mapping) else ema.state_dict()
     if not isinstance(state, Mapping):
-        raise TypeError("BPDD IRA checkpoint EMA does not expose a state mapping")
+        raise TypeError("BPDD FIA checkpoint EMA does not expose a state mapping")
     return state_sha256(state)
 
 
@@ -301,13 +301,13 @@ def _checkpoint_for_epoch(trainer: Any) -> Path:
         / f"epoch{int(trainer.epoch)}.pt"
     )
     if not checkpoint.is_file():
-        raise FileNotFoundError(f"exact BPDD IRA epoch checkpoint not saved: {checkpoint}")
+        raise FileNotFoundError(f"exact BPDD FIA epoch checkpoint not saved: {checkpoint}")
     return checkpoint
 
 
-def _ira_residual_scale(model: Any) -> float | None:
-    ira = getattr(_unwrap_model(model), "ira", None)
-    return _number(getattr(ira, "residual_scale", None))
+def _fia_residual_scale(model: Any) -> float | None:
+    fia = getattr(_unwrap_model(model), "fia", None)
+    return _number(getattr(fia, "residual_scale", None))
 
 
 def _evidence_record(trainer: Any, context: Mapping[str, Any]) -> dict[str, Any]:
@@ -318,7 +318,7 @@ def _evidence_record(trainer: Any, context: Mapping[str, Any]) -> dict[str, Any]
     norms = getattr(trainer, "last_gradient_norms", {})
     numeric_norms = [
         _number(norms.get(name))
-        for name in ("gradient_norm", "fdr_gradient_norm", "ira_gradient_norm")
+        for name in ("gradient_norm", "fdr_gradient_norm", "fia_gradient_norm")
     ]
     return {
         "completed_epoch": int(trainer.epoch) + 1,
@@ -355,8 +355,8 @@ def _evidence_record(trainer: Any, context: Mapping[str, Any]) -> dict[str, Any]
             if torch.cuda.is_available()
             else 0.0
         ),
-        "ira_gradient_norm": numeric_norms[2],
-        "ira_residual_scale": _ira_residual_scale(trainer.model),
+        "fia_gradient_norm": numeric_norms[2],
+        "fia_residual_scale": _fia_residual_scale(trainer.model),
         "checkpoint_sha256": _file_sha256(checkpoint),
         "ema_state_sha256": _checkpoint_ema_state_sha256(checkpoint),
     }
@@ -406,7 +406,7 @@ def queue_epoch_publication(
         "artifacts": [
             str((run / "fdr-epochs.jsonl").resolve()),
             str((run / "fdr-epochs.csv").resolve()),
-            str((run / "bpdd-ira-run.json").resolve()),
+            str((run / "bpdd-fia-run.json").resolve()),
             str((run / "optimizer-evidence.jsonl").resolve()),
         ],
     }
@@ -417,7 +417,7 @@ def finalize_epoch(trainer: Any, context: Mapping[str, Any]) -> dict[str, Any]:
     evidence = write_epoch_evidence(trainer, context)
     queued = queue_epoch_publication(trainer, context, evidence)
     if int(evidence["completed_epoch"]) != int(queued["completed_epoch"]):
-        raise RuntimeError("BPDD IRA evidence/publication queue mismatch")
+        raise RuntimeError("BPDD FIA evidence/publication queue mismatch")
     return {"evidence": evidence, "publication": queued}
 
 
@@ -434,7 +434,7 @@ def _runtime_manifest(
     run_identity: Mapping[str, Any],
     data_yaml: Path,
 ) -> None:
-    destination = Path(trainer.save_dir).resolve() / "bpdd-ira-run.json"
+    destination = Path(trainer.save_dir).resolve() / "bpdd-fia-run.json"
     queue = (
         Path(args.publication_queue).resolve()
         if args.publication_queue is not None
@@ -442,7 +442,7 @@ def _runtime_manifest(
     )
     payload = {
         "format_version": 1,
-        "protocol_sha256": BPDD_IRA_PROTOCOL_SHA256,
+        "protocol_sha256": BPDD_FIA_PROTOCOL_SHA256,
         "source": manifest["source"],
         "run_identity": dict(run_identity),
         "initial_state": {
@@ -454,7 +454,7 @@ def _runtime_manifest(
     }
     if destination.exists():
         if json.loads(destination.read_text(encoding="utf-8")) != payload:
-            raise ValueError(f"changed BPDD IRA run authority: {destination}")
+            raise ValueError(f"changed BPDD FIA run authority: {destination}")
         return
     write_json_atomic(destination, payload)
 
@@ -473,9 +473,9 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     validate_source_authority(manifest)
     initial_state = validate_initial_state_file(args.initial_state, manifest)
     data_yaml = prepare_data_yaml(
-        args.dataset_root, args.output_root / "_bpdd-ira-authority"
+        args.dataset_root, args.output_root / "_bpdd-fia-authority"
     )
-    identity = manifest["run_identities"]["fdr_bpdd_ira_formal"]
+    identity = manifest["run_identities"]["fdr_bpdd_fia_formal"]
     if args.resume is not None:
         validate_resume_checkpoint(args.resume, identity)
     settings = build_settings(args, data_yaml)

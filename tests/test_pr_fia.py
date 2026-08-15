@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import nn
 
-from src.pr_ira import PRIRA, relative_open_ratio
+from src.pr_fia import PRFIA, relative_open_ratio
 
 
 def _state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
@@ -94,9 +94,9 @@ def test_relative_open_ratio_rejects_invalid_progress(
 
 
 @pytest.mark.parametrize("channels", [0, -1, 1.5, True, "8"])
-def test_pr_ira_rejects_invalid_channels(channels: object) -> None:
+def test_pr_fia_rejects_invalid_channels(channels: object) -> None:
     with pytest.raises((TypeError, ValueError), match="channels"):
-        PRIRA(channels)  # type: ignore[arg-type]
+        PRFIA(channels)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -114,24 +114,24 @@ def test_pr_ira_rejects_invalid_channels(channels: object) -> None:
         ("epsilon", False),
     ],
 )
-def test_pr_ira_rejects_invalid_scalar_configuration(
+def test_pr_fia_rejects_invalid_scalar_configuration(
     keyword: str, value: object
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=keyword):
-        PRIRA(8, **{keyword: value})  # type: ignore[arg-type]
+        PRFIA(8, **{keyword: value})  # type: ignore[arg-type]
 
 
-def test_pr_ira_keeps_epsilon_keyword_only() -> None:
-    module = PRIRA(8, 0.15, epsilon=1e-5)
+def test_pr_fia_keeps_epsilon_keyword_only() -> None:
+    module = PRFIA(8, 0.15, epsilon=1e-5)
 
     assert module.alpha_max == 0.15
     assert module.epsilon == 1e-5
     with pytest.raises(TypeError):
-        PRIRA(8, 0.15, 1e-5)  # type: ignore[misc]
+        PRFIA(8, 0.15, 1e-5)  # type: ignore[misc]
 
 
-def test_pr_ira_defaults_and_local_gate_architecture_are_frozen() -> None:
-    module = PRIRA(8)
+def test_pr_fia_defaults_and_local_gate_architecture_are_frozen() -> None:
+    module = PRFIA(8)
 
     assert module.channels == 8
     assert module.alpha_max == 0.20
@@ -155,8 +155,8 @@ def test_pr_ira_defaults_and_local_gate_architecture_are_frozen() -> None:
     assert torch.count_nonzero(module.spatial_gate.bias) == 0
 
 
-def test_pr_ira_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
-    module = PRIRA(8)
+def test_pr_fia_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
+    module = PRFIA(8)
     module.set_training_progress(30, 30)
     x = torch.randn(2, 8, 9, 7)
 
@@ -187,7 +187,7 @@ def test_pr_ira_starts_as_bit_exact_bchw_identity_with_half_gates() -> None:
 def test_zero_amplitude_is_bit_exact_for_signed_zero_and_practical_values(
     dtype: torch.dtype,
 ) -> None:
-    module = PRIRA(2).to(dtype=dtype)
+    module = PRFIA(2).to(dtype=dtype)
     module.set_training_progress(30, 30)
     finfo = torch.finfo(dtype)
     x = torch.tensor(
@@ -216,7 +216,7 @@ def test_zero_amplitude_is_bit_exact_for_signed_zero_and_practical_values(
 
 
 def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() -> None:
-    module = PRIRA(4).double()
+    module = PRFIA(4).double()
     module.set_training_progress(30, 30)
     x = torch.randn(2, 4, 5, 3, dtype=torch.float64, requires_grad=True)
     probe = torch.randn_like(x)
@@ -259,7 +259,7 @@ def test_open_zero_amplitude_identity_preserves_analytical_amplitude_gradient() 
 
 
 def test_active_nonfinite_gate_fails_closed() -> None:
-    module = PRIRA(2)
+    module = PRFIA(2)
     module.set_training_progress(30, 30)
     with torch.no_grad():
         assert module.spatial_gate.bias is not None
@@ -271,7 +271,7 @@ def test_active_nonfinite_gate_fails_closed() -> None:
 
 
 def test_active_nonfinite_local_transform_fails_closed() -> None:
-    module = PRIRA(2)
+    module = PRFIA(2)
     module.set_training_progress(30, 30)
     with torch.no_grad():
         bias = module.local_blocks[0].depthwise.bias
@@ -283,7 +283,7 @@ def test_active_nonfinite_local_transform_fails_closed() -> None:
 
 
 def test_active_nonfinite_normalized_residual_fails_closed() -> None:
-    module = PRIRA(2)
+    module = PRFIA(2)
     module.set_training_progress(30, 30)
     module.epsilon = 0.0
     with torch.no_grad():
@@ -306,7 +306,7 @@ def test_active_nonfinite_normalized_residual_fails_closed() -> None:
 def test_closed_schedule_fast_path_is_bit_exact_for_extreme_values(
     dtype: torch.dtype,
 ) -> None:
-    module = PRIRA(2).to(dtype=dtype)
+    module = PRFIA(2).to(dtype=dtype)
     module.set_training_progress(3, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.75)
@@ -336,7 +336,7 @@ def test_closed_schedule_fast_path_is_bit_exact_for_extreme_values(
 def test_full_open_nonzero_amplitude_uses_finite_promoted_rms(
     dtype: torch.dtype,
 ) -> None:
-    module = PRIRA(4).to(dtype=dtype, device="cpu")
+    module = PRFIA(4).to(dtype=dtype, device="cpu")
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.7)
@@ -372,7 +372,7 @@ def test_large_finite_stock_rms_stays_finite_for_zero_residual(
     dtype: torch.dtype,
     value: float,
 ) -> None:
-    module = PRIRA(2).to(dtype=dtype)
+    module = PRFIA(2).to(dtype=dtype)
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(10.0)
@@ -401,7 +401,7 @@ def test_large_finite_stock_rms_stays_finite_for_zero_residual(
 def test_saturated_low_precision_increment_respects_strict_rms_cap(
     dtype: torch.dtype,
 ) -> None:
-    module = PRIRA(4).to(dtype=dtype)
+    module = PRFIA(4).to(dtype=dtype)
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(20.0)
@@ -423,7 +423,7 @@ def test_saturated_low_precision_increment_respects_strict_rms_cap(
 
 
 def test_zero_amplitude_supports_torch_func_jvp() -> None:
-    module = PRIRA(4).double()
+    module = PRFIA(4).double()
     module.set_training_progress(30, 30)
     x = torch.randn(1, 4, 4, 3, dtype=torch.float64)
     tangent = torch.randn_like(x)
@@ -435,7 +435,7 @@ def test_zero_amplitude_supports_torch_func_jvp() -> None:
 
 
 def test_zero_amplitude_supports_torch_func_vmap() -> None:
-    module = PRIRA(4).double()
+    module = PRFIA(4).double()
     module.set_training_progress(30, 30)
     x = torch.randn(3, 1, 4, 4, 3, dtype=torch.float64)
 
@@ -446,7 +446,7 @@ def test_zero_amplitude_supports_torch_func_vmap() -> None:
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile unavailable")
 def test_active_forward_supports_fullgraph_compile() -> None:
-    module = PRIRA(4).eval()
+    module = PRFIA(4).eval()
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.7)
@@ -459,8 +459,8 @@ def test_active_forward_supports_fullgraph_compile() -> None:
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
-    module = PRIRA(8).double()
+def test_pr_fia_matches_the_protected_residual_equation_and_rms_bound() -> None:
+    module = PRFIA(8).double()
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.7)
@@ -496,8 +496,8 @@ def test_pr_ira_matches_the_protected_residual_equation_and_rms_bound() -> None:
     assert diagnostics["residual_rms_ratio"].item() <= module.alpha_max + 1e-5
 
 
-def test_pr_ira_detaches_stock_rms_rescaling_from_input_gradient() -> None:
-    module = PRIRA(4).double()
+def test_pr_fia_detaches_stock_rms_rescaling_from_input_gradient() -> None:
+    module = PRFIA(4).double()
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.9)
@@ -537,8 +537,8 @@ def test_pr_ira_detaches_stock_rms_rescaling_from_input_gradient() -> None:
     torch.testing.assert_close(actual_gradient, expected_gradient, rtol=0, atol=0)
 
 
-def test_pr_ira_zero_raw_residual_stays_finite() -> None:
-    module = PRIRA(8)
+def test_pr_fia_zero_raw_residual_stays_finite() -> None:
+    module = PRFIA(8)
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(10.0)
@@ -565,8 +565,8 @@ def test_pr_ira_zero_raw_residual_stays_finite() -> None:
         assert torch.count_nonzero(parameter.grad) == 0, f"nonzero gradient for {name}"
 
 
-def test_pr_ira_rejects_invalid_inputs() -> None:
-    module = PRIRA(8)
+def test_pr_fia_rejects_invalid_inputs() -> None:
+    module = PRFIA(8)
 
     with pytest.raises(TypeError, match="Tensor"):
         module([[1.0]])  # type: ignore[arg-type]
@@ -582,19 +582,19 @@ def test_pr_ira_rejects_invalid_inputs() -> None:
         module(torch.empty(1, 8, 0, 5))
 
 
-def test_pr_ira_rejects_device_and_non_autocast_dtype_mismatches() -> None:
-    module = PRIRA(4).float()
+def test_pr_fia_rejects_device_and_non_autocast_dtype_mismatches() -> None:
+    module = PRFIA(4).float()
 
     with pytest.raises(ValueError, match="dtype"):
         module(torch.randn(1, 4, 3, 3, dtype=torch.float64))
 
-    meta_module = PRIRA(4).to(device="meta")
+    meta_module = PRFIA(4).to(device="meta")
     with pytest.raises(ValueError, match="device"):
         meta_module(torch.randn(1, 4, 3, 3))
 
 
-def test_pr_ira_allows_real_cpu_autocast_activation_dtype() -> None:
-    module = PRIRA(4).float()
+def test_pr_fia_allows_real_cpu_autocast_activation_dtype() -> None:
+    module = PRFIA(4).float()
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.7)
@@ -609,7 +609,7 @@ def test_pr_ira_allows_real_cpu_autocast_activation_dtype() -> None:
 
 
 def test_progress_setter_controls_a_non_persistent_runtime_schedule() -> None:
-    module = PRIRA(8)
+    module = PRFIA(8)
     with torch.no_grad():
         module.amplitude.fill_(0.5)
     x = torch.randn(1, 8, 5, 5)
@@ -632,7 +632,7 @@ def test_progress_setter_controls_a_non_persistent_runtime_schedule() -> None:
         module.set_training_progress(31, 30)
 
 
-def test_pr_ira_construction_is_deterministic_and_preserves_public_rng() -> None:
+def test_pr_fia_construction_is_deterministic_and_preserves_public_rng() -> None:
     torch.manual_seed(71)
     cpu_state = torch.random.get_rng_state().clone()
     cuda_states = (
@@ -641,7 +641,7 @@ def test_pr_ira_construction_is_deterministic_and_preserves_public_rng() -> None
         else []
     )
 
-    first = _state_dict(PRIRA(8))
+    first = _state_dict(PRFIA(8))
 
     torch.testing.assert_close(torch.random.get_rng_state(), cpu_state, rtol=0, atol=0)
     if torch.cuda.is_available():
@@ -650,21 +650,21 @@ def test_pr_ira_construction_is_deterministic_and_preserves_public_rng() -> None
         ):
             torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
-    second = _state_dict(PRIRA(8))
+    second = _state_dict(PRFIA(8))
     assert first.keys() == second.keys()
     for name in first:
         torch.testing.assert_close(first[name], second[name], rtol=0, atol=0)
 
 
-def test_pr_ira_state_dict_round_trip_preserves_output_after_progress_setter() -> None:
-    source = PRIRA(8)
+def test_pr_fia_state_dict_round_trip_preserves_output_after_progress_setter() -> None:
+    source = PRFIA(8)
     source.set_training_progress(9, 30)
     with torch.no_grad():
         source.amplitude.fill_(0.6)
     x = torch.randn(1, 8, 7, 5)
     expected = source(x)
 
-    restored = PRIRA(8)
+    restored = PRFIA(8)
     restored.load_state_dict(source.state_dict(), strict=True)
     assert restored.open_ratio == 0.0
     restored.set_training_progress(9, 30)
@@ -674,8 +674,8 @@ def test_pr_ira_state_dict_round_trip_preserves_output_after_progress_setter() -
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_pr_ira_preserves_floating_dtype_and_device(dtype: torch.dtype) -> None:
-    module = PRIRA(8).to(dtype=dtype, device="cpu")
+def test_pr_fia_preserves_floating_dtype_and_device(dtype: torch.dtype) -> None:
+    module = PRFIA(8).to(dtype=dtype, device="cpu")
     module.set_training_progress(30, 30)
     with torch.no_grad():
         module.amplitude.fill_(0.4)
@@ -688,9 +688,9 @@ def test_pr_ira_preserves_floating_dtype_and_device(dtype: torch.dtype) -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
-def test_pr_ira_preserves_cuda_rng_dtype_and_device() -> None:
+def test_pr_fia_preserves_cuda_rng_dtype_and_device() -> None:
     cuda_states = [state.clone() for state in torch.cuda.get_rng_state_all()]
-    module = PRIRA(8).to(dtype=torch.float16, device="cuda")
+    module = PRFIA(8).to(dtype=torch.float16, device="cuda")
     for actual, expected in zip(torch.cuda.get_rng_state_all(), cuda_states, strict=True):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     module.set_training_progress(30, 30)

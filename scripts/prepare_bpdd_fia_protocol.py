@@ -1,4 +1,4 @@
-"""Create the immutable manifest for paired PR-IRA screens and Formal100."""
+"""Create one immutable FDR + BPDD + FIA formal protocol manifest."""
 
 from __future__ import annotations
 
@@ -13,24 +13,15 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.fdr_protocol import validate_fdr_initial_state  # noqa: E402
-from src.pr_ira_protocol import (  # noqa: E402
+from src.bpdd_fia_protocol import (  # noqa: E402
+    BPDD_FIA_PROTOCOL,
+    BPDD_FIA_PROTOCOL_SHA256,
     FDR_INITIAL_STATE_SHA256,
-    PR_IRA_PROTOCOL,
-    PR_IRA_PROTOCOL_SHA256,
     build_run_identity,
     public_state_sha256,
     write_create_only_manifest,
 )
-
-
-SCREEN_VARIANTS = (
-    "fdr_bpdd",
-    "fdr_bpdd_pr_ira",
-    "fdr",
-    "fdr_pr_ira",
-)
-FORMAL_VARIANT = "fdr_bpdd_pr_ira"
+from src.fdr_protocol import validate_fdr_initial_state  # noqa: E402
 
 
 def _file_sha256(path: Path) -> str:
@@ -63,23 +54,21 @@ def prepare_manifest(
     initial_state: Path,
     output: Path,
 ) -> dict:
-    """Bind source, state, protocol, four screens, and one formal run."""
+    """Bind source, frozen state, protocol, and the sole formal run identity."""
 
-    state_input = Path(initial_state)
-    if not state_input.is_file() or state_input.is_symlink():
-        raise FileNotFoundError(f"FDR initial state not found: {state_input}")
-    initial_state = state_input.resolve()
+    initial_state = Path(initial_state).resolve()
+    if not initial_state.is_file() or initial_state.is_symlink():
+        raise FileNotFoundError(f"FDR initial state not found: {initial_state}")
     state_sha256 = _file_sha256(initial_state)
     if state_sha256 != FDR_INITIAL_STATE_SHA256:
         raise ValueError(
-            "PR-IRA initial-state SHA256 mismatch: "
+            "BPDD+FIA initial-state SHA256 mismatch: "
             f"expected={FDR_INITIAL_STATE_SHA256}, actual={state_sha256}"
         )
     artifact = _validate_initial_state(initial_state)
     fingerprints = artifact.get("fingerprints")
     if not isinstance(fingerprints, dict):
         raise ValueError("FDR initial-state fingerprints are missing")
-
     source = {
         "git_commit": _validate_hex(
             source_commit, length=40, name="source_commit"
@@ -88,27 +77,21 @@ def prepare_manifest(
             source_tree_sha256, length=64, name="source_tree_sha256"
         ).upper(),
     }
-    identities = {
-        f"{variant}_screen": build_run_identity(
-            source, stage="screen", variant=variant, seed=0
-        )
-        for variant in SCREEN_VARIANTS
-    }
-    identities[f"{FORMAL_VARIANT}_formal"] = build_run_identity(
-        source, stage="formal", variant=FORMAL_VARIANT, seed=0
+    identity = build_run_identity(
+        source, stage="formal", variant="fdr_bpdd_fia", seed=0
     )
     manifest = {
         "format_version": 1,
         "source": source,
         "source_sha256": public_state_sha256(source),
-        "protocol": PR_IRA_PROTOCOL,
-        "protocol_sha256": PR_IRA_PROTOCOL_SHA256,
+        "protocol": BPDD_FIA_PROTOCOL,
+        "protocol_sha256": BPDD_FIA_PROTOCOL_SHA256,
         "initial_state": {
             "path": str(initial_state),
             "sha256": state_sha256,
             "fingerprints": dict(fingerprints),
         },
-        "run_identities": identities,
+        "run_identities": {"fdr_bpdd_fia_formal": identity},
     }
     manifest["manifest_sha256"] = public_state_sha256(manifest)
     write_create_only_manifest(Path(output).resolve(), manifest)

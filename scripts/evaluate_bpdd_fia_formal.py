@@ -1,4 +1,4 @@
-"""Evaluate the exact FDR+BPDD+IRA Formal100 EMA on frozen VisDrone val."""
+"""Evaluate the exact FDR+BPDD+FIA Formal100 EMA on frozen VisDrone val."""
 
 from __future__ import annotations
 
@@ -31,15 +31,15 @@ from src.bpdd_formal_evaluation import (  # noqa: E402
     write_create_only_json,
 )
 from src.bpdd_protocol import BPDD_PROTOCOL_SHA256  # noqa: E402
-from src.bpdd_ira_protocol import (  # noqa: E402
-    BPDD_IRA_PROTOCOL,
-    BPDD_IRA_PROTOCOL_SHA256,
+from src.bpdd_fia_protocol import (  # noqa: E402
+    BPDD_FIA_PROTOCOL,
+    BPDD_FIA_PROTOCOL_SHA256,
     FDR_INITIAL_STATE_SHA256,
     build_run_identity,
 )
 from src.fdr_protocol import FDR_PROTOCOL_SHA256, public_state_sha256  # noqa: E402
 from src.lpr_protocol import CATEGORY_NAMES, dataset_signature  # noqa: E402
-from src.rtdetr_fdr_bpdd_ira import FDRBPDDIRADetectionModel  # noqa: E402
+from src.rtdetr_fdr_bpdd_fia import FDRBPDDFIADetectionModel  # noqa: E402
 
 
 EVALUATION_PROTOCOL = {
@@ -58,7 +58,7 @@ BENCHMARK_PROTOCOL = {
     "runs": 200,
 }
 EXPECTED_VAL_IMAGES = 548
-COMBINED_VARIANT = "fdr_bpdd_ira"
+COMBINED_VARIANT = "fdr_bpdd_fia"
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ def load_exact_combined_checkpoint(
     checkpoint: str | Path,
     *,
     expected_sha256: str,
-    model_factory: Callable[..., nn.Module] = FDRBPDDIRADetectionModel,
+    model_factory: Callable[..., nn.Module] = FDRBPDDFIADetectionModel,
 ) -> LoadedCombinedCheckpoint:
     """Strictly load exact epoch100 EMA into the combined inference graph."""
 
@@ -122,8 +122,8 @@ def load_exact_combined_checkpoint(
         raise ValueError("Formal100 combined evaluation requires checkpoint EMA")
     state = _checkpoint_state(source)
     model = model_factory(nc=len(CATEGORY_NAMES))
-    if model_factory is FDRBPDDIRADetectionModel and type(model) is not FDRBPDDIRADetectionModel:
-        raise TypeError("Formal100 must instantiate the exact combined FDR+BPDD+IRA graph")
+    if model_factory is FDRBPDDFIADetectionModel and type(model) is not FDRBPDDFIADetectionModel:
+        raise TypeError("Formal100 must instantiate the exact combined FDR+BPDD+FIA graph")
     try:
         model.load_state_dict(state, strict=True)
     except RuntimeError as error:
@@ -139,14 +139,14 @@ def load_exact_combined_checkpoint(
             "sha256_verified": True,
             "source_field": "ema",
             "ema_state_sha256": state_sha256(state),
-            "strict_fdr_bpdd_ira_graph": True,
+            "strict_fdr_bpdd_fia_graph": True,
         },
     )
 
 
 def validate_run_manifest(run_dir: str | Path) -> dict[str, Any]:
     run = Path(run_dir).resolve()
-    manifest = _read_json(run / "bpdd-ira-run.json")
+    manifest = _read_json(run / "bpdd-fia-run.json")
     identity = manifest.get("run_identity")
     source = manifest.get("source")
     initial = manifest.get("initial_state")
@@ -159,7 +159,7 @@ def validate_run_manifest(run_dir: str | Path) -> dict[str, Any]:
     )
     if dict(identity) != expected_identity:
         raise ValueError("combined Formal100 run identity or variant is invalid")
-    if manifest.get("protocol_sha256") != BPDD_IRA_PROTOCOL_SHA256:
+    if manifest.get("protocol_sha256") != BPDD_FIA_PROTOCOL_SHA256:
         raise ValueError("combined Formal100 protocol SHA256 mismatch")
     if initial.get("sha256") != FDR_INITIAL_STATE_SHA256:
         raise ValueError("combined Formal100 initial-state authority mismatch")
@@ -255,7 +255,7 @@ def validate_val_authority(
         raise ValueError(f"frozen val authority requires exactly 548 images, got {images}")
     signature = dict(signature_fn(root))
     dataset_sha = str(signature.get("sha256", "")).upper()
-    expected_sha = str(BPDD_IRA_PROTOCOL["dataset"]["sha256"]).upper()
+    expected_sha = str(BPDD_FIA_PROTOCOL["dataset"]["sha256"]).upper()
     if dataset_sha != expected_sha:
         raise ValueError("frozen VisDrone train/val dataset SHA256 mismatch")
     return {
@@ -423,7 +423,7 @@ def load_reference_authority(
             failures.append("training_protocol")
     if identity.get("split") != "val" or identity.get("images") != EXPECTED_VAL_IMAGES:
         failures.append("split")
-    if identity.get("dataset_sha256") != BPDD_IRA_PROTOCOL["dataset"]["sha256"]:
+    if identity.get("dataset_sha256") != BPDD_FIA_PROTOCOL["dataset"]["sha256"]:
         failures.append("dataset")
     if payload.get("evaluation_protocol") != EVALUATION_PROTOCOL:
         failures.append("evaluator_protocol")
@@ -491,7 +491,7 @@ def build_preliminary_comparisons(
     *,
     fdr_evaluation: str | Path,
     bpdd_evaluation: str | Path,
-    ira_evaluation: str | Path | None,
+    fia_evaluation: str | Path | None,
 ) -> dict[str, Any]:
     references = [
         load_reference_authority(fdr_evaluation, expected_variant="fdr", method="FDR"),
@@ -499,17 +499,17 @@ def build_preliminary_comparisons(
             bpdd_evaluation, expected_variant="fdr_bpdd", method="FDR+BPDD"
         ),
     ]
-    if ira_evaluation is not None:
+    if fia_evaluation is not None:
         references.append(
             load_reference_authority(
-                ira_evaluation, expected_variant="fdr_ira", method="FDR+IRA"
+                fia_evaluation, expected_variant="fdr_fia", method="FDR+FIA"
             )
         )
     else:
         references.append(
             {
-                "method": "FDR+IRA",
-                "variant": "fdr_ira",
+                "method": "FDR+FIA",
+                "variant": "fdr_fia",
                 "strict": False,
                 "evidence_level": "unavailable",
                 "strict_validation_failures": ["authority_unavailable"],
@@ -534,7 +534,7 @@ def build_preliminary_comparisons(
     ]
     rows.append(
         {
-            "method": "FDR+BPDD+IRA",
+            "method": "FDR+BPDD+FIA",
             "evidence_level": "current_exact",
             "strict_validation_failures": [],
             **dict(current["metrics"]),
@@ -568,8 +568,8 @@ def build_preliminary_comparisons(
         result["against_fdr"] = _comparison_delta(current, by_method["FDR"])
     if by_method["FDR+BPDD"]["strict"]:
         result["against_fdr_bpdd"] = _comparison_delta(current, by_method["FDR+BPDD"])
-    if by_method["FDR+IRA"]["strict"]:
-        result["against_fdr_ira"] = _comparison_delta(current, by_method["FDR+IRA"])
+    if by_method["FDR+FIA"]["strict"]:
+        result["against_fdr_fia"] = _comparison_delta(current, by_method["FDR+FIA"])
     return result
 
 
@@ -580,7 +580,7 @@ def evaluate_formal_checkpoint(
     dataset_root: str | Path,
     fdr_evaluation: str | Path,
     bpdd_evaluation: str | Path,
-    ira_evaluation: str | Path | None,
+    fia_evaluation: str | Path | None,
     output: str | Path,
     device: str = "cuda:0",
     checkpoint_loader: Callable[..., LoadedCombinedCheckpoint] = load_exact_combined_checkpoint,
@@ -630,7 +630,7 @@ def evaluate_formal_checkpoint(
         validation,
         fdr_evaluation=fdr_evaluation,
         bpdd_evaluation=bpdd_evaluation,
-        ira_evaluation=ira_evaluation,
+        fia_evaluation=fia_evaluation,
     )
     report = {
         "format_version": 1,
@@ -656,8 +656,8 @@ def evaluate_formal_checkpoint(
             "data_yaml_sha256": val_authority["yaml_sha256"],
             "fdr_evaluation_sha256": file_sha256(fdr_evaluation),
             "bpdd_evaluation_sha256": file_sha256(bpdd_evaluation),
-            "ira_evaluation_sha256": (
-                file_sha256(ira_evaluation) if ira_evaluation is not None else None
+            "fia_evaluation_sha256": (
+                file_sha256(fia_evaluation) if fia_evaluation is not None else None
             ),
             "dataset_sha256": val_authority["dataset_sha256"],
         },
@@ -673,7 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--fdr-evaluation", type=Path, required=True)
     parser.add_argument("--bpdd-evaluation", type=Path, required=True)
-    parser.add_argument("--ira-evaluation", type=Path)
+    parser.add_argument("--fia-evaluation", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
     return parser
@@ -687,7 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dataset_root=args.dataset_root,
         fdr_evaluation=args.fdr_evaluation,
         bpdd_evaluation=args.bpdd_evaluation,
-        ira_evaluation=args.ira_evaluation,
+        fia_evaluation=args.fia_evaluation,
         output=args.output,
         device=args.device,
     )

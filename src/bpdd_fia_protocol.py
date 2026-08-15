@@ -1,4 +1,4 @@
-"""Immutable formal authority for the combined FDR + BPDD + IRA arm."""
+"""Immutable formal authority for the combined FDR + BPDD + FIA arm."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ FDR_INITIAL_STATE_SHA256 = (
     "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D"
 )
 
-BPDD_IRA_PROTOCOL: dict[str, Any] = {
-    "design": "ultralytics-rtdetr-l-fdr-bpdd-ira-v1",
+BPDD_FIA_PROTOCOL: dict[str, Any] = {
+    "design": "ultralytics-rtdetr-l-fdr-bpdd-fia-v1",
     "fdr_authority": {
         "protocol_sha256": FDR_PROTOCOL_SHA256,
         "source_commit": FDR_SOURCE_COMMIT,
@@ -32,7 +32,7 @@ BPDD_IRA_PROTOCOL: dict[str, Any] = {
     "training": deepcopy(FDR_PROTOCOL["training"]),
     "augmentation": deepcopy(FDR_PROTOCOL["augmentation"]),
     "bpdd": deepcopy(BPDD_PROTOCOL["bpdd"]),
-    "ira": {
+    "fia": {
         "feature_level": "P3",
         "channels": 256,
         "refinement_blocks": 2,
@@ -42,11 +42,11 @@ BPDD_IRA_PROTOCOL: dict[str, Any] = {
         "private_seed": 20_000,
     },
     "variants": {
-        "fdr_bpdd_ira": {
-            "model_yaml": "configs/rtdetr-l-fdr-bpdd-ira.yaml",
+        "fdr_bpdd_fia": {
+            "model_yaml": "configs/rtdetr-l-fdr-bpdd-fia.yaml",
             "fdr_enabled": True,
             "bpdd_enabled": True,
-            "ira_enabled": True,
+            "fia_enabled": True,
         }
     },
     "seed": 0,
@@ -54,7 +54,7 @@ BPDD_IRA_PROTOCOL: dict[str, Any] = {
         "formal": {"schedule_epochs": 100, "fresh_start": True},
     },
 }
-BPDD_IRA_PROTOCOL_SHA256 = public_state_sha256(BPDD_IRA_PROTOCOL)
+BPDD_FIA_PROTOCOL_SHA256 = public_state_sha256(BPDD_FIA_PROTOCOL)
 
 
 def build_run_identity(
@@ -66,20 +66,20 @@ def build_run_identity(
 ) -> dict[str, Any]:
     """Bind the sole combined formal arm to all immutable authorities."""
 
-    if stage not in BPDD_IRA_PROTOCOL["stages"]:
-        raise ValueError(f"unknown BPDD+IRA stage: {stage}")
-    if variant not in BPDD_IRA_PROTOCOL["variants"]:
-        raise ValueError(f"unknown BPDD+IRA variant: {variant}")
-    if seed != BPDD_IRA_PROTOCOL["seed"]:
-        raise ValueError("BPDD+IRA protocol is frozen to seed0")
+    if stage not in BPDD_FIA_PROTOCOL["stages"]:
+        raise ValueError(f"unknown BPDD+FIA stage: {stage}")
+    if variant not in BPDD_FIA_PROTOCOL["variants"]:
+        raise ValueError(f"unknown BPDD+FIA variant: {variant}")
+    if seed != BPDD_FIA_PROTOCOL["seed"]:
+        raise ValueError("BPDD+FIA protocol is frozen to seed0")
     source_sha256 = public_state_sha256(source_identity)
     run_id = (
         f"{variant}-{stage}-seed0-{source_sha256[:12].lower()}-"
-        f"{BPDD_IRA_PROTOCOL_SHA256[:12].lower()}"
+        f"{BPDD_FIA_PROTOCOL_SHA256[:12].lower()}"
     )
     return {
         "source_sha256": source_sha256,
-        "protocol_sha256": BPDD_IRA_PROTOCOL_SHA256,
+        "protocol_sha256": BPDD_FIA_PROTOCOL_SHA256,
         "fdr_protocol_sha256": FDR_PROTOCOL_SHA256,
         "initial_state_sha256": FDR_INITIAL_STATE_SHA256,
         "run_id": run_id,
@@ -118,8 +118,8 @@ def validate_resume_authority(
 
 
 __all__ = [
-    "BPDD_IRA_PROTOCOL",
-    "BPDD_IRA_PROTOCOL_SHA256",
+    "BPDD_FIA_PROTOCOL",
+    "BPDD_FIA_PROTOCOL_SHA256",
     "FDR_INITIAL_STATE_SHA256",
     "FDR_SOURCE_COMMIT",
     "build_run_identity",

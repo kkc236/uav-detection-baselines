@@ -8,7 +8,7 @@ import pytest
 
 
 def _context(tmp_path: Path):
-    from scripts.run_bpdd_ira_preflight import PreflightContext
+    from scripts.run_bpdd_fia_preflight import PreflightContext
 
     manifest = tmp_path / "protocol.json"
     manifest.write_text("{}", encoding="utf-8")
@@ -42,7 +42,7 @@ def _passing_runners(called: list[str] | None = None):
 
 
 def test_preflight_cli_bootstraps_repository_before_production_imports() -> None:
-    import scripts.run_bpdd_ira_preflight as cli
+    import scripts.run_bpdd_fia_preflight as cli
 
     source = inspect.getsource(cli)
     bootstrap = source.index("sys.path.insert(0, str(ROOT))")
@@ -51,7 +51,7 @@ def test_preflight_cli_bootstraps_repository_before_production_imports() -> None
 
 
 def test_default_runtime_exposes_all_five_combined_gates() -> None:
-    import scripts.run_bpdd_ira_preflight as cli
+    import scripts.run_bpdd_fia_preflight as cli
 
     assert cli.GATE_ORDER == ("I0", "I1", "I2", "I3", "I4")
     for name in ("run_i0", "run_i1", "run_i2", "run_i3", "run_i4"):
@@ -61,7 +61,7 @@ def test_default_runtime_exposes_all_five_combined_gates() -> None:
 def test_preflight_requires_all_gates_and_writes_create_only_evidence(
     tmp_path: Path,
 ) -> None:
-    from scripts.run_bpdd_ira_preflight import run_preflight
+    from scripts.run_bpdd_fia_preflight import run_preflight
 
     context = _context(tmp_path)
     decision = run_preflight(context, gate_runners=_passing_runners())
@@ -86,7 +86,7 @@ def test_preflight_requires_all_gates_and_writes_create_only_evidence(
 
 
 def test_preflight_stops_after_shared_state_failure(tmp_path: Path) -> None:
-    from scripts.run_bpdd_ira_preflight import run_preflight
+    from scripts.run_bpdd_fia_preflight import run_preflight
 
     context = _context(tmp_path)
     called: list[str] = []
@@ -114,7 +114,7 @@ def test_preflight_stops_after_shared_state_failure(tmp_path: Path) -> None:
 def test_preflight_converts_runner_exception_to_fail_closed_evidence(
     tmp_path: Path,
 ) -> None:
-    from scripts.run_bpdd_ira_preflight import run_preflight
+    from scripts.run_bpdd_fia_preflight import run_preflight
 
     context = _context(tmp_path)
     runners = _passing_runners()
@@ -133,9 +133,9 @@ def test_preflight_converts_runner_exception_to_fail_closed_evidence(
 
 
 def test_preflight_rejects_unknown_gate_injection(tmp_path: Path) -> None:
-    from scripts.run_bpdd_ira_preflight import run_preflight
+    from scripts.run_bpdd_fia_preflight import run_preflight
 
-    with pytest.raises(ValueError, match="unknown BPDD IRA preflight gates"):
+    with pytest.raises(ValueError, match="unknown BPDD FIA preflight gates"):
         run_preflight(
             _context(tmp_path),
             gate_runners={**_passing_runners(), "I5": lambda _context: {}},
@@ -143,7 +143,7 @@ def test_preflight_rejects_unknown_gate_injection(tmp_path: Path) -> None:
 
 
 def test_invalid_pass_payload_is_failed_closed(tmp_path: Path) -> None:
-    from scripts.run_bpdd_ira_preflight import run_preflight
+    from scripts.run_bpdd_fia_preflight import run_preflight
 
     context = _context(tmp_path)
     runners = _passing_runners()
@@ -162,7 +162,7 @@ def test_invalid_pass_payload_is_failed_closed(tmp_path: Path) -> None:
 def test_gradient_summary_distinguishes_zero_and_live_groups() -> None:
     import torch
 
-    from scripts.run_bpdd_ira_preflight import summarize_gradient_group
+    from scripts.run_bpdd_fia_preflight import summarize_gradient_group
 
     live = torch.nn.Parameter(torch.tensor([1.0]))
     zero = torch.nn.Parameter(torch.tensor([2.0]))
@@ -184,7 +184,7 @@ def test_gradient_summary_distinguishes_zero_and_live_groups() -> None:
 def test_prediction_contract_requires_finite_batch_by_300_queries() -> None:
     import torch
 
-    from scripts.run_bpdd_ira_preflight import validate_prediction_contract
+    from scripts.run_bpdd_fia_preflight import validate_prediction_contract
 
     report = validate_prediction_contract(torch.zeros(8, 300, 14), batch_size=8)
     assert report == {
@@ -202,7 +202,7 @@ def test_prediction_contract_requires_finite_batch_by_300_queries() -> None:
 
 
 def test_environment_authority_rejects_missing_or_changed_fields() -> None:
-    from scripts.run_bpdd_ira_preflight import validate_environment_authority
+    from scripts.run_bpdd_fia_preflight import validate_environment_authority
 
     expected = {
         "model": "Ultralytics RT-DETR-L",

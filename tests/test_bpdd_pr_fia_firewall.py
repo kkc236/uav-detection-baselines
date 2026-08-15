@@ -7,25 +7,25 @@ import torch
 from torch import nn
 
 from src.rtdetr_fdr_bpdd import FDRBPDDTrainer
-from src.rtdetr_fdr_bpdd_pr_ira import (
-    FDRBPDDPRIRADetectionModel,
-    FDRBPDDPRIRATrainer,
+from src.rtdetr_fdr_bpdd_pr_fia import (
+    FDRBPDDPRFIADetectionModel,
+    FDRBPDDPRFIATrainer,
 )
 
 
 @pytest.fixture(scope="module")
-def firewall_model() -> FDRBPDDPRIRADetectionModel:
+def firewall_model() -> FDRBPDDPRFIADetectionModel:
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(71_031)
-        model = FDRBPDDPRIRADetectionModel(
+        model = FDRBPDDPRFIADetectionModel(
             nc=10,
             verbose=False,
             experiment_seed=0,
         )
     model.train()
-    model.pr_ira.set_training_progress(30, 30)
+    model.pr_fia.set_training_progress(30, 30)
     with torch.no_grad():
-        model.pr_ira.amplitude.fill_(0.2)
+        model.pr_fia.amplitude.fill_(0.2)
 
     torch.manual_seed(81_031)
     batch = _batch()
@@ -51,7 +51,7 @@ def firewall_model() -> FDRBPDDPRIRADetectionModel:
             index = int(target)
             final_layer.bias[edge * bins + index] = 10.0
             final_layer.bias[edge * bins + index + 1] = 10.0
-    model.clear_pr_ira_firewall_buffer()
+    model.clear_pr_fia_firewall_buffer()
     model.zero_grad(set_to_none=True)
     return model
 
@@ -75,13 +75,13 @@ def _clone_grad(parameter: nn.Parameter) -> torch.Tensor:
 
 
 def _backward_snapshot(
-    model: FDRBPDDPRIRADetectionModel,
+    model: FDRBPDDPRFIADetectionModel,
     *,
     objective: str,
     subtract_firewall: bool,
 ) -> dict[str, torch.Tensor]:
     model.zero_grad(set_to_none=True)
-    model.clear_pr_ira_firewall_buffer()
+    model.clear_pr_fia_firewall_buffer()
     torch.manual_seed(81_031)
     total, _displayed = model.loss(_batch())
     if objective == "main":
@@ -93,13 +93,13 @@ def _backward_snapshot(
         raise AssertionError(f"unknown objective: {objective}")
     selected.backward()
     if subtract_firewall:
-        model.subtract_pr_ira_firewall_buffer()
+        model.subtract_pr_fia_firewall_buffer()
     snapshot = {
         name: _clone_grad(parameter)
         for name, parameter in model.named_parameters()
         if parameter.requires_grad
     }
-    model.clear_pr_ira_firewall_buffer()
+    model.clear_pr_fia_firewall_buffer()
     return snapshot
 
 
@@ -121,11 +121,11 @@ def _synthetic_losses(
 
 
 def test_real_graph_firewall_matches_main_only_and_preserves_bpdd_elsewhere(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     model = firewall_model
     private_ids = {
-        id(parameter) for parameter in model.pr_ira_private_parameters()
+        id(parameter) for parameter in model.pr_fia_private_parameters()
     }
 
     main_gradients = _backward_snapshot(
@@ -169,12 +169,12 @@ def test_real_graph_firewall_matches_main_only_and_preserves_bpdd_elsewhere(
 
 
 def test_eight_microbatch_amp128_buffer_is_unscaled_fp32_and_subtracts_exactly(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     model = firewall_model
     model.zero_grad(set_to_none=True)
-    model.clear_pr_ira_firewall_buffer()
-    parameters = model.pr_ira_private_parameters()
+    model.clear_pr_fia_firewall_buffer()
+    parameters = model.pr_fia_private_parameters()
     optimizer = torch.optim.SGD(parameters, lr=0.0)
     scaler = torch.amp.GradScaler(
         "cpu",
@@ -206,16 +206,16 @@ def test_eight_microbatch_amp128_buffer_is_unscaled_fp32_and_subtracts_exactly(
             if gradient is not None:
                 expected_bpdd[index].add_(gradient.detach())
 
-        model.capture_pr_ira_firewall_gradient(bpdd_loss)
+        model.capture_pr_fia_firewall_gradient(bpdd_loss)
         scaler.scale(main_loss + bpdd_loss).backward()
 
     assert float(scaler.get_scale()) == 128.0
-    assert model.pr_ira_firewall_buffer_size == len(parameters)
-    assert set(model._pr_ira_firewall_buffer) == {
+    assert model.pr_fia_firewall_buffer_size == len(parameters)
+    assert set(model._pr_fia_firewall_buffer) == {
         id(parameter) for parameter in parameters
     }
     for parameter, expected in zip(parameters, expected_bpdd, strict=True):
-        entry = model._pr_ira_firewall_buffer[id(parameter)]
+        entry = model._pr_fia_firewall_buffer[id(parameter)]
         assert entry.parameter is parameter
         assert entry.gradient.dtype == torch.float32
         assert entry.gradient.device == parameter.device
@@ -223,77 +223,77 @@ def test_eight_microbatch_amp128_buffer_is_unscaled_fp32_and_subtracts_exactly(
         torch.testing.assert_close(entry.gradient, expected.float(), rtol=0, atol=0)
 
     scaler.unscale_(optimizer)
-    model.subtract_pr_ira_firewall_buffer()
+    model.subtract_pr_fia_firewall_buffer()
     for parameter, expected in zip(parameters, expected_main, strict=True):
         assert parameter.grad is not None
         torch.testing.assert_close(parameter.grad, expected, rtol=1e-5, atol=1e-7)
 
     _main, pending_bpdd = _synthetic_losses(parameters, 0)
     with pytest.raises(RuntimeError, match="half-complete"):
-        model.capture_pr_ira_firewall_gradient(pending_bpdd)
-    model.clear_pr_ira_firewall_buffer()
-    assert model.pr_ira_firewall_buffer_empty
+        model.capture_pr_fia_firewall_gradient(pending_bpdd)
+    model.clear_pr_fia_firewall_buffer()
+    assert model.pr_fia_firewall_buffer_empty
 
 
 def test_buffer_contract_rejects_count_shape_dtype_device_and_finiteness(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     model = firewall_model
-    model.clear_pr_ira_firewall_buffer()
-    parameters = model.pr_ira_private_parameters()
+    model.clear_pr_fia_firewall_buffer()
+    parameters = model.pr_fia_private_parameters()
     _main, bpdd = _synthetic_losses(parameters, 1)
-    model.capture_pr_ira_firewall_gradient(bpdd)
-    buffer = model._pr_ira_firewall_buffer
+    model.capture_pr_fia_firewall_gradient(bpdd)
+    buffer = model._pr_fia_firewall_buffer
     identifier, entry = next(iter(buffer.items()))
     original = entry.gradient
 
     removed = buffer.pop(identifier)
     with pytest.raises(RuntimeError, match="count"):
-        model.validate_pr_ira_firewall_buffer()
+        model.validate_pr_fia_firewall_buffer()
     buffer[identifier] = removed
 
     entry.gradient = torch.zeros((1,), device=original.device)
     with pytest.raises(RuntimeError, match="shape"):
-        model.validate_pr_ira_firewall_buffer()
+        model.validate_pr_fia_firewall_buffer()
     entry.gradient = original
 
     entry.gradient = original.double()
     with pytest.raises(RuntimeError, match="dtype"):
-        model.validate_pr_ira_firewall_buffer()
+        model.validate_pr_fia_firewall_buffer()
     entry.gradient = original
 
     entry.gradient = torch.empty(original.shape, device="meta")
     with pytest.raises(RuntimeError, match="device"):
-        model.validate_pr_ira_firewall_buffer()
+        model.validate_pr_fia_firewall_buffer()
     entry.gradient = original
 
     entry.gradient = original.clone()
     entry.gradient.view(-1)[0] = float("nan")
     with pytest.raises(FloatingPointError, match="non-finite"):
-        model.validate_pr_ira_firewall_buffer()
-    model.clear_pr_ira_firewall_buffer()
+        model.validate_pr_fia_firewall_buffer()
+    model.clear_pr_fia_firewall_buffer()
 
 
 def test_capture_and_failed_microbatch_errors_clear_pending_state(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
 ) -> None:
     model = firewall_model
-    parameters = model.pr_ira_private_parameters()
-    model.clear_pr_ira_firewall_buffer()
+    parameters = model.pr_fia_private_parameters()
+    model.clear_pr_fia_firewall_buffer()
     _main, bpdd = _synthetic_losses(parameters, 2)
-    model.capture_pr_ira_firewall_gradient(bpdd)
-    assert not model.pr_ira_firewall_buffer_empty
+    model.capture_pr_fia_firewall_gradient(bpdd)
+    assert not model.pr_fia_firewall_buffer_empty
 
     invalid = parameters[0].sum() * float("nan")
     with pytest.raises(FloatingPointError, match="non-finite"):
-        model.capture_pr_ira_firewall_gradient(invalid)
-    assert model.pr_ira_firewall_buffer_empty
+        model.capture_pr_fia_firewall_gradient(invalid)
+    assert model.pr_fia_firewall_buffer_empty
 
     _main, bpdd = _synthetic_losses(parameters, 3)
-    model.capture_pr_ira_firewall_gradient(bpdd)
+    model.capture_pr_fia_firewall_gradient(bpdd)
     with pytest.raises(KeyError):
         model.loss({"img": torch.zeros(1, 3, 128, 128)})
-    assert model.pr_ira_firewall_buffer_empty
+    assert model.pr_fia_firewall_buffer_empty
 
 
 class _RecordingScaler:
@@ -333,13 +333,13 @@ class _RecordingEMA:
 
 
 def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
     records: list[dict[str, object]] = []
     model = firewall_model
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = model
     trainer.scaler = _RecordingScaler(events)
     trainer.optimizer = _RecordingOptimizer(events)
@@ -347,7 +347,7 @@ def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
     trainer._record_optimizer_evidence = records.append
     monkeypatch.setattr(
         model,
-        "subtract_pr_ira_firewall_buffer",
+        "subtract_pr_fia_firewall_buffer",
         lambda: events.append("subtract"),
         raising=False,
     )
@@ -358,12 +358,12 @@ def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
 
     monkeypatch.setattr(
         trainer,
-        "suppress_pr_ira_inactive_gradients",
+        "suppress_pr_fia_inactive_gradients",
         record_suppression,
     )
     monkeypatch.setattr(
         model,
-        "clear_pr_ira_firewall_buffer",
+        "clear_pr_fia_firewall_buffer",
         lambda: events.append("clear"),
         raising=False,
     )
@@ -408,12 +408,12 @@ def test_optimizer_step_uses_one_global_clip_and_preserves_amp128_evidence(
 
 
 def test_optimizer_error_resets_gradients_and_firewall(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
     model = firewall_model
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = model
     trainer.scaler = _RecordingScaler(events, fail_step=True)
     trainer.optimizer = _RecordingOptimizer(events)
@@ -421,13 +421,13 @@ def test_optimizer_error_resets_gradients_and_firewall(
     trainer._record_optimizer_evidence = lambda _record: None
     monkeypatch.setattr(
         model,
-        "subtract_pr_ira_firewall_buffer",
+        "subtract_pr_fia_firewall_buffer",
         lambda: events.append("subtract"),
         raising=False,
     )
     monkeypatch.setattr(
         model,
-        "clear_pr_ira_firewall_buffer",
+        "clear_pr_fia_firewall_buffer",
         lambda: events.append("clear"),
         raising=False,
     )
@@ -450,11 +450,11 @@ def test_optimizer_error_resets_gradients_and_firewall(
 
 
 def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
-    firewall_model: FDRBPDDPRIRADetectionModel,
+    firewall_model: FDRBPDDPRFIADetectionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = firewall_model
-    parameters = model.pr_ira_private_parameters()
+    parameters = model.pr_fia_private_parameters()
     optimizer = torch.optim.SGD(parameters, lr=0.0)
     scaler = torch.amp.GradScaler(
         "cpu",
@@ -462,26 +462,26 @@ def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
         init_scale=128.0,
         growth_interval=2**31 - 1,
     )
-    trainer = FDRBPDDPRIRATrainer.__new__(FDRBPDDPRIRATrainer)
+    trainer = FDRBPDDPRFIATrainer.__new__(FDRBPDDPRFIATrainer)
     trainer.model = model
     trainer.optimizer = optimizer
     trainer.scaler = scaler
     trainer.ema = None
     trainer._record_optimizer_evidence = lambda _record: None
 
-    model.clear_pr_ira_firewall_buffer()
+    model.clear_pr_fia_firewall_buffer()
     _main, bpdd = _synthetic_losses(parameters, 4)
-    model.capture_pr_ira_firewall_gradient(bpdd)
+    model.capture_pr_fia_firewall_gradient(bpdd)
     scaler.scale(bpdd).backward()
-    trainer.reset_pr_ira_firewall_state()
-    assert model.pr_ira_firewall_buffer_empty
+    trainer.reset_pr_fia_firewall_state()
+    assert model.pr_fia_firewall_buffer_empty
     assert all(parameter.grad is None for parameter in parameters)
 
     _main, bpdd = _synthetic_losses(parameters, 5)
-    model.capture_pr_ira_firewall_gradient(bpdd)
+    model.capture_pr_fia_firewall_gradient(bpdd)
     scaler.scale(bpdd).backward()
     trainer.optimizer_step()
-    assert model.pr_ira_firewall_buffer_empty
+    assert model.pr_fia_firewall_buffer_empty
     assert all(parameter.grad is None for parameter in parameters)
     assert float(scaler.get_scale()) == 128.0
 
@@ -491,13 +491,13 @@ def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
         lambda _self: "saved",
     )
     _main, pending = _synthetic_losses(parameters, 6)
-    model.capture_pr_ira_firewall_gradient(pending)
+    model.capture_pr_fia_firewall_gradient(pending)
     scaler.scale(pending).backward()
     gradients = [
         None if parameter.grad is None else parameter.grad.detach().clone()
         for parameter in parameters
     ]
-    buffer = model._pr_ira_firewall_buffer
+    buffer = model._pr_fia_firewall_buffer
     entries = dict(buffer)
     firewall_gradients = {
         identifier: entry.gradient.detach().clone()
@@ -506,10 +506,10 @@ def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
     optimizer_state = optimizer.state_dict()
     scaler_state = scaler.state_dict()
 
-    assert model.pr_ira_firewall_checkpoint_safe is True
+    assert model.pr_fia_firewall_checkpoint_safe is True
     assert trainer.save_model() == "saved"
-    assert model._pr_ira_firewall_buffer is buffer
-    assert model._pr_ira_firewall_subtracted is False
+    assert model._pr_fia_firewall_buffer is buffer
+    assert model._pr_fia_firewall_subtracted is False
     assert optimizer.state_dict() == optimizer_state
     assert scaler.state_dict() == scaler_state
     for parameter, expected in zip(parameters, gradients, strict=True):
@@ -518,7 +518,7 @@ def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
         else:
             torch.testing.assert_close(parameter.grad, expected, rtol=0, atol=0)
     for identifier, entry in entries.items():
-        assert model._pr_ira_firewall_buffer[identifier] is entry
+        assert model._pr_fia_firewall_buffer[identifier] is entry
         torch.testing.assert_close(
             entry.gradient,
             firewall_gradients[identifier],
@@ -527,12 +527,12 @@ def test_checkpoint_preserves_pending_optimizer_window_without_mutation(
         )
 
     _main, continuation = _synthetic_losses(parameters, 7)
-    model.capture_pr_ira_firewall_gradient(continuation)
-    assert model._pr_ira_firewall_buffer is buffer
+    model.capture_pr_fia_firewall_gradient(continuation)
+    assert model._pr_fia_firewall_buffer is buffer
 
-    model._pr_ira_firewall_subtracted = True
-    assert model.pr_ira_firewall_checkpoint_safe is False
+    model._pr_fia_firewall_subtracted = True
+    assert model.pr_fia_firewall_checkpoint_safe is False
     with pytest.raises(RuntimeError, match="half-complete"):
         trainer.save_model()
-    model._pr_ira_firewall_subtracted = False
-    model.clear_pr_ira_firewall_buffer()
+    model._pr_fia_firewall_subtracted = False
+    model.clear_pr_fia_firewall_buffer()

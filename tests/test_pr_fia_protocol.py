@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-import src.pr_ira_protocol as pr_ira_protocol_module
+import src.pr_fia_protocol as pr_fia_protocol_module
 from src.bpdd_protocol import BPDD_PROTOCOL
 from src.fdr_protocol import FDR_PROTOCOL, FDR_PROTOCOL_SHA256
-from src.pr_ira_protocol import (
+from src.pr_fia_protocol import (
     FDR_INITIAL_STATE_SHA256,
     FDR_SOURCE_COMMIT,
-    PR_IRA_PROTOCOL,
-    PR_IRA_PROTOCOL_SHA256,
+    PR_FIA_PROTOCOL,
+    PR_FIA_PROTOCOL_SHA256,
     build_run_identity,
     canonical_json_bytes,
     public_state_sha256,
@@ -23,7 +23,7 @@ from src.pr_ira_protocol import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PREPARE_SCRIPT = ROOT / "scripts" / "prepare_pr_ira_protocol.py"
+PREPARE_SCRIPT = ROOT / "scripts" / "prepare_pr_fia_protocol.py"
 EXPECTED_FDR_SOURCE_COMMIT = "d97e1eb7f98414752a1c1f38287697db3f2a0679"
 EXPECTED_INITIAL_STATE_SHA256 = (
     "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D"
@@ -36,9 +36,9 @@ EXPECTED_SUBSET_SHA256 = (
 )
 SCREEN_VARIANTS = (
     "fdr_bpdd",
-    "fdr_bpdd_pr_ira",
+    "fdr_bpdd_pr_fia",
     "fdr",
-    "fdr_pr_ira",
+    "fdr_pr_fia",
 )
 
 
@@ -47,9 +47,9 @@ def _source() -> dict[str, str]:
 
 
 def _load_prepare_module():
-    assert PREPARE_SCRIPT.is_file(), "PR-IRA protocol preparer is missing"
+    assert PREPARE_SCRIPT.is_file(), "PR-FIA protocol preparer is missing"
     spec = importlib.util.spec_from_file_location(
-        "prepare_pr_ira_protocol", PREPARE_SCRIPT
+        "prepare_pr_fia_protocol", PREPARE_SCRIPT
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -61,28 +61,28 @@ def _load_prepare_module():
 def test_protocol_freezes_inherited_authority_and_runtime() -> None:
     assert FDR_SOURCE_COMMIT == EXPECTED_FDR_SOURCE_COMMIT
     assert FDR_INITIAL_STATE_SHA256 == EXPECTED_INITIAL_STATE_SHA256
-    assert PR_IRA_PROTOCOL["fdr_authority"] == {
+    assert PR_FIA_PROTOCOL["fdr_authority"] == {
         "protocol_sha256": FDR_PROTOCOL_SHA256,
         "source_commit": EXPECTED_FDR_SOURCE_COMMIT,
         "initial_state_sha256": EXPECTED_INITIAL_STATE_SHA256,
     }
-    assert PR_IRA_PROTOCOL["environment"] == FDR_PROTOCOL["environment"]
-    assert PR_IRA_PROTOCOL["environment"]["ultralytics"] == "8.4.90"
-    assert PR_IRA_PROTOCOL["dataset"] == FDR_PROTOCOL["dataset"]
-    assert PR_IRA_PROTOCOL["dataset"]["sha256"] == EXPECTED_DATASET_SHA256
-    assert PR_IRA_PROTOCOL["dataset"]["screen_train_images"] == 647
-    assert PR_IRA_PROTOCOL["dataset"]["screen_sha256"] == EXPECTED_SUBSET_SHA256
-    assert PR_IRA_PROTOCOL["augmentation"] == FDR_PROTOCOL["augmentation"]
-    assert PR_IRA_PROTOCOL["bpdd"] == BPDD_PROTOCOL["bpdd"] == {
+    assert PR_FIA_PROTOCOL["environment"] == FDR_PROTOCOL["environment"]
+    assert PR_FIA_PROTOCOL["environment"]["ultralytics"] == "8.4.90"
+    assert PR_FIA_PROTOCOL["dataset"] == FDR_PROTOCOL["dataset"]
+    assert PR_FIA_PROTOCOL["dataset"]["sha256"] == EXPECTED_DATASET_SHA256
+    assert PR_FIA_PROTOCOL["dataset"]["screen_train_images"] == 647
+    assert PR_FIA_PROTOCOL["dataset"]["screen_sha256"] == EXPECTED_SUBSET_SHA256
+    assert PR_FIA_PROTOCOL["augmentation"] == FDR_PROTOCOL["augmentation"]
+    assert PR_FIA_PROTOCOL["bpdd"] == BPDD_PROTOCOL["bpdd"] == {
         "weight": 0.5,
         "temperature": 0.5,
         "margin": 0.02,
         "eps": 1e-6,
     }
-    assert PR_IRA_PROTOCOL_SHA256 == public_state_sha256(PR_IRA_PROTOCOL)
+    assert PR_FIA_PROTOCOL_SHA256 == public_state_sha256(PR_FIA_PROTOCOL)
 
 
-def test_protocol_freezes_seed_optimizer_and_pr_ira_schedule() -> None:
+def test_protocol_freezes_seed_optimizer_and_pr_fia_schedule() -> None:
     expected_training = deepcopy(FDR_PROTOCOL["training"])
     expected_training.update(
         {
@@ -90,12 +90,12 @@ def test_protocol_freezes_seed_optimizer_and_pr_ira_schedule() -> None:
             "screen_cutoff_epoch": 30,
         }
     )
-    assert PR_IRA_PROTOCOL["training"] == expected_training
-    assert PR_IRA_PROTOCOL["training"]["seeds"] == [0]
-    assert PR_IRA_PROTOCOL["training"]["optimizer"] == "MuSGD"
-    assert PR_IRA_PROTOCOL["training"]["momentum"] == 0.937
-    assert PR_IRA_PROTOCOL["training"]["weight_decay"] == 0.0005
-    assert PR_IRA_PROTOCOL["pr_ira"] == {
+    assert PR_FIA_PROTOCOL["training"] == expected_training
+    assert PR_FIA_PROTOCOL["training"]["seeds"] == [0]
+    assert PR_FIA_PROTOCOL["training"]["optimizer"] == "MuSGD"
+    assert PR_FIA_PROTOCOL["training"]["momentum"] == 0.937
+    assert PR_FIA_PROTOCOL["training"]["weight_decay"] == 0.0005
+    assert PR_FIA_PROTOCOL["pr_fia"] == {
         "feature_level": "P3",
         "channels": 256,
         "alpha_max": 0.20,
@@ -122,7 +122,7 @@ def test_protocol_freezes_seed_optimizer_and_pr_ira_schedule() -> None:
             },
         },
     }
-    assert PR_IRA_PROTOCOL["seed"] == 0
+    assert PR_FIA_PROTOCOL["seed"] == 0
 
 
 @pytest.mark.parametrize(
@@ -142,7 +142,7 @@ def test_private_update_window_boundaries(
     epoch: int, epochs: int, expected: bool
 ) -> None:
     assert (
-        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)
+        pr_fia_protocol_module.pr_fia_private_update_enabled(epoch, epochs)
         is expected
     )
 
@@ -160,7 +160,7 @@ def test_private_update_window_rejects_invalid_values(
     epoch: int, epochs: int
 ) -> None:
     with pytest.raises(ValueError):
-        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)
+        pr_fia_protocol_module.pr_fia_private_update_enabled(epoch, epochs)
 
 
 @pytest.mark.parametrize(
@@ -178,11 +178,11 @@ def test_private_update_window_rejects_non_integer_types(
     epoch: object, epochs: object
 ) -> None:
     with pytest.raises(TypeError):
-        pr_ira_protocol_module.pr_ira_private_update_enabled(epoch, epochs)  # type: ignore[arg-type]
+        pr_fia_protocol_module.pr_fia_private_update_enabled(epoch, epochs)  # type: ignore[arg-type]
 
 
 def test_private_update_helper_is_exported() -> None:
-    assert "pr_ira_private_update_enabled" in pr_ira_protocol_module.__all__
+    assert "pr_fia_private_update_enabled" in pr_fia_protocol_module.__all__
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_stage_epoch_authority_accepts_only_frozen_pairs(
     epochs: int,
 ) -> None:
     assert (
-        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, epochs)
+        pr_fia_protocol_module.validate_pr_fia_stage_epochs(stage, epochs)
         is None
     )
 
@@ -214,28 +214,28 @@ def test_stage_epoch_authority_rejects_mismatched_totals(
     epochs: int,
 ) -> None:
     with pytest.raises(ValueError, match="schedule epochs"):
-        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, epochs)
+        pr_fia_protocol_module.validate_pr_fia_stage_epochs(stage, epochs)
 
 
 @pytest.mark.parametrize("stage", [None, True, 30, []])
 def test_stage_epoch_authority_rejects_non_string_stage(stage: object) -> None:
     with pytest.raises(TypeError, match="stage"):
-        pr_ira_protocol_module.validate_pr_ira_stage_epochs(stage, 30)  # type: ignore[arg-type]
+        pr_fia_protocol_module.validate_pr_fia_stage_epochs(stage, 30)  # type: ignore[arg-type]
 
 
 def test_stage_epoch_authority_rejects_unknown_stage() -> None:
-    with pytest.raises(ValueError, match="unknown PR-IRA stage"):
-        pr_ira_protocol_module.validate_pr_ira_stage_epochs("probe", 30)
+    with pytest.raises(ValueError, match="unknown PR-FIA stage"):
+        pr_fia_protocol_module.validate_pr_fia_stage_epochs("probe", 30)
 
 
 @pytest.mark.parametrize("epochs", [True, 30.0, "30", None])
 def test_stage_epoch_authority_rejects_non_integer_epochs(epochs: object) -> None:
     with pytest.raises(TypeError, match="epochs"):
-        pr_ira_protocol_module.validate_pr_ira_stage_epochs("screen", epochs)  # type: ignore[arg-type]
+        pr_fia_protocol_module.validate_pr_fia_stage_epochs("screen", epochs)  # type: ignore[arg-type]
 
 
 def test_stage_epoch_authority_helper_is_exported() -> None:
-    assert "validate_pr_ira_stage_epochs" in pr_ira_protocol_module.__all__
+    assert "validate_pr_fia_stage_epochs" in pr_fia_protocol_module.__all__
 
 
 @pytest.mark.parametrize("stage", ["screen", "formal"])
@@ -243,11 +243,11 @@ def test_complete_run_identity_validation_accepts_built_identity(stage: str) -> 
     identity = build_run_identity(
         _source(),
         stage=stage,
-        variant="fdr_bpdd_pr_ira",
+        variant="fdr_bpdd_pr_fia",
         seed=0,
     )
 
-    assert pr_ira_protocol_module.validate_pr_ira_run_identity(identity) is None
+    assert pr_fia_protocol_module.validate_pr_fia_run_identity(identity) is None
 
 
 @pytest.mark.parametrize(
@@ -271,19 +271,19 @@ def test_run_identity_validation_rejects_every_missing_authority_field(
     identity = build_run_identity(
         _source(),
         stage="formal",
-        variant="fdr_bpdd_pr_ira",
+        variant="fdr_bpdd_pr_fia",
         seed=0,
     )
     del identity[missing_field]
 
     with pytest.raises(ValueError, match=missing_field):
-        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+        pr_fia_protocol_module.validate_pr_fia_run_identity(identity)
 
 
 @pytest.mark.parametrize("identity", [None, "formal", ["formal"]])
 def test_run_identity_validation_rejects_non_mapping(identity: object) -> None:
     with pytest.raises(TypeError, match="Mapping"):
-        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+        pr_fia_protocol_module.validate_pr_fia_run_identity(identity)
 
 
 @pytest.mark.parametrize("stage", [None, "probe"])
@@ -291,27 +291,27 @@ def test_run_identity_validation_rejects_malformed_stage(stage: object) -> None:
     identity = build_run_identity(
         _source(),
         stage="formal",
-        variant="fdr_bpdd_pr_ira",
+        variant="fdr_bpdd_pr_fia",
         seed=0,
     )
     identity["stage"] = stage
 
     with pytest.raises(ValueError, match="stage"):
-        pr_ira_protocol_module.validate_pr_ira_run_identity(identity)
+        pr_fia_protocol_module.validate_pr_fia_run_identity(identity)
 
 
 def test_run_identity_validation_helper_is_exported() -> None:
-    assert "validate_pr_ira_run_identity" in pr_ira_protocol_module.__all__
+    assert "validate_pr_fia_run_identity" in pr_fia_protocol_module.__all__
 
 
 def test_protocol_freezes_variants_stages_and_every_gate_threshold() -> None:
-    assert PR_IRA_PROTOCOL["variants"] == {
-        "fdr_bpdd": {"fdr_enabled": True, "bpdd_enabled": True, "pr_ira_enabled": False},
-        "fdr_bpdd_pr_ira": {"fdr_enabled": True, "bpdd_enabled": True, "pr_ira_enabled": True},
-        "fdr": {"fdr_enabled": True, "bpdd_enabled": False, "pr_ira_enabled": False},
-        "fdr_pr_ira": {"fdr_enabled": True, "bpdd_enabled": False, "pr_ira_enabled": True},
+    assert PR_FIA_PROTOCOL["variants"] == {
+        "fdr_bpdd": {"fdr_enabled": True, "bpdd_enabled": True, "pr_fia_enabled": False},
+        "fdr_bpdd_pr_fia": {"fdr_enabled": True, "bpdd_enabled": True, "pr_fia_enabled": True},
+        "fdr": {"fdr_enabled": True, "bpdd_enabled": False, "pr_fia_enabled": False},
+        "fdr_pr_fia": {"fdr_enabled": True, "bpdd_enabled": False, "pr_fia_enabled": True},
     }
-    assert PR_IRA_PROTOCOL["stages"] == {
+    assert PR_FIA_PROTOCOL["stages"] == {
         "screen": {
             "schedule_epochs": 30,
             "fresh_start": True,
@@ -320,10 +320,10 @@ def test_protocol_freezes_variants_stages_and_every_gate_threshold() -> None:
         "formal": {
             "schedule_epochs": 100,
             "fresh_start": True,
-            "eligible_variants": ["fdr_bpdd_pr_ira"],
+            "eligible_variants": ["fdr_bpdd_pr_fia"],
         },
     }
-    assert PR_IRA_PROTOCOL["gate_thresholds"] == {
+    assert PR_FIA_PROTOCOL["gate_thresholds"] == {
         "final_map50_95_delta_gt": 0.0,
         "tail3_map50_95_delta_gt": 0.0,
         "final_ap75_delta_gt": 0.0,
@@ -339,7 +339,7 @@ def test_protocol_freezes_variants_stages_and_every_gate_threshold() -> None:
         "firewall_atol": 1e-7,
         "max_parameter_increase_ratio": 0.10,
     }
-    assert PR_IRA_PROTOCOL["independence_gate_reuses_compatibility"] is True
+    assert PR_FIA_PROTOCOL["independence_gate_reuses_compatibility"] is True
 
 
 @pytest.mark.parametrize("variant", SCREEN_VARIANTS)
@@ -347,7 +347,7 @@ def test_screen_run_identities_bind_every_authority(variant: str) -> None:
     identity = build_run_identity(_source(), stage="screen", variant=variant, seed=0)
 
     assert identity["source_sha256"] == public_state_sha256(_source())
-    assert identity["protocol_sha256"] == PR_IRA_PROTOCOL_SHA256
+    assert identity["protocol_sha256"] == PR_FIA_PROTOCOL_SHA256
     assert identity["fdr_protocol_sha256"] == FDR_PROTOCOL_SHA256
     assert identity["initial_state_sha256"] == EXPECTED_INITIAL_STATE_SHA256
     assert identity["dataset_sha256"] == EXPECTED_DATASET_SHA256
@@ -358,14 +358,14 @@ def test_screen_run_identities_bind_every_authority(variant: str) -> None:
     assert identity["run_id"].startswith(f"{variant}-screen30-seed0-")
 
 
-def test_only_the_combined_pr_ira_arm_has_a_formal100_identity() -> None:
+def test_only_the_combined_pr_fia_arm_has_a_formal100_identity() -> None:
     identity = build_run_identity(
-        _source(), stage="formal", variant="fdr_bpdd_pr_ira", seed=0
+        _source(), stage="formal", variant="fdr_bpdd_pr_fia", seed=0
     )
-    assert identity["run_id"].startswith("fdr_bpdd_pr_ira-formal100-seed0-")
+    assert identity["run_id"].startswith("fdr_bpdd_pr_fia-formal100-seed0-")
     assert identity["stage"] == "formal"
 
-    for variant in ("fdr_bpdd", "fdr", "fdr_pr_ira"):
+    for variant in ("fdr_bpdd", "fdr", "fdr_pr_fia"):
         with pytest.raises(ValueError, match="not eligible"):
             build_run_identity(_source(), stage="formal", variant=variant, seed=0)
 
@@ -404,7 +404,7 @@ def test_resume_rejects_source_protocol_state_dataset_variant_or_seed_drift(
     field: str, replacement: object
 ) -> None:
     expected = build_run_identity(
-        _source(), stage="screen", variant="fdr_bpdd_pr_ira", seed=0
+        _source(), stage="screen", variant="fdr_bpdd_pr_fia", seed=0
     )
     checkpoint = deepcopy(expected)
     checkpoint[field] = replacement
@@ -419,7 +419,7 @@ def test_prepare_manifest_creates_four_screens_and_one_formal_identity(
     module = _load_prepare_module()
     state = tmp_path / "initial-state.pt"
     state.write_bytes(b"test-state")
-    output = tmp_path / "pr-ira-protocol.json"
+    output = tmp_path / "pr-fia-protocol.json"
     monkeypatch.setattr(module, "_file_sha256", lambda _path: EXPECTED_INITIAL_STATE_SHA256)
     fingerprints = {"public": "1" * 64, "private": "2" * 64}
     monkeypatch.setattr(
@@ -435,8 +435,8 @@ def test_prepare_manifest_creates_four_screens_and_one_formal_identity(
 
     assert manifest["source"] == _source()
     assert manifest["source_sha256"] == public_state_sha256(_source())
-    assert manifest["protocol"] == PR_IRA_PROTOCOL
-    assert manifest["protocol_sha256"] == PR_IRA_PROTOCOL_SHA256
+    assert manifest["protocol"] == PR_FIA_PROTOCOL
+    assert manifest["protocol_sha256"] == PR_FIA_PROTOCOL_SHA256
     assert manifest["initial_state"] == {
         "path": str(state.resolve()),
         "sha256": EXPECTED_INITIAL_STATE_SHA256,
@@ -444,10 +444,10 @@ def test_prepare_manifest_creates_four_screens_and_one_formal_identity(
     }
     assert set(manifest["run_identities"]) == {
         "fdr_bpdd_screen",
-        "fdr_bpdd_pr_ira_screen",
+        "fdr_bpdd_pr_fia_screen",
         "fdr_screen",
-        "fdr_pr_ira_screen",
-        "fdr_bpdd_pr_ira_formal",
+        "fdr_pr_fia_screen",
+        "fdr_bpdd_pr_fia_formal",
     }
     assert manifest["manifest_sha256"] == public_state_sha256(
         {key: value for key, value in manifest.items() if key != "manifest_sha256"}
