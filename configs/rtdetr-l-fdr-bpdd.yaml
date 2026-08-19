@@ -44,6 +44,7 @@ head:
 fdr_loss:
   fgl_weight: 0.15
   supervise_pre_boxes: true
+  supervise_dn_fdr: true
 
 bpdd_loss:
   enabled: true

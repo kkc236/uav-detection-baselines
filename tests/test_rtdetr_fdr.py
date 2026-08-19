@@ -41,6 +41,7 @@ def _declarative_cfg(
     preliminary_box: bool = True,
     fgl_weight: float = 0.15,
     supervise_pre_boxes: bool = True,
+    supervise_dn_fdr: bool = True,
 ) -> dict:
     cfg = deepcopy(yaml_model_load("rtdetr-l.yaml"))
     cfg["head"][-1] = [
@@ -66,6 +67,7 @@ def _declarative_cfg(
     cfg["fdr_loss"] = {
         "fgl_weight": fgl_weight,
         "supervise_pre_boxes": supervise_pre_boxes,
+        "supervise_dn_fdr": supervise_dn_fdr,
     }
     return cfg
 
@@ -310,23 +312,36 @@ def test_fdr_and_control_model_parsing_share_one_lock(monkeypatch) -> None:
 
 def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
     model = FDRRTDETRDetectionModel(
-        _declarative_cfg(fgl_weight=0.0, supervise_pre_boxes=False),
+        _declarative_cfg(
+            fgl_weight=0.0,
+            supervise_pre_boxes=False,
+            supervise_dn_fdr=False,
+        ),
         nc=10,
         verbose=False,
     )
     criterion = model.init_criterion()
     assert criterion.fgl_weight == 0.0
     assert criterion.supervise_pre_boxes is False
+    assert criterion.supervise_dn_fdr is False
 
 
 @pytest.mark.parametrize(
-    ("filename", "cumulative", "preliminary_box", "fgl_weight", "pre_loss"),
     (
-        ("rtdetr-l-fdr.yaml", True, True, 0.15, True),
-        ("rtdetr-l-fdr-no-fgl.yaml", True, True, 0.0, True),
-        ("rtdetr-l-fdr-no-prebox-loss.yaml", True, True, 0.15, False),
-        ("rtdetr-l-fdr-no-cumulative.yaml", False, True, 0.15, True),
-        ("rtdetr-l-fdr-no-prebox.yaml", True, False, 0.15, False),
+        "filename",
+        "cumulative",
+        "preliminary_box",
+        "fgl_weight",
+        "pre_loss",
+        "dn_fdr",
+    ),
+    (
+        ("rtdetr-l-fdr.yaml", True, True, 0.15, True, True),
+        ("rtdetr-l-fdr-no-fgl.yaml", True, True, 0.0, True, True),
+        ("rtdetr-l-fdr-no-prebox-loss.yaml", True, True, 0.15, False, True),
+        ("rtdetr-l-fdr-no-cumulative.yaml", False, True, 0.15, True, True),
+        ("rtdetr-l-fdr-no-prebox.yaml", True, False, 0.15, False, True),
+        ("rtdetr-l-fdr-no-dn.yaml", True, True, 0.15, True, False),
     ),
 )
 def test_each_standalone_ablation_yaml_builds_one_compatible_functional_unit(
@@ -335,6 +350,7 @@ def test_each_standalone_ablation_yaml_builds_one_compatible_functional_unit(
     preliminary_box: bool,
     fgl_weight: float,
     pre_loss: bool,
+    dn_fdr: bool,
     fdr_model: FDRRTDETRDetectionModel,
 ) -> None:
     method = FDRRTDETRDetectionModel(
@@ -350,6 +366,7 @@ def test_each_standalone_ablation_yaml_builds_one_compatible_functional_unit(
     criterion = method.init_criterion()
     assert criterion.fgl_weight == fgl_weight
     assert criterion.supervise_pre_boxes is pre_loss
+    assert criterion.supervise_dn_fdr is dn_fdr
 
 
 def test_model_replaces_only_decoder_box_contract_and_preserves_public_state():

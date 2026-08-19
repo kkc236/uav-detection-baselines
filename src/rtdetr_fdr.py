@@ -256,6 +256,9 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
                 self.fdr_loss_options.get("supervise_pre_boxes", True)
                 and self.fdr.preliminary_box
             ),
+            supervise_dn_fdr=bool(
+                self.fdr_loss_options.get("supervise_dn_fdr", True)
+            ),
         )
 
     def loss(

@@ -305,6 +305,60 @@ def test_fgl_and_pre_losses_reuse_stock_normal_and_fixed_dn_assignments() -> Non
     assert matcher.calls == layers
 
 
+def test_disables_only_extra_dn_fdr_supervision() -> None:
+    layers, batch_size, queries = 3, 2, 4
+    boxes, scores = _predictions(layers=layers, batch=batch_size, queries=queries)
+    matches = _matches_with_one_positive()
+    criterion = FDRDetectionLoss(
+        nc=3,
+        use_vfl=True,
+        fgl_weight=0.15,
+        supervise_pre_boxes=True,
+        supervise_dn_fdr=False,
+    )
+    criterion.matcher = CountingMatcher(matches)
+
+    dn_queries = 2
+    generator = torch.Generator().manual_seed(91)
+    dn_boxes = torch.rand((layers, batch_size, dn_queries, 4), generator=generator)
+    dn_boxes[..., 2:] = dn_boxes[..., 2:] * 0.2 + 0.05
+    dn_scores = torch.randn((layers, batch_size, dn_queries, 3), generator=generator)
+    dn_meta = {
+        "dn_pos_idx": [torch.tensor([0]), torch.empty(0, dtype=torch.long)],
+        "dn_num_group": 1,
+    }
+
+    losses = criterion(
+        (boxes, scores),
+        _mixed_batch(),
+        dn_bboxes=dn_boxes,
+        dn_scores=dn_scores,
+        dn_meta=dn_meta,
+        corner_logits=_corner_logits(layers=layers - 1),
+        pre_boxes=boxes[0].detach().clone().requires_grad_(True),
+        dn_corner_logits=_corner_logits(
+            layers=layers,
+            batch=batch_size,
+            queries=dn_queries,
+        ),
+        dn_pre_boxes=dn_boxes[0].detach().clone().requires_grad_(True),
+    )
+
+    assert {
+        "loss_fgl",
+        "loss_fgl_aux",
+        "loss_bbox_pre",
+        "loss_giou_pre",
+    }.issubset(losses)
+    assert not {
+        "loss_fgl_dn",
+        "loss_fgl_aux_dn",
+        "loss_bbox_pre_dn",
+        "loss_giou_pre_dn",
+    }.intersection(losses)
+    assert {"loss_class_dn", "loss_bbox_dn", "loss_giou_dn"}.issubset(losses)
+
+
 def test_empty_gt_losses_are_zero_finite_and_do_not_call_an_extra_matcher() -> None:
     layers = 2
     boxes, scores = _predictions(layers=layers)

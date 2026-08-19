@@ -20,6 +20,7 @@ FDR_CONFIGS = (
     CONFIG_DIR / "rtdetr-l-fdr-no-prebox-loss.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-cumulative.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-prebox.yaml",
+    CONFIG_DIR / "rtdetr-l-fdr-no-dn.yaml",
 )
 
 FULL_OPTIONS = {
@@ -36,6 +37,7 @@ FULL_OPTIONS = {
 FULL_LOSS = {
     "fgl_weight": 0.15,
     "supervise_pre_boxes": True,
+    "supervise_dn_fdr": True,
 }
 EXPECTED_ABLATION_DIFFS = {
     CONFIG_DIR / "rtdetr-l-fdr-no-fgl.yaml": {
@@ -49,6 +51,9 @@ EXPECTED_ABLATION_DIFFS = {
     },
     CONFIG_DIR / "rtdetr-l-fdr-no-prebox.yaml": {
         ("head", 18, 3, 2, "preliminary_box"): (True, False),
+    },
+    CONFIG_DIR / "rtdetr-l-fdr-no-dn.yaml": {
+        ("fdr_loss", "supervise_dn_fdr"): (True, False),
     },
 }
 

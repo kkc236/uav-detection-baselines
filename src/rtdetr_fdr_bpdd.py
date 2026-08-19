@@ -81,6 +81,9 @@ class FDRBPDDDetectionModel(FDRRTDETRDetectionModel):
                 self.fdr_loss_options.get("supervise_pre_boxes", True)
                 and self.fdr.preliminary_box
             ),
+            supervise_dn_fdr=bool(
+                self.fdr_loss_options.get("supervise_dn_fdr", True)
+            ),
             bpdd_options=self.bpdd_options,
         )
 

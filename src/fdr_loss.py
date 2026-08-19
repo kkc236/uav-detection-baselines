@@ -82,6 +82,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         *args: Any,
         fgl_weight: float = 0.15,
         supervise_pre_boxes: bool = True,
+        supervise_dn_fdr: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -89,6 +90,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             raise ValueError("fgl_weight must be non-negative")
         self.fgl_weight = float(fgl_weight)
         self.supervise_pre_boxes = bool(supervise_pre_boxes)
+        self.supervise_dn_fdr = bool(supervise_dn_fdr)
         self.stock_match_calls = 0
         self.fgl_extra_match_calls = 0
         self._normal_assignment_queue: list[MatchIndices] | None = None
@@ -362,7 +364,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                 )
             )
 
-        if dn_meta is not None:
+        if dn_meta is not None and self.supervise_dn_fdr:
             denoising_assignments = self._to_layer_order(
                 self._recorded_assignments.get("_dn", [])
             )

@@ -62,6 +62,7 @@ def test_bpdd_criterion_uses_only_the_frozen_yaml_options(
         margin=0.02,
         eps=1e-6,
     )
+    assert criterion.supervise_dn_fdr is True
 
 
 def test_bpdd_eval_prediction_is_bit_exact_to_fdr(
