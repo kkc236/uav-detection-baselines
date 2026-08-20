@@ -93,7 +93,7 @@ Expected: tests pass and shell syntax exits zero.
 ### Task 4: Integrate and deploy
 
 **Files:**
-- Modify only through deployment: `/home/ubuntu/ap-fdr-ablation/source-ebb349ae`
+- Create through deployment: `/home/ubuntu/ap-fdr-ablation/publisher-source`
 - Create on server: `/home/ubuntu/ap-fdr-ablation/github_token`
 - Create on server: `/home/ubuntu/ap-fdr-ablation/publication-watcher.pid`
 
@@ -107,9 +107,9 @@ Expected: all repository tests pass.
 
 Commit only the design, plan, publisher, watcher, and publisher tests. Push the branch to `kkc236/uav-detection-baselines`.
 
-- [ ] **Step 3: update the server checkout without touching the running process**
+- [ ] **Step 3: create an isolated server publisher worktree without touching the running process**
 
-Transfer a Git bundle containing the new branch, fetch it into the existing server checkout, and check out the publisher files without changing the loaded Python process or active run directory.
+Transfer a Git bundle containing the new branch, fetch it into the existing server repository, and create a separate `publisher-source` worktree at the publisher commit. Do not switch or modify the active training checkout, loaded Python process, or run directory.
 
 - [ ] **Step 4: install the credential and validate check-only behavior**
 
