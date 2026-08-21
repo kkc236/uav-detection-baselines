@@ -15,9 +15,11 @@ STOCK_CONFIG = (
 )
 FULL_CONFIG = CONFIG_DIR / "rtdetr-l-fdr.yaml"
 ACE_CONFIG = CONFIG_DIR / "rtdetr-l-ace-fdr.yaml"
+EQUAL_CONFIG = CONFIG_DIR / "rtdetr-l-equal.yaml"
 FDR_CONFIGS = (
     FULL_CONFIG,
     ACE_CONFIG,
+    EQUAL_CONFIG,
     CONFIG_DIR / "rtdetr-l-fdr-no-fgl.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-prebox-loss.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-cumulative.yaml",
@@ -133,6 +135,13 @@ def test_ace_fdr_config_declares_one_integrated_method_contract():
         "supervise_dn_fdr": False,
         "edge_adaptive_fgl": True,
     }
+
+
+def test_equal_config_is_the_canonical_name_for_the_integrated_contract():
+    equal = _load_yaml(EQUAL_CONFIG)
+    ace = _load_yaml(ACE_CONFIG)
+
+    assert equal == ace
 
 
 def test_each_ablation_changes_exactly_one_intended_yaml_field():

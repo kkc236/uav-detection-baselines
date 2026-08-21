@@ -1,44 +1,36 @@
-"""Compatibility launcher for the EQuAL run first recorded as ACE-FDR."""
+"""Launch one source-bound EQuAL Formal100 seed-0 experiment."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-import torch
-
 
 ROOT = Path(__file__).resolve().parents[1]
-ACE_FDR_CONFIG = ROOT / "configs" / "rtdetr-l-ace-fdr.yaml"
+EQUAL_CONFIG = ROOT / "configs" / "rtdetr-l-equal.yaml"
 sys.path.insert(0, str(ROOT))
 
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
+from scripts.train_ace_fdr import (  # noqa: E402
+    _file_sha256,
+    require_clean_tracked_worktree,
+    validate_initial_state_file,
+)
 from scripts.train_rtdetr_fdr import (  # noqa: E402
     FORMAL_EPOCHS,
     FROZEN_SETTINGS,
     current_source_identity,
     prepare_data_yaml,
 )
-from src.fdr_protocol import validate_fdr_initial_state  # noqa: E402
 from src.lpr_protocol import dataset_signature  # noqa: E402
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest().upper()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train the integrated ACE-FDR method under Formal100 seed0."
+        description="Train the integrated EQuAL method under Formal100 seed0."
     )
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--initial-state", type=Path, required=True)
@@ -56,13 +48,13 @@ def build_settings(
 ) -> dict[str, Any]:
     return {
         **FROZEN_SETTINGS,
-        "model": str(ACE_FDR_CONFIG.resolve()),
+        "model": str(EQUAL_CONFIG.resolve()),
         "save_period": -1,
         "data": str(Path(data_yaml).resolve()),
         "epochs": FORMAL_EPOCHS,
         "seed": 0,
         "project": str(Path(output_root).resolve()),
-        "name": name or "formal-seed0-ace-fdr-v1",
+        "name": name or "formal-seed0-equal-v1",
         "exist_ok": False,
     }
 
@@ -74,12 +66,13 @@ def build_launch_record(
     initial_state_path: Path,
     dataset: Mapping[str, Any],
     settings: Mapping[str, Any],
+    runtime_alias: str | None = None,
 ) -> dict[str, Any]:
     config_path = Path(config_path).resolve()
     initial_state_path = Path(initial_state_path).resolve()
-    return {
+    record = {
         "format_version": 1,
-        "method": "ace_fdr",
+        "method": "equal",
         "source": dict(source_identity),
         "config": {
             "path": str(config_path),
@@ -92,28 +85,9 @@ def build_launch_record(
         "dataset": dict(dataset),
         "settings": dict(settings),
     }
-
-
-def require_clean_tracked_worktree(root: Path = ROOT) -> None:
-    result = subprocess.run(
-        ["git", "-C", str(Path(root).resolve()), "diff", "--quiet", "HEAD", "--"],
-        check=False,
-    )
-    if result.returncode == 1:
-        raise RuntimeError("tracked source differs from HEAD; commit before training")
-    if result.returncode != 0:
-        raise RuntimeError(f"git worktree check failed with exit code {result.returncode}")
-
-
-def validate_initial_state_file(path: Path) -> Path:
-    path = Path(path).resolve()
-    if path.is_symlink() or not path.is_file():
-        raise FileNotFoundError(f"FDR initial state not found: {path}")
-    artifact = torch.load(path, map_location="cpu", weights_only=False)
-    if not isinstance(artifact, Mapping):
-        raise TypeError("FDR initial state must be a checkpoint mapping")
-    validate_fdr_initial_state(artifact)
-    return path
+    if runtime_alias is not None:
+        record["runtime_alias"] = runtime_alias
+    return record
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -135,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     record = build_launch_record(
         source_identity=current_source_identity(),
-        config_path=ACE_FDR_CONFIG,
+        config_path=EQUAL_CONFIG,
         initial_state_path=initial_state,
         dataset=dataset_signature(args.dataset_root.resolve()),
         settings=settings,
