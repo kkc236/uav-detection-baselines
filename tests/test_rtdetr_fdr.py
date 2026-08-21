@@ -42,6 +42,7 @@ def _declarative_cfg(
     fgl_weight: float = 0.15,
     supervise_pre_boxes: bool = True,
     supervise_dn_fdr: bool = True,
+    edge_adaptive_fgl: bool = False,
 ) -> dict:
     cfg = deepcopy(yaml_model_load("rtdetr-l.yaml"))
     cfg["head"][-1] = [
@@ -68,6 +69,7 @@ def _declarative_cfg(
         "fgl_weight": fgl_weight,
         "supervise_pre_boxes": supervise_pre_boxes,
         "supervise_dn_fdr": supervise_dn_fdr,
+        "edge_adaptive_fgl": edge_adaptive_fgl,
     }
     return cfg
 
@@ -316,6 +318,7 @@ def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
             fgl_weight=0.0,
             supervise_pre_boxes=False,
             supervise_dn_fdr=False,
+            edge_adaptive_fgl=True,
         ),
         nc=10,
         verbose=False,
@@ -324,6 +327,7 @@ def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
     assert criterion.fgl_weight == 0.0
     assert criterion.supervise_pre_boxes is False
     assert criterion.supervise_dn_fdr is False
+    assert criterion.edge_adaptive_fgl is True
 
 
 @pytest.mark.parametrize(

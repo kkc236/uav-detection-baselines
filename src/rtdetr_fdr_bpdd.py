@@ -84,6 +84,9 @@ class FDRBPDDDetectionModel(FDRRTDETRDetectionModel):
             supervise_dn_fdr=bool(
                 self.fdr_loss_options.get("supervise_dn_fdr", True)
             ),
+            edge_adaptive_fgl=bool(
+                self.fdr_loss_options.get("edge_adaptive_fgl", False)
+            ),
             bpdd_options=self.bpdd_options,
         )
 

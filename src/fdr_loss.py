@@ -127,6 +127,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         fgl_weight: float = 0.15,
         supervise_pre_boxes: bool = True,
         supervise_dn_fdr: bool = True,
+        edge_adaptive_fgl: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -135,6 +136,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         self.fgl_weight = float(fgl_weight)
         self.supervise_pre_boxes = bool(supervise_pre_boxes)
         self.supervise_dn_fdr = bool(supervise_dn_fdr)
+        self.edge_adaptive_fgl = bool(edge_adaptive_fgl)
         self.stock_match_calls = 0
         self.fgl_extra_match_calls = 0
         self._normal_assignment_queue: list[MatchIndices] | None = None
@@ -236,6 +238,14 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             matched_boxes.detach(), matched_targets_cxcywh, xywh=True
         ).squeeze(-1)
         edge_iou = matched_iou.repeat_interleave(4)
+        if self.edge_adaptive_fgl:
+            edge_iou = edge_adaptive_fgl_weights(
+                matched_logits,
+                target_indices,
+                left_weight,
+                right_weight,
+                edge_iou,
+            )
         return adjacent_bin_fgl(
             matched_logits,
             target_indices,

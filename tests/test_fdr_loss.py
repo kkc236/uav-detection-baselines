@@ -239,6 +239,14 @@ def test_edge_adaptive_fgl_weights_prioritize_the_harder_edge() -> None:
     assert weights.requires_grad is False
 
 
+def test_fdr_criterion_declares_edge_adaptive_fgl_as_an_opt_in_contract() -> None:
+    stock = FDRDetectionLoss(nc=3, use_vfl=True)
+    ace = FDRDetectionLoss(nc=3, use_vfl=True, edge_adaptive_fgl=True)
+
+    assert stock.edge_adaptive_fgl is False
+    assert ace.edge_adaptive_fgl is True
+
+
 def test_fgl_target_reference_is_detached_from_preliminary_box() -> None:
     boxes, scores = _predictions(layers=3)
     batch = _mixed_batch()

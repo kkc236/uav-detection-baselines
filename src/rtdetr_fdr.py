@@ -259,6 +259,9 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
             supervise_dn_fdr=bool(
                 self.fdr_loss_options.get("supervise_dn_fdr", True)
             ),
+            edge_adaptive_fgl=bool(
+                self.fdr_loss_options.get("edge_adaptive_fgl", False)
+            ),
         )
 
     def loss(
