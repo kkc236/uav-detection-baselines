@@ -1,24 +1,24 @@
-# ACE-FDR: Integrated Distribution Refinement Design
+# EQuAL: Integrated Localization Design
 
 Date: 2026-08-21
 
 ## Objective
 
-Design ACE-FDR (Anchor-Consistent Edge-adaptive Fine-grained Distribution
-Refinement) as one indivisible localization method rather than a collection
+Design EQuAL (Edge-adaptive Query-Aligned Localization) as one indivisible
+localization method rather than a collection
 of detachable submodules.  The final method uses the native RT-DETR decoder
 reference as its stable distribution anchor, refines only cleanly matched normal
 queries, and allocates FGL gradients according to the learning state of each
 box edge.  The design removes the learned preliminary-reference path and all
 additional DN-side FDR losses while retaining stock RT-DETR denoising training.
 
-The experiment answers one method-level question: does ACE-FDR
+The experiment answers one method-level question: does EQuAL
 outperform the registered original AP-FDR under the same Formal100 seed-0
 protocol?  BPDD and FIA are outside this first experiment.
 
 ## Unified Method Contract
 
-ACE-FDR has a single data flow:
+EQuAL has a single data flow:
 
 ```text
 native layer reference
@@ -36,7 +36,7 @@ three paper modules:
 2. `supervise_dn_fdr: false`: stock DN classification/L1/GIoU remain enabled,
    but perturbed DN queries receive no additional FGL or preliminary-box loss.
 3. normal-query FGL uses edge-adaptive weights.  This is the standard
-   supervision rule of ACE-FDR, not a separately named module.
+   supervision rule of EQuAL, not a separately named module.
 
 The fixed 33-bin representation, non-uniform Integral, cumulative refinement,
 stock Hungarian matching, classification path, decoder blocks, post-processing,
@@ -80,7 +80,7 @@ parameter, inference branch, FLOP, or checkpoint tensor is introduced.
 
 ## Configuration
 
-Add `configs/rtdetr-l-ace-fdr.yaml`, byte-derived from the registered full FDR
+Add `configs/rtdetr-l-equal.yaml`, byte-derived from the registered full FDR
 configuration with exactly these semantic changes:
 
 - `preliminary_box: false`;
@@ -101,7 +101,7 @@ unchanged and reproducible.
   probability or IoU calculations.
 - BPDD continues to receive the same six-layer `[B,Q,4*(reg_max+1)]`
   distributions; FIA remains unaware of this loss change.
-- Existing checkpoints load strictly because ACE-FDR adds no parameters.
+- Existing checkpoints load strictly because EQuAL adds no parameters.
 
 ## Test-First Requirements
 
@@ -143,15 +143,24 @@ results CSV before publication.
 
 ## Decision and Claim Boundary
 
-The primary comparison is ACE-FDR versus the registered original AP-FDR.  A
-positive result supports ACE-FDR as a whole; the paper
+The primary comparison is EQuAL versus the registered original AP-FDR.  A
+positive result supports EQuAL as a whole; the paper
 does not attribute the gain to three detachable components.  The earlier
 preliminary-reference and DN-FDR runs remain development evidence showing why
 those paths were rejected, not modules in the final method.
 
-Adopt ACE-FDR only if best-val mAP50-95 is above the original AP-FDR and
+Adopt EQuAL only if best-val mAP50-95 is above the original AP-FDR and
 AP75 does not regress.  If it does not pass, retain the existing AP-FDR and do
-not report ACE-FDR as successful.  The paper must continue to credit
+not report EQuAL as successful.  The paper must continue to credit
 D-FINE for the discrete boundary representation, non-uniform Integral and base
 adjacent-bin FGL formulation; the original claim is the unified reference-stable,
-clean-query, edge-adaptive organization used by ACE-FDR.
+clean-query, edge-adaptive organization used by EQuAL.
+
+## Runtime Alias
+
+The Formal100 job was launched before the paper-level rename and therefore
+retains the immutable internal identifiers `ace_fdr`, `rtdetr-l-ace-fdr.yaml`,
+and `formal-seed0-ace-fdr-v1`.  Evidence import must preserve those raw values
+and add `paper_method: equal`; it must never rewrite checkpoint or log bytes.
+The source-side public interface after this rename is `rtdetr-l-equal.yaml` and
+`train_equal.py`.
