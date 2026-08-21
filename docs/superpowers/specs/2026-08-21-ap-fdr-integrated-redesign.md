@@ -63,7 +63,7 @@ Difficulty is normalized over the four edges of the same matched box so that
 the method redistributes, rather than globally increases, localization weight:
 
 ```text
-m(q,e) = clip(d(q,e) / (mean_edge(d(q,*)) + 1e-6), 0.5, 2.0).
+m(q,e) = clip(d(q,e) / max(mean_edge(d(q,*)), 1e-6), 0.5, 2.0).
 ```
 
 The final FGL weight is
