@@ -11,6 +11,7 @@ from src.fdr_math import bbox2distance, fine_grained_localization_loss
 from src.fdr_loss import (
     FDRDetectionLoss,
     adjacent_bin_fgl,
+    edge_adaptive_fgl_weights,
     stock_loss_subtotal,
 )
 
@@ -183,6 +184,59 @@ def test_adjacent_bin_fgl_matches_pinned_primitive_exactly() -> None:
     actual.backward()
     assert logits.grad is not None and torch.isfinite(logits.grad).all()
     assert matched_iou.grad is None
+
+
+def test_edge_adaptive_fgl_weights_reduce_to_repeated_iou_for_equal_edges() -> None:
+    logits = torch.tensor(
+        [[2.0, 0.0, -2.0]] * 4,
+        requires_grad=True,
+    )
+    target_indices = torch.zeros(4)
+    left_weight = torch.ones(4)
+    right_weight = torch.zeros(4)
+    edge_iou = torch.full((4,), 0.8, requires_grad=True)
+
+    weights = edge_adaptive_fgl_weights(
+        logits,
+        target_indices,
+        left_weight,
+        right_weight,
+        edge_iou,
+    )
+
+    torch.testing.assert_close(weights, edge_iou.detach(), rtol=0, atol=0)
+    assert weights.shape == edge_iou.shape
+    assert weights.requires_grad is False
+
+
+def test_edge_adaptive_fgl_weights_prioritize_the_harder_edge() -> None:
+    logits = torch.tensor(
+        [
+            [-3.0, 3.0, 0.0],
+            [3.0, 0.0, -3.0],
+            [3.0, 0.0, -3.0],
+            [3.0, 0.0, -3.0],
+        ],
+        requires_grad=True,
+    )
+    target_indices = torch.zeros(4)
+    left_weight = torch.ones(4)
+    right_weight = torch.zeros(4)
+    edge_iou = torch.full((4,), 0.75)
+
+    weights = edge_adaptive_fgl_weights(
+        logits,
+        target_indices,
+        left_weight,
+        right_weight,
+        edge_iou,
+    )
+    modulation = weights / edge_iou
+
+    assert weights[0] > weights[1:].max()
+    assert torch.all(modulation >= 0.5)
+    assert torch.all(modulation <= 2.0)
+    assert weights.requires_grad is False
 
 
 def test_fgl_target_reference_is_detached_from_preliminary_box() -> None:

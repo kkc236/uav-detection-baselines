@@ -53,6 +53,50 @@ def stock_loss_subtotal(losses: Mapping[str, Tensor]) -> Tensor:
     return total
 
 
+def edge_adaptive_fgl_weights(
+    corner_logits: Tensor,
+    target_indices: Tensor,
+    left_weight: Tensor,
+    right_weight: Tensor,
+    edge_iou: Tensor,
+) -> Tensor:
+    """Redistribute detached box reliability across its four edge targets."""
+
+    if corner_logits.ndim != 2:
+        raise ValueError("corner_logits must have shape [matched_edges, bins]")
+    edge_count, bin_count = corner_logits.shape
+    expected_shape = (edge_count,)
+    for name, tensor in (
+        ("target_indices", target_indices),
+        ("left_weight", left_weight),
+        ("right_weight", right_weight),
+        ("edge_iou", edge_iou),
+    ):
+        if tensor.shape != expected_shape:
+            raise ValueError(f"{name} must have shape {expected_shape}")
+    if edge_count % 4:
+        raise ValueError("matched edge count must be divisible by four")
+    if edge_count == 0:
+        return edge_iou.detach()
+
+    left_index = target_indices.long()
+    right_index = left_index + 1
+    if torch.any(left_index < 0) or torch.any(right_index >= bin_count):
+        raise ValueError("adjacent target-bin indices are outside corner_logits")
+
+    probabilities = corner_logits.detach().softmax(dim=-1)
+    target_mass = (
+        probabilities.gather(1, left_index.unsqueeze(1)).squeeze(1)
+        * left_weight.detach()
+        + probabilities.gather(1, right_index.unsqueeze(1)).squeeze(1)
+        * right_weight.detach()
+    )
+    difficulty = (1.0 - target_mass).clamp_min(1e-6).reshape(-1, 4)
+    mean_difficulty = difficulty.mean(dim=1, keepdim=True).clamp_min(1e-6)
+    modulation = (difficulty / mean_difficulty).clamp(0.5, 2.0)
+    return edge_iou.detach() * modulation.reshape(-1)
+
+
 def adjacent_bin_fgl(
     corner_logits: Tensor,
     target_indices: Tensor,
@@ -406,5 +450,6 @@ __all__ = [
     "FDRDetectionLoss",
     "MatchIndices",
     "adjacent_bin_fgl",
+    "edge_adaptive_fgl_weights",
     "stock_loss_subtotal",
 ]
