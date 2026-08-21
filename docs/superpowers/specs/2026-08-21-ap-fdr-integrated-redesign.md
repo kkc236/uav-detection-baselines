@@ -1,10 +1,11 @@
-# Integrated AP-FDR Redesign
+# ACE-FDR: Integrated Distribution Refinement Design
 
 Date: 2026-08-21
 
 ## Objective
 
-Redesign AP-FDR as one indivisible localization method rather than a collection
+Design ACE-FDR (Anchor-Consistent Edge-adaptive Fine-grained Distribution
+Refinement) as one indivisible localization method rather than a collection
 of detachable submodules.  The final method uses the native RT-DETR decoder
 reference as its stable distribution anchor, refines only cleanly matched normal
 queries, and allocates FGL gradients according to the learning state of each
@@ -17,7 +18,7 @@ protocol?  BPDD and FIA are outside this first experiment.
 
 ## Unified Method Contract
 
-The redesigned AP-FDR has a single data flow:
+ACE-FDR has a single data flow:
 
 ```text
 native layer reference
@@ -79,7 +80,7 @@ parameter, inference branch, FLOP, or checkpoint tensor is introduced.
 
 ## Configuration
 
-Add `configs/rtdetr-l-ap-fdr.yaml`, byte-derived from the registered full FDR
+Add `configs/rtdetr-l-ace-fdr.yaml`, byte-derived from the registered full FDR
 configuration with exactly these semantic changes:
 
 - `preliminary_box: false`;
@@ -139,13 +140,13 @@ results CSV before publication.
 
 ## Decision and Claim Boundary
 
-The primary comparison is redesigned AP-FDR versus the registered original
-AP-FDR.  A positive result supports the redesigned method as a whole; the paper
+The primary comparison is ACE-FDR versus the registered original AP-FDR.  A
+positive result supports ACE-FDR as a whole; the paper
 does not attribute the gain to three detachable components.  The earlier
 preliminary-reference and DN-FDR runs remain development evidence showing why
 those paths were rejected, not modules in the final method.
 
-Adopt the redesign only if best-val mAP50-95 is above the original AP-FDR and
+Adopt ACE-FDR only if best-val mAP50-95 is above the original AP-FDR and
 AP75 does not regress.  If it does not pass, retain the existing AP-FDR and do
 not report the redesign as successful.  The paper must continue to credit
 D-FINE for the discrete boundary representation, non-uniform Integral and base
