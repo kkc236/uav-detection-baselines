@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "mapping_kind": "paper_method_alias",
+  "canonical": {
+    "method": "equal",
+    "display_name": "EQuAL",
+    "expansion": "Edge-adaptive Query-Aligned Localization",
+    "source_commit": "c331c36619739a0e90bcff56b41baca11dd36705",
+    "config_path": "configs/rtdetr-l-equal.yaml",
+    "config_sha256": "4B71DD6ADDD346FD3D91DE59AA40F777428A8C11B71DBAA24AF5FED06CB8EC6D"
+  },
+  "runtime": {
+    "method": "ace_fdr",
+    "run_name": "formal-seed0-ace-fdr-v1",
+    "source_commit": "fca7763679b6e10ed68f98971a362a054ecd4853",
+    "source_tree_sha256": "2B62ABF58676B331A026C092E1EB65DAC2FEA5084EEF0B726CB0552F348BB4644",
+    "config_path": "configs/rtdetr-l-ace-fdr.yaml",
+    "config_sha256": "B38EB6932F1CE115C780C0F2777FA6DF465013E70D417AE996B482BE8A96963E",
+    "initial_state_sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+  },
+  "equivalence": {
+    "yaml_semantics_equal": true,
+    "checkpoint_or_log_bytes_renamed": false,
+    "note": "The run predates the paper-level rename. Raw authority, checkpoint, log, and run-directory identifiers remain immutable."
+  }
+}
