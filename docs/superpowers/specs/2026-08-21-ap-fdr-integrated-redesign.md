@@ -12,7 +12,7 @@ queries, and allocates FGL gradients according to the learning state of each
 box edge.  The design removes the learned preliminary-reference path and all
 additional DN-side FDR losses while retaining stock RT-DETR denoising training.
 
-The experiment answers one method-level question: does the redesigned AP-FDR
+The experiment answers one method-level question: does ACE-FDR
 outperform the registered original AP-FDR under the same Formal100 seed-0
 protocol?  BPDD and FIA are outside this first experiment.
 
@@ -36,7 +36,7 @@ three paper modules:
 2. `supervise_dn_fdr: false`: stock DN classification/L1/GIoU remain enabled,
    but perturbed DN queries receive no additional FGL or preliminary-box loss.
 3. normal-query FGL uses edge-adaptive weights.  This is the standard
-   supervision rule of the redesigned AP-FDR, not a separately named module.
+   supervision rule of ACE-FDR, not a separately named module.
 
 The fixed 33-bin representation, non-uniform Integral, cumulative refinement,
 stock Hungarian matching, classification path, decoder blocks, post-processing,
@@ -101,7 +101,7 @@ unchanged and reproducible.
   probability or IoU calculations.
 - BPDD continues to receive the same six-layer `[B,Q,4*(reg_max+1)]`
   distributions; FIA remains unaware of this loss change.
-- Existing checkpoints load strictly because the redesign adds no parameters.
+- Existing checkpoints load strictly because ACE-FDR adds no parameters.
 
 ## Test-First Requirements
 
@@ -148,7 +148,7 @@ those paths were rejected, not modules in the final method.
 
 Adopt ACE-FDR only if best-val mAP50-95 is above the original AP-FDR and
 AP75 does not regress.  If it does not pass, retain the existing AP-FDR and do
-not report the redesign as successful.  The paper must continue to credit
+not report ACE-FDR as successful.  The paper must continue to credit
 D-FINE for the discrete boundary representation, non-uniform Integral and base
 adjacent-bin FGL formulation; the original claim is the unified reference-stable,
-clean-query, edge-adaptive organization used by the redesigned AP-FDR.
+clean-query, edge-adaptive organization used by ACE-FDR.
