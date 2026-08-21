@@ -57,6 +57,7 @@ def build_settings(
     return {
         **FROZEN_SETTINGS,
         "model": str(ACE_FDR_CONFIG.resolve()),
+        "save_period": -1,
         "data": str(Path(data_yaml).resolve()),
         "epochs": FORMAL_EPOCHS,
         "seed": 0,

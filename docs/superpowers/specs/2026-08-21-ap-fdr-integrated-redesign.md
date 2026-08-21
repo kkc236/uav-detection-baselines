@@ -129,6 +129,9 @@ state used by the existing AP-FDR authority:
 - RT-DETR-L, input 640, batch 8, workers 8;
 - 100 epochs, MuSGD, AMP and deterministic mode enabled;
 - no pretrained weights and no cache;
+- retain only `best.pt` and `last.pt`; periodic epoch checkpoints are disabled
+  because they do not affect optimization or metrics and exceed the deployment
+  disk budget;
 - best checkpoint selected only by validation mAP50-95.
 
 After completion, the same best checkpoint is evaluated separately on val and

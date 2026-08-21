@@ -43,12 +43,13 @@ def test_formal_settings_reuse_the_frozen_fdr_protocol(tmp_path: Path) -> None:
     )
 
     for key, value in FROZEN_SETTINGS.items():
-        if key != "model":
+        if key not in {"model", "save_period"}:
             assert settings[key] == value
     assert settings["model"] == str(launcher.ACE_FDR_CONFIG.resolve())
     assert settings["data"] == str(data_yaml.resolve())
     assert settings["epochs"] == FORMAL_EPOCHS == 100
     assert settings["seed"] == 0
+    assert settings["save_period"] == -1
     assert settings["name"] == "formal-seed0-ace-fdr-v1"
     assert settings["exist_ok"] is False
 

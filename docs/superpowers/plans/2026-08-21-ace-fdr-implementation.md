@@ -194,7 +194,8 @@ git commit -m "feat: declare the integrated ACE-FDR method"
 - [ ] **Step 1: Write failing launcher tests**
 
 Test that the launcher has no method-selection flag, always uses
-`configs/rtdetr-l-ace-fdr.yaml`, freezes seed 0 and 100 epochs, refuses dirty
+`configs/rtdetr-l-ace-fdr.yaml`, freezes seed 0 and 100 epochs, keeps only
+`best.pt`/`last.pt` with `save_period=-1`, refuses dirty
 tracked source, validates the FDR initial state, and writes an authority record
 containing source/config/initial-state/dataset/settings hashes.
 
