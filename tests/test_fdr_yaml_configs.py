@@ -14,8 +14,10 @@ STOCK_CONFIG = (
     / "rtdetr-l.yaml"
 )
 FULL_CONFIG = CONFIG_DIR / "rtdetr-l-fdr.yaml"
+ACE_CONFIG = CONFIG_DIR / "rtdetr-l-ace-fdr.yaml"
 FDR_CONFIGS = (
     FULL_CONFIG,
+    ACE_CONFIG,
     CONFIG_DIR / "rtdetr-l-fdr-no-fgl.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-prebox-loss.yaml",
     CONFIG_DIR / "rtdetr-l-fdr-no-cumulative.yaml",
@@ -111,6 +113,26 @@ def test_full_fdr_config_declares_the_exact_decoder_options_and_loss():
         ["nc", [256, 256, 256], FULL_OPTIONS],
     ]
     assert config["fdr_loss"] == FULL_LOSS
+
+
+def test_ace_fdr_config_declares_one_integrated_method_contract():
+    config = _load_yaml(ACE_CONFIG)
+    final_layer = config["head"][-1]
+    options = dict(FULL_OPTIONS)
+    options["preliminary_box"] = False
+
+    assert final_layer == [
+        [21, 24, 27],
+        1,
+        "FDRRTDETRDecoder",
+        ["nc", [256, 256, 256], options],
+    ]
+    assert config["fdr_loss"] == {
+        "fgl_weight": 0.15,
+        "supervise_pre_boxes": False,
+        "supervise_dn_fdr": False,
+        "edge_adaptive_fgl": True,
+    }
 
 
 def test_each_ablation_changes_exactly_one_intended_yaml_field():
