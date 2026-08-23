@@ -381,7 +381,20 @@ def _load_initial_state(
     if path is None:
         return
     artifact = torch.load(Path(path), map_location="cpu", weights_only=False)
-    load_fdr_initial_state(model, artifact, variant=variant)
+    allowed_prefixes = (
+        ("model.28.decoder.distribution_feedback.",)
+        if any(
+            name.startswith("model.28.decoder.distribution_feedback.")
+            for name in model.state_dict()
+        )
+        else ()
+    )
+    load_fdr_initial_state(
+        model,
+        artifact,
+        variant=variant,
+        allowed_initialized_prefixes=allowed_prefixes,
+    )
 
 
 class FDRFixedPairedProtocolMixin(FixedPairedProtocolMixin):

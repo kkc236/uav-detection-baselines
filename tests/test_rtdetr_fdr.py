@@ -796,10 +796,10 @@ def test_trainers_load_protocol_initial_state_with_exact_variant(monkeypatch, tm
     state_path = tmp_path / "initial-state.pt"
     state_path.write_bytes(b"sentinel")
     monkeypatch.setattr("src.rtdetr_fdr.torch.load", lambda *args, **kwargs: artifact)
-    calls: list[tuple[object, object, str]] = []
+    calls: list[tuple[object, object, str, tuple[str, ...]]] = []
 
-    def fake_load(model, loaded, *, variant):
-        calls.append((model, loaded, variant))
+    def fake_load(model, loaded, *, variant, allowed_initialized_prefixes=()):
+        calls.append((model, loaded, variant, allowed_initialized_prefixes))
 
     monkeypatch.setattr("src.rtdetr_fdr.load_fdr_initial_state", fake_load)
 
@@ -813,7 +813,10 @@ def test_trainers_load_protocol_initial_state_with_exact_variant(monkeypatch, tm
     control_trainer.data = {"nc": 10, "channels": 3}
     control_trainer.initial_state_path = state_path
     control = control_trainer.get_model(verbose=False)
-    assert calls == [(method, artifact, "fdr"), (control, artifact, "control")]
+    assert calls == [
+        (method, artifact, "fdr", ()),
+        (control, artifact, "control", ()),
+    ]
 
 
 def test_fdr_resume_applies_only_runtime_overrides(monkeypatch):

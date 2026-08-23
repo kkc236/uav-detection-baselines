@@ -386,7 +386,13 @@ def validate_fdr_initial_state(artifact: Mapping[str, Any]) -> None:
         raise ValueError("FDR full method fingerprint mismatch")
 
 
-def load_fdr_initial_state(model: nn.Module, artifact: Mapping[str, Any], *, variant: str) -> None:
+def load_fdr_initial_state(
+    model: nn.Module,
+    artifact: Mapping[str, Any],
+    *,
+    variant: str,
+    allowed_initialized_prefixes: Sequence[str] = (),
+) -> None:
     """Strictly load the shared control state or shared-plus-private FDR state."""
     if variant not in {"control", "fdr"}:
         raise ValueError(f"unknown FDR paired variant: {variant}")
@@ -401,8 +407,17 @@ def load_fdr_initial_state(model: nn.Module, artifact: Mapping[str, Any], *, var
             **artifact["fdr_public_state"],
             **artifact["private_state"],
         }
-    if set(model.state_dict()) != set(expected):
+    current = model.state_dict()
+    missing = set(expected) - set(current)
+    extra = set(current) - set(expected)
+    allowed_extra = {
+        name
+        for name in extra
+        if any(name.startswith(prefix) for prefix in allowed_initialized_prefixes)
+    }
+    if missing or extra != allowed_extra:
         raise ValueError("FDR initial-state keys do not match target model")
+    expected = {**expected, **{name: current[name] for name in sorted(allowed_extra)}}
     model.load_state_dict(expected, strict=True)
 
 

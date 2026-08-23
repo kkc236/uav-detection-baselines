@@ -216,6 +216,27 @@ def test_partition_and_initial_state_preserve_public_bytes() -> None:
     assert public_state_sha256(fresh_method.state_dict()) == public_state_sha256(method.state_dict())
 
 
+def test_initial_state_allows_only_declared_zero_initialized_extension() -> None:
+    control, method = _paired_modules()
+    artifact = build_fdr_initial_state(
+        control.state_dict(),
+        method.state_dict(),
+        private_prefixes=("distribution_finals.",),
+        metadata={"seed": 0},
+    )
+    extended = _Method()
+    extended.register_parameter("dcf_weight", torch.nn.Parameter(torch.zeros(3)))
+    with pytest.raises(ValueError, match="keys do not match"):
+        load_fdr_initial_state(extended, artifact, variant="fdr")
+    load_fdr_initial_state(
+        extended,
+        artifact,
+        variant="fdr",
+        allowed_initialized_prefixes=("dcf_weight",),
+    )
+    torch.testing.assert_close(extended.dcf_weight, torch.zeros(3), rtol=0, atol=0)
+
+
 def test_partition_rejects_public_value_or_private_name_drift() -> None:
     control, method = _paired_modules()
     bad = deepcopy(method.state_dict())
