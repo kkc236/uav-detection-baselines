@@ -43,6 +43,7 @@ def _declarative_cfg(
     supervise_pre_boxes: bool = True,
     supervise_dn_fdr: bool = True,
     edge_adaptive_fgl: bool = False,
+    distribution_feedback: bool = False,
 ) -> dict:
     cfg = deepcopy(yaml_model_load("rtdetr-l.yaml"))
     cfg["head"][-1] = [
@@ -61,6 +62,7 @@ def _declarative_cfg(
                 "up": 0.5,
                 "cumulative": cumulative,
                 "preliminary_box": preliminary_box,
+                "distribution_feedback": distribution_feedback,
                 "private_seed": private_seed,
             },
         ],
@@ -72,6 +74,41 @@ def _declarative_cfg(
         "edge_adaptive_fgl": edge_adaptive_fgl,
     }
     return cfg
+
+
+def test_dcf_config_is_clean_fdr_plus_one_feedback_switch() -> None:
+    clean = yaml_model_load(FDR_CONFIG_ROOT / "rtdetr-l-clean-fdr.yaml")
+    cfg = yaml_model_load(FDR_CONFIG_ROOT / "rtdetr-l-dcf-fdr.yaml")
+    clean_options = clean["head"][-1][3][2]
+    options = cfg["head"][-1][3][2]
+    clean_loss = clean["fdr_loss"]
+    loss = cfg["fdr_loss"]
+    assert clean_options["distribution_feedback"] is False
+    assert options["preliminary_box"] is False
+    assert options["distribution_feedback"] is True
+    assert options["cumulative"] is True
+    assert loss["supervise_pre_boxes"] is False
+    assert loss["supervise_dn_fdr"] is False
+    assert loss["edge_adaptive_fgl"] is False
+    assert clean_loss == loss
+
+
+def test_distribution_feedback_default_is_disabled_and_enabled_build_is_rng_isolated() -> None:
+    default = FDRRTDETRDecoder(nc=10, ch=(256, 256, 256), options={"private_seed": 10_000})
+    assert default.decoder.distribution_feedback is None
+    torch.manual_seed(912)
+    construction_state = torch.random.get_rng_state().clone()
+    FDRRTDETRDecoder(nc=10, ch=(256, 256, 256), options={"private_seed": 10_000})
+    expected = torch.random.get_rng_state().clone()
+    torch.random.set_rng_state(construction_state)
+    enabled = FDRRTDETRDecoder(
+        nc=10,
+        ch=(256, 256, 256),
+        options={"private_seed": 10_000, "distribution_feedback": True},
+    )
+    torch.testing.assert_close(torch.random.get_rng_state(), expected, rtol=0, atol=0)
+    assert enabled.decoder.distribution_feedback is not None
+    assert enabled.fdr_options["distribution_feedback"] is True
 
 
 def _stock(seed: int = 0) -> RTDETRDetectionModel:

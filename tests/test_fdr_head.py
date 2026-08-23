@@ -12,10 +12,55 @@ from ultralytics.nn.modules.transformer import MLP
 
 import src.fdr_head as fdr_head
 from src.fdr_head import (
+    DistributionConditionedFeedback,
     FDRDeformableTransformerDecoder,
     build_distribution_heads,
     cumulative_distribution_logits,
 )
+
+
+def test_distribution_conditioned_feedback_is_zero_initialized_and_shape_safe() -> None:
+    module = DistributionConditionedFeedback(16, private_seed=10_000)
+    logits = torch.randn(2, 7, 132)
+    output = module(logits)
+    assert output.shape == (2, 7, 16)
+    torch.testing.assert_close(output, torch.zeros_like(output), rtol=0, atol=0)
+    with pytest.raises(ValueError, match="last dimension 132"):
+        module(torch.randn(2, 7, 131))
+
+
+def test_distribution_conditioned_feedback_detaches_history_and_preserves_public_rng() -> None:
+    torch.manual_seed(731)
+    before = torch.random.get_rng_state().clone()
+    module = DistributionConditionedFeedback(16, private_seed=10_000)
+    torch.testing.assert_close(torch.random.get_rng_state(), before, rtol=0, atol=0)
+    module.output.weight.data.fill_(0.1)
+    logits = torch.randn(1, 3, 132, requires_grad=True)
+    module(logits).sum().backward()
+    assert logits.grad is None
+    assert module.output.weight.grad is not None
+
+
+def test_dcf_decoder_uses_one_shared_adapter_after_layer_one() -> None:
+    embed, refs, feats, shapes, pre, dist, scores = _inputs(batch=1, queries=3)
+    for head in dist:
+        head.layers[-1].weight.data.fill_(0.01)
+    adapter = DistributionConditionedFeedback(16, private_seed=10_001)
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(), pre_bbox_head=pre, distribution_feedback=adapter
+    )
+    decoder.train()
+    calls: list[torch.Size] = []
+    hook = adapter.register_forward_hook(lambda _m, args, _out: calls.append(args[0].shape))
+    decoder(embed, refs, feats, shapes, dist, scores, _QueryPos(16))
+    zero_corners = decoder.last_corner_logits.detach().clone()
+    adapter.output.weight.data.fill_(0.1)
+    decoder(embed, refs, feats, shapes, dist, scores, _QueryPos(16))
+    changed_corners = decoder.last_corner_logits.detach().clone()
+    hook.remove()
+    assert len(calls) == 10  # five calls for each of two decoder forwards
+    assert all(shape == torch.Size([1, 3, 132]) for shape in calls)
+    assert not torch.equal(changed_corners, zero_corners)
 
 
 def _old_global_seed_distribution_heads(

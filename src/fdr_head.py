@@ -23,6 +23,40 @@ FDR_OUTPUT_DIM = 4 * (REG_MAX + 1)
 FDR_DECODER_LAYERS = 6
 
 
+class DistributionConditionedFeedback(nn.Module):
+    """Encode a detached preceding 4x33 FDR distribution for one next residual."""
+
+    def __init__(self, hidden_dim: int, *, private_seed: int) -> None:
+        super().__init__()
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be positive")
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(int(private_seed))
+        with torch.device("meta"):
+            self.edge_encoder = nn.Linear(REG_MAX + 1, 16)
+            self.output = nn.Linear(4 * 16, hidden_dim)
+        self.to_empty(device=torch.device("cpu"))
+        nn.init.kaiming_uniform_(
+            self.edge_encoder.weight, a=math.sqrt(5), generator=generator
+        )
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.edge_encoder.weight)
+        bound = 1 / math.sqrt(fan_in)
+        nn.init.uniform_(self.edge_encoder.bias, -bound, bound, generator=generator)
+        nn.init.zeros_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+
+    def forward(self, cumulative_logits: Tensor) -> Tensor:
+        if cumulative_logits.ndim != 3 or cumulative_logits.shape[-1] != FDR_OUTPUT_DIM:
+            raise ValueError(
+                f"cumulative_logits must be rank 3 with last dimension {FDR_OUTPUT_DIM}"
+            )
+        probabilities = cumulative_logits.detach().reshape(
+            *cumulative_logits.shape[:-1], 4, REG_MAX + 1
+        ).softmax(dim=-1)
+        encoded = torch.nn.functional.silu(self.edge_encoder(probabilities))
+        return self.output(encoded.flatten(start_dim=-2))
+
+
 class FDRRTDETRDecoder(RTDETRDecoder):
     """YAML-visible RT-DETR head with the validated FDR box contract."""
 
@@ -35,6 +69,7 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         "up": UP,
         "cumulative": True,
         "preliminary_box": True,
+        "distribution_feedback": False,
         "private_seed": 10_000,
     }
 
@@ -96,6 +131,14 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         self.decoder = FDRDeformableTransformerDecoder.from_stock(
             self.decoder,
             pre_bbox_head=stock_pre_bbox_head,
+            distribution_feedback=(
+                DistributionConditionedFeedback(
+                    hidden_dim,
+                    private_seed=private_seed + 1,
+                )
+                if bool(resolved["distribution_feedback"])
+                else None
+            ),
         )
         self.dec_bbox_head = distribution_heads
         self.decoder.reg_max = int(resolved["reg_max"])
@@ -169,6 +212,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         num_layers: int,
         eval_idx: int,
         pre_bbox_head: nn.Module,
+        distribution_feedback: DistributionConditionedFeedback | None = None,
     ) -> None:
         super().__init__()
         if num_layers != FDR_DECODER_LAYERS or len(layers) != FDR_DECODER_LAYERS:
@@ -178,6 +222,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.num_layers = int(num_layers)
         self.eval_idx = int(eval_idx)
         self.pre_bbox_head = pre_bbox_head
+        self.distribution_feedback = distribution_feedback
         self.cumulative = True
         self.preliminary_box = True
         self.integral = Integral(REG_MAX, torch.tensor([UP]), torch.tensor([REG_SCALE]))
@@ -196,6 +241,8 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.cumulative = True
         if not hasattr(self, "preliminary_box"):
             self.preliminary_box = True
+        if not hasattr(self, "distribution_feedback"):
+            self.distribution_feedback = None
 
     @classmethod
     def from_stock(
@@ -203,6 +250,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         stock: nn.Module,
         *,
         pre_bbox_head: nn.Module,
+        distribution_feedback: DistributionConditionedFeedback | None = None,
     ) -> "FDRDeformableTransformerDecoder":
         """Wrap the exact stock layers and privately copy the preliminary head."""
 
@@ -218,6 +266,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
             num_layers=stock.num_layers,
             eval_idx=stock.eval_idx,
             pre_bbox_head=deepcopy(pre_bbox_head),
+            distribution_feedback=distribution_feedback,
         )
 
     def _clear_evidence(self) -> None:
@@ -276,7 +325,14 @@ class FDRDeformableTransformerDecoder(nn.Module):
 
             if initial_reference is None:
                 raise RuntimeError("preliminary FDR reference was not initialized")
-            delta_corners = bbox_head[index](output + output_detach)
+            regression_input = output + output_detach
+            if index > 0 and self.distribution_feedback is not None:
+                if not isinstance(cumulative_corners, Tensor):
+                    raise RuntimeError("DCF requires a preceding cumulative distribution")
+                regression_input = regression_input + self.distribution_feedback(
+                    cumulative_corners
+                )
+            delta_corners = bbox_head[index](regression_input)
             cumulative_corners = (
                 delta_corners + cumulative_corners
                 if self.cumulative
@@ -312,6 +368,7 @@ __all__ = [
     "FDR_OUTPUT_DIM",
     "FDRDeformableTransformerDecoder",
     "FDRRTDETRDecoder",
+    "DistributionConditionedFeedback",
     "build_distribution_heads",
     "cumulative_distribution_logits",
 ]
