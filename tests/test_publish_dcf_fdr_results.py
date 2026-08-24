@@ -22,6 +22,9 @@ from scripts.publish_dcf_fdr_results import (
 from src.dcf_fdr_publication import StagedEvidence
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class FakeResponse:
     def __init__(self, status_code: int, payload: dict | None = None) -> None:
         self.status_code = status_code
@@ -172,3 +175,18 @@ def test_sanitized_error_redacts_known_token() -> None:
         "request failed for <redacted>"
     )
 
+
+def test_watcher_is_non_destructive_and_waits_for_dcf_completion() -> None:
+    text = (ROOT / "scripts" / "watch_and_publish_dcf_fdr.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "publish_dcf_fdr_results.py" in text
+    assert "sleep 60" in text
+    assert "train_dcf_fdr.py --arm dcf" in text
+    assert "publication-succeeded.json" in text
+    assert "publication-failed.json" in text
+    assert "/data/uav/runs/dcf-fdr-ec4e2a46-clean" in text
+    assert "/data/uav/runs/dcf-fdr-ec4e2a46-dcf" in text
+    assert "shutdown" not in text.lower()
+    assert "poweroff" not in text.lower()
+    assert "rm -rf" not in text
