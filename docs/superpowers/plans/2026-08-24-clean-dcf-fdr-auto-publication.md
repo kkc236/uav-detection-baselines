@@ -25,7 +25,7 @@
 - Create: `tests/test_dcf_fdr_publication.py`
 - Create: `src/dcf_fdr_publication.py`
 
-- [ ] **Step 1: Write failing gate and metric tests**
+- [x] **Step 1: Write failing gate and metric tests**
 
 Create fixtures for two synthetic 100-row `results.csv` files, authorities,
 arguments, logs, and checkpoints. Require `validate_arm()` to reject 99 rows,
@@ -49,13 +49,13 @@ def test_comparison_uses_unrounded_best_map_and_aligns_all_epochs(tmp_path: Path
     assert len(rows) == 100
 ```
 
-- [ ] **Step 2: Run the focused test and confirm red state**
+- [x] **Step 2: Run the focused test and confirm red state**
 
 Run: `pytest tests/test_dcf_fdr_publication.py -q`
 
 Expected: collection fails because `src.dcf_fdr_publication` does not exist.
 
-- [ ] **Step 3: Implement the evidence module**
+- [x] **Step 3: Implement the evidence module**
 
 Implement immutable `ArmSpec`, `ValidatedArm`, and
 `PublicationGateError` types, streaming SHA-256, strict CSV parsing, authority
@@ -79,13 +79,13 @@ def decision(clean_map: float, dcf_map: float) -> str:
     return "passed_nonnegative" if dcf_map >= clean_map else "failed_negative"
 ```
 
-- [ ] **Step 4: Run focused tests and confirm green state**
+- [x] **Step 4: Run focused tests and confirm green state**
 
 Run: `pytest tests/test_dcf_fdr_publication.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add src/dcf_fdr_publication.py tests/test_dcf_fdr_publication.py
@@ -98,7 +98,7 @@ git commit -m "feat: validate and compare Clean DCF evidence"
 - Create: `tests/test_publish_dcf_fdr_results.py`
 - Create: `scripts/publish_dcf_fdr_results.py`
 
-- [ ] **Step 1: Write failing publication transaction tests**
+- [x] **Step 1: Write failing publication transaction tests**
 
 Use fake HTTP responses and a temporary Git repository to require private-repo
 verification, same-size asset skipping, wrong-size asset replacement, exact
@@ -122,14 +122,14 @@ def test_token_file_must_be_private(tmp_path: Path) -> None:
         read_private_token(token)
 ```
 
-- [ ] **Step 2: Run the publication tests and confirm red state**
+- [x] **Step 2: Run the publication tests and confirm red state**
 
 Run: `pytest tests/test_publish_dcf_fdr_results.py -q`
 
 Expected: collection fails because `scripts.publish_dcf_fdr_results` does not
 exist.
 
-- [ ] **Step 3: Implement the publication CLI**
+- [x] **Step 3: Implement the publication CLI**
 
 Add `--clean-root`, `--dcf-root`, `--staging-root`,
 `--material-checkout`, `--token-file`, `--repository`, `--branch`,
@@ -157,13 +157,13 @@ def read_private_token(path: Path) -> str:
     return value
 ```
 
-- [ ] **Step 4: Run publication tests and confirm green state**
+- [x] **Step 4: Run publication tests and confirm green state**
 
 Run: `pytest tests/test_publish_dcf_fdr_results.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add scripts/publish_dcf_fdr_results.py tests/test_publish_dcf_fdr_results.py
@@ -176,7 +176,7 @@ git commit -m "feat: publish Clean DCF evidence to GitHub"
 - Create: `scripts/watch_and_publish_dcf_fdr.sh`
 - Modify: `tests/test_publish_dcf_fdr_results.py`
 
-- [ ] **Step 1: Write the failing watcher contract test**
+- [x] **Step 1: Write the failing watcher contract test**
 
 Require fixed Formal100 paths, a 60-second poll, DCF-process detection, exact
 publication CLI arguments, success/failure markers, retries, no token text, no
@@ -193,13 +193,13 @@ def test_watcher_is_non_destructive_and_waits_for_dcf_completion() -> None:
     assert "rm -rf" not in text
 ```
 
-- [ ] **Step 2: Run the watcher contract and confirm red state**
+- [x] **Step 2: Run the watcher contract and confirm red state**
 
 Run: `pytest tests/test_publish_dcf_fdr_results.py -q`
 
 Expected: failure because the watcher does not exist.
 
-- [ ] **Step 3: Implement the watcher**
+- [x] **Step 3: Implement the watcher**
 
 Wait while the exact DCF output-root trainer exists. When it exits, invoke the
 publisher `--check-only`; incomplete or invalid evidence writes a sanitized
@@ -221,7 +221,7 @@ done
 exit 1
 ```
 
-- [ ] **Step 4: Run all new tests and shell syntax check**
+- [x] **Step 4: Run all new tests and shell syntax check**
 
 Run: `pytest tests/test_dcf_fdr_publication.py tests/test_publish_dcf_fdr_results.py -q`
 
@@ -229,7 +229,7 @@ Run: `bash -n scripts/watch_and_publish_dcf_fdr.sh`
 
 Expected: all tests pass and shell syntax exits zero.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 ```bash
 git add scripts/watch_and_publish_dcf_fdr.sh tests/test_publish_dcf_fdr_results.py
@@ -241,7 +241,7 @@ git commit -m "feat: watch and finalize Clean DCF publication"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-24-clean-dcf-fdr-auto-publication.md`
 
-- [ ] **Step 1: Run focused and regression tests**
+- [x] **Step 1: Run focused and regression tests**
 
 Run:
 
@@ -255,7 +255,7 @@ pytest tests/test_dcf_fdr_publication.py \
 
 Expected: zero failures.
 
-- [ ] **Step 2: Verify repository hygiene and push source branch**
+- [x] **Step 2: Verify repository hygiene and push source branch**
 
 Run:
 
@@ -268,14 +268,14 @@ git ls-remote origin refs/heads/codex/ap-fdr-integrated-redesign
 
 Expected: clean worktree and remote branch SHA equal to local `HEAD`.
 
-- [ ] **Step 3: Transfer the exact commit to the server**
+- [x] **Step 3: Transfer the exact commit to the server**
 
 Create a Git bundle from local `HEAD`, transfer it to `/data/uav/source`, and
 clone an immutable publication checkout at that exact commit. Verify the commit
 SHA, clean worktree, Python imports, token-file mode, current DCF PID, and disk
 space before launch.
 
-- [ ] **Step 4: Exercise live dry-run gates**
+- [x] **Step 4: Exercise live dry-run gates**
 
 Run the publisher with `--check-only` against the live paths while DCF is still
 incomplete.
@@ -283,14 +283,14 @@ incomplete.
 Expected: Clean validates, DCF is rejected as incomplete, no GitHub mutation
 occurs, and the current DCF trainer remains alive.
 
-- [ ] **Step 5: Launch and verify the detached watcher**
+- [x] **Step 5: Launch and verify the detached watcher**
 
 Start with `nohup`, record PID and log under
 `/data/uav/publication/clean-dcf-fdr-formal100-seed0-20260824`, and verify with
 `ps` that PPID is 1 and the process is sleeping/waiting. Recheck DCF epoch count,
 GPU process, and publication status paths.
 
-- [ ] **Step 6: Mark the plan execution and commit deployment record**
+- [x] **Step 6: Mark the plan execution and commit deployment record**
 
 Update this plan's completed checkboxes, record the deployed source commit and
 watcher PID in a sanitized deployment JSON, commit it, push it, and verify the

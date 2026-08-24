@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "deployed_at": "2026-08-24T16:06:43+08:00",
+  "status": "waiting_for_dcf_formal100",
+  "training_source_commit": "ec4e2a463db7a53f7c4c9c4bc9edabdf5c39f40b",
+  "publication_source_commit": "8ec819b073c76c0dd51f2809880d27a34a34bca9",
+  "publication_source_checkout": "/data/uav/source/uav-detection-baselines-publisher-8ec819b0",
+  "watcher": {
+    "pid": 371012,
+    "ppid": 1,
+    "script": "scripts/watch_and_publish_dcf_fdr.sh",
+    "status_root": "/data/uav/publication/clean-dcf-fdr-formal100-seed0-20260824"
+  },
+  "formal_runs": {
+    "clean": "/data/uav/runs/dcf-fdr-ec4e2a46-clean",
+    "dcf": "/data/uav/runs/dcf-fdr-ec4e2a46-dcf",
+    "dcf_completed_epochs_at_deployment": 54
+  },
+  "github": {
+    "repository": "kkc236/icassp2027-fdr-bpdd-fia-material",
+    "branch": "main",
+    "tag": "clean-dcf-fdr-formal100-seed0-20260824",
+    "private_repository_api_verified": true,
+    "private_repository_git_verified": true,
+    "source_branch_sha_verified": "8ec819b073c76c0dd51f2809880d27a34a34bca9"
+  },
+  "verification": {
+    "local_regression": "91 passed",
+    "server_publication_tests": "15 passed",
+    "server_bash_syntax": "passed",
+    "incomplete_dcf_preflight": "rejected_at_54_of_100",
+    "watcher_detached": true,
+    "training_alive_after_deployment": true
+  },
+  "release_assets": [
+    "clean-fdr-seed0-formal100-best.pt",
+    "clean-fdr-seed0-formal100-last.pt",
+    "dcf-fdr-seed0-formal100-best.pt",
+    "dcf-fdr-seed0-formal100-last.pt",
+    "clean-dcf-fdr-seed0-formal100-lightweight-evidence.tar.gz",
+    "clean-dcf-fdr-seed0-formal100-artifact-manifest.json"
+  ]
+}
+
