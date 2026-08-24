@@ -293,7 +293,7 @@ def _normalized_tarinfo(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def _build_bundle(root: Path, destination: Path) -> None:
+def build_bundle(root: Path, destination: Path) -> None:
     members = sorted(
         path for path in root.rglob("*") if path.is_file() and path != destination
     )
@@ -379,11 +379,10 @@ def stage_evidence(
         "release_assets": {},
     }
     write_json_atomic(manifest_path, manifest)
-    _build_bundle(root, bundle_path)
+    build_bundle(root, bundle_path)
     return StagedEvidence(
         root=root,
         manifest_path=manifest_path,
         bundle_path=bundle_path,
         comparison=comparison,
     )
-
