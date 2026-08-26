@@ -437,14 +437,17 @@ class FDRTrainer(FDRFixedPairedProtocolMixin, RTDETRTrainer):
     def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
         common: list[torch.nn.Parameter] = []
         private: list[torch.nn.Parameter] = []
+        private_markers = (
+            ".dec_bbox_head.",
+            ".decoder.pre_bbox_head.",
+            ".decoder.distribution_feedback.",
+        )
         for name, parameter in self.model.named_parameters():
             if not parameter.requires_grad:
                 continue
-            destination = (
-                private
-                if ".dec_bbox_head." in name or ".decoder.pre_bbox_head." in name
-                else common
-            )
+            destination = private if any(
+                marker in name for marker in private_markers
+            ) else common
             destination.append(parameter)
         if not common or not private:
             raise RuntimeError("FDR stock/private parameter partition is incomplete")
