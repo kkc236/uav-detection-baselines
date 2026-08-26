@@ -1,0 +1,64 @@
+{
+  "format_version": 1,
+  "recorded_at": "2026-08-26",
+  "status": "pass",
+  "method": "transient_dcf_fdr",
+  "source": {
+    "branch": "codex/ap-fdr-integrated-redesign",
+    "implementation_commit": "172830209af09f09a76aa55ba2e9f3ed8ea900e9",
+    "comparison_base": "f3dcf45e",
+    "prior_clean_training_commit": "ec4e2a463db7a53f7c4c9c4bc9edabdf5c39f40b"
+  },
+  "config": {
+    "path": "configs/rtdetr-l-transient-dcf-fdr.yaml",
+    "sha256": "bb7567e338402a0bc73ca5ce7c7599060db188e35fc134bbbf415aa8e126f7c7",
+    "difference_from_persistent_dcf_config": "comment_only"
+  },
+  "schedule": {
+    "formal_epochs": 100,
+    "full_feedback_epochs": [1, 66],
+    "frozen_cosine_withdrawal_epochs": [67, 74],
+    "exact_off_epochs": [75, 100],
+    "formula": "0.5*(1+cos(pi*((epoch/100-2/3)/(3/4-2/3))))",
+    "live_ema_scale_type": "plain_python_float",
+    "checkpoint_eligible_epochs": [75, 100],
+    "resume_policy": "restart_from_epoch_0"
+  },
+  "verification": [
+    {
+      "command": "python -m pytest -q tests/test_fdr_head.py tests/test_fdr_protocol.py tests/test_train_dcf_fdr.py tests/test_transient_dcf.py tests/test_transient_dcf_export.py tests/test_publish_dcf_fdr_results.py tests/test_dcf_fdr_publication.py",
+      "result": "80 passed in 9.39s",
+      "exit_code": 0
+    },
+    {
+      "command": "python -m pytest -q tests/test_rtdetr_fdr.py",
+      "result": "37 passed in 74.24s",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check f3dcf45e..172830209af09f09a76aa55ba2e9f3ed8ea900e9",
+      "result": "no whitespace errors",
+      "exit_code": 0
+    }
+  ],
+  "frozen_result_gates": {
+    "clean_best_map50_95": 29.696,
+    "failure_below": 29.696,
+    "weak_pass_range": [29.696, 29.796],
+    "strong_pass_at_or_above": 29.796
+  },
+  "prior_clean_release": "https://github.com/kkc236/icassp2027-fdr-bpdd-fia-material/releases/tag/clean-dcf-fdr-formal100-seed0-20260824",
+  "declared_source_changes": [
+    "configs/rtdetr-l-transient-dcf-fdr.yaml",
+    "scripts/export_transient_dcf_fdr.py",
+    "scripts/train_transient_dcf_fdr.py",
+    "src/fdr_head.py",
+    "src/rtdetr_fdr.py",
+    "src/transient_dcf.py",
+    "src/transient_dcf_export.py",
+    "tests/test_fdr_head.py",
+    "tests/test_train_dcf_fdr.py",
+    "tests/test_transient_dcf.py",
+    "tests/test_transient_dcf_export.py"
+  ]
+}
