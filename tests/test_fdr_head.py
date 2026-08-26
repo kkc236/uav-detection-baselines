@@ -63,6 +63,70 @@ def test_dcf_decoder_uses_one_shared_adapter_after_layer_one() -> None:
     assert not torch.equal(changed_corners, zero_corners)
 
 
+def test_dcf_scale_zero_skips_adapter_and_matches_no_adapter() -> None:
+    embed, refs, feats, shapes, pre, dist, scores = _inputs(batch=1, queries=3)
+    for head in dist:
+        head.layers[-1].weight.data.fill_(0.01)
+    adapter = DistributionConditionedFeedback(16, private_seed=10_001)
+    adapter.output.weight.data.fill_(0.1)
+    with_adapter = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(),
+        pre_bbox_head=deepcopy(pre),
+        distribution_feedback=adapter,
+    )
+    without_adapter = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(), pre_bbox_head=deepcopy(pre)
+    )
+    without_adapter.load_state_dict(
+        {
+            name: value
+            for name, value in with_adapter.state_dict().items()
+            if not name.startswith("distribution_feedback.")
+        },
+        strict=True,
+    )
+    calls: list[bool] = []
+    hook = adapter.register_forward_hook(lambda *_: calls.append(True))
+    with_adapter.set_distribution_feedback_scale(0.0)
+    with_adapter.train()
+    without_adapter.train()
+    pos_mlp = _QueryPos(16)
+
+    actual = with_adapter(embed, refs, feats, shapes, dist, scores, pos_mlp)
+    expected = without_adapter(embed, refs, feats, shapes, dist, scores, pos_mlp)
+
+    hook.remove()
+    assert calls == []
+    for left, right in zip(actual, expected):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+
+def test_dcf_scale_one_preserves_persistent_feedback_behavior() -> None:
+    embed, refs, feats, shapes, pre, dist, scores = _inputs(batch=1, queries=3)
+    for head in dist:
+        head.layers[-1].weight.data.fill_(0.01)
+    adapter = DistributionConditionedFeedback(16, private_seed=10_001)
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(), pre_bbox_head=pre, distribution_feedback=adapter
+    )
+    adapter.output.weight.data.fill_(0.1)
+    decoder.set_distribution_feedback_scale(1.0)
+    decoder.train()
+
+    decoder(embed, refs, feats, shapes, dist, scores, _QueryPos(16))
+
+    assert torch.count_nonzero(decoder.last_corner_logits) > 0
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, float("nan"), float("inf")])
+def test_dcf_feedback_scale_rejects_invalid_values(value: float) -> None:
+    decoder = FDRDeformableTransformerDecoder.from_stock(
+        _FakeStockDecoder(), pre_bbox_head=nn.Linear(16, 4)
+    )
+    with pytest.raises(ValueError, match=r"finite and in \[0, 1\]"):
+        decoder.set_distribution_feedback_scale(value)
+
+
 def _old_global_seed_distribution_heads(
     hidden_dim: int,
     num_layers: int = 6,

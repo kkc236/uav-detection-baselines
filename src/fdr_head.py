@@ -223,6 +223,9 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.eval_idx = int(eval_idx)
         self.pre_bbox_head = pre_bbox_head
         self.distribution_feedback = distribution_feedback
+        # This must remain a plain Python float. ModelEMA would smooth a tensor
+        # buffer and leave residual feedback after the exact-off boundary.
+        self.distribution_feedback_scale = 1.0
         self.cumulative = True
         self.preliminary_box = True
         self.integral = Integral(REG_MAX, torch.tensor([UP]), torch.tensor([REG_SCALE]))
@@ -243,6 +246,22 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.preliminary_box = True
         if not hasattr(self, "distribution_feedback"):
             self.distribution_feedback = None
+        if not hasattr(self, "distribution_feedback_scale"):
+            self.distribution_feedback_scale = 1.0
+
+    def set_distribution_feedback_scale(self, value: float) -> None:
+        """Set the exact adapter multiplier without registering EMA state."""
+
+        value = float(value)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ValueError("distribution feedback scale must be finite and in [0, 1]")
+        self.distribution_feedback_scale = value
+
+    def freeze_distribution_feedback(self) -> None:
+        """Freeze only the training-time DCF adapter parameters."""
+
+        if self.distribution_feedback is not None:
+            self.distribution_feedback.requires_grad_(False)
 
     @classmethod
     def from_stock(
@@ -326,11 +345,16 @@ class FDRDeformableTransformerDecoder(nn.Module):
             if initial_reference is None:
                 raise RuntimeError("preliminary FDR reference was not initialized")
             regression_input = output + output_detach
-            if index > 0 and self.distribution_feedback is not None:
+            if (
+                index > 0
+                and self.distribution_feedback is not None
+                and self.distribution_feedback_scale != 0.0
+            ):
                 if not isinstance(cumulative_corners, Tensor):
                     raise RuntimeError("DCF requires a preceding cumulative distribution")
-                regression_input = regression_input + self.distribution_feedback(
-                    cumulative_corners
+                regression_input = regression_input + (
+                    self.distribution_feedback_scale
+                    * self.distribution_feedback(cumulative_corners)
                 )
             delta_corners = bbox_head[index](regression_input)
             cumulative_corners = (
