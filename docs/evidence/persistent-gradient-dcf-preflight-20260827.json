@@ -1,0 +1,16 @@
+{
+  "design_commit": "29da6e69",
+  "formal_epochs": 100,
+  "implementation_head_before_evidence": "010066f9f277824ff75208da0c2dedf8c0ff1ceb",
+  "initial_state_sha256": "51aab2eb3fb7d123501c69c7b8dc90ff3ea0b9344a108edeef2c7d6dcdbb742d",
+  "method": "persistent_gradient_dcf_fdr",
+  "scale_all_epochs": 1.0,
+  "trainable_all_epochs": true,
+  "transient_controls_present": false,
+  "verification": {
+    "config_equivalent_to_transient_epochs_1_66": true,
+    "focused_tests_passed": true,
+    "private_gradient_partition_verified": true,
+    "regression_tests": "116 passed"
+  }
+}
