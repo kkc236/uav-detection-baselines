@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 from torch import nn
+import yaml
 
 from scripts import train_dcf_fdr as launcher
+from scripts import train_persistent_gradient_dcf_fdr as persistent_gradient
 from scripts import train_transient_dcf_fdr as transient
 from scripts.train_rtdetr_fdr import FORMAL_EPOCHS, FROZEN_SETTINGS
 from src.fdr_head import (
@@ -132,3 +134,45 @@ def test_pre75_epoch_does_not_reset_best_and_records_frozen_decay(
     assert row["frozen"] is True
     assert 0.0 < row["scale"] < 1.0
     assert row["checkpoint_eligible"] is False
+
+
+def test_persistent_gradient_launcher_binds_all_on_formal100(tmp_path: Path) -> None:
+    settings = persistent_gradient.build_settings(
+        data_yaml=tmp_path / "data.yaml", output_root=tmp_path / "runs"
+    )
+    assert Path(settings["model"]).name == (
+        "rtdetr-l-persistent-gradient-dcf-fdr.yaml"
+    )
+    assert settings["epochs"] == 100
+    assert settings["seed"] == 0
+    assert settings["save_period"] == -1
+    assert "resume" not in settings
+    assert "resume" not in persistent_gradient.build_parser().format_help()
+
+
+def test_persistent_gradient_config_matches_transient_epoch1_to66() -> None:
+    root = Path(__file__).resolve().parents[1]
+    persistent_cfg = yaml.safe_load(
+        (
+            root / "configs/rtdetr-l-persistent-gradient-dcf-fdr.yaml"
+        ).read_text()
+    )
+    transient_cfg = yaml.safe_load(
+        (root / "configs/rtdetr-l-transient-dcf-fdr.yaml").read_text()
+    )
+    assert persistent_cfg == transient_cfg
+
+
+def test_persistent_authority_excludes_every_transient_behavior() -> None:
+    authority = persistent_gradient.build_method_record()
+    assert authority == {
+        "kind": "persistent_gradient_dcf_v1",
+        "scale": "1.0_all_epochs",
+        "trainable": "all_epochs",
+        "checkpoint_eligible_from_epoch": 1,
+        "resume_policy": "restart_from_epoch_0",
+    }
+    source = Path(persistent_gradient.__file__).read_text(encoding="utf-8")
+    assert "configure_transient_epoch" not in source
+    assert "freeze_distribution_feedback" not in source
+    assert "best_fitness = None" not in source
