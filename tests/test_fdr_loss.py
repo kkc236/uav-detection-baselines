@@ -12,6 +12,7 @@ from src.fdr_loss import (
     FDRDetectionLoss,
     adjacent_bin_fgl,
     edge_adaptive_fgl_weights,
+    layerwise_reliability_shrinkage,
     stock_loss_subtotal,
 )
 
@@ -74,6 +75,114 @@ class CountingMatcher(nn.Module):
     def forward(self, *args, **kwargs):
         self.calls += 1
         return [(source.clone(), target.clone()) for source, target in self.matches]
+
+
+def test_lrs_disabled_and_final_layer_are_exact_legacy_paths() -> None:
+    quality = torch.tensor([0.0, 0.2, 0.8, 1.0], requires_grad=True)
+    batch_indices = torch.tensor([0, 0, 1, 1])
+
+    disabled = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.0,
+    )
+    final = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=5,
+        num_layers=6,
+        alpha0=0.25,
+    )
+
+    torch.testing.assert_close(disabled, quality.detach(), rtol=0, atol=0)
+    torch.testing.assert_close(final, quality.detach(), rtol=0, atol=0)
+    assert disabled.dtype == quality.dtype
+    assert final.dtype == quality.dtype
+    assert disabled.requires_grad is False
+    assert final.requires_grad is False
+
+
+def test_lrs_conserves_each_image_sum_and_shrinks_within_image_variance() -> None:
+    quality = torch.tensor([0.0, 0.2, 0.8, 0.4, 1.0], dtype=torch.float16)
+    batch_indices = torch.tensor([0, 0, 0, 1, 1])
+
+    weights = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.25,
+    )
+
+    assert weights.dtype == torch.float32
+    for batch_index in (0, 1):
+        mask = batch_indices == batch_index
+        torch.testing.assert_close(
+            weights[mask].sum(),
+            quality[mask].float().sum(),
+            rtol=0,
+            atol=2e-6,
+        )
+        assert weights[mask].var(unbiased=False) < quality[mask].float().var(
+            unbiased=False
+        )
+        assert torch.equal(
+            torch.argsort(weights[mask]), torch.argsort(quality[mask].float())
+        )
+
+
+def test_lrs_never_mixes_images_and_handles_empty_or_singleton_groups() -> None:
+    quality = torch.tensor([0.0, 1.0, 0.25])
+    batch_indices = torch.tensor([0, 0, 1])
+    weights = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=2,
+        num_layers=6,
+        alpha0=0.25,
+    )
+
+    assert weights[0] < weights[1]
+    torch.testing.assert_close(weights[2], quality[2], rtol=0, atol=0)
+    empty = layerwise_reliability_shrinkage(
+        quality[:0],
+        batch_indices[:0],
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.25,
+    )
+    assert empty.shape == quality[:0].shape
+    assert torch.isfinite(empty).all()
+
+
+@pytest.mark.parametrize(
+    ("layer_index", "num_layers", "alpha0", "batch_indices", "message"),
+    [
+        (-1, 6, 0.25, torch.tensor([0, 0]), "layer_index"),
+        (6, 6, 0.25, torch.tensor([0, 0]), "layer_index"),
+        (0, 1, 0.25, torch.tensor([0, 0]), "num_layers"),
+        (0, 6, -0.1, torch.tensor([0, 0]), "alpha0"),
+        (0, 6, 1.0, torch.tensor([0, 0]), "alpha0"),
+        (0, 6, 0.25, torch.tensor([0]), "batch_indices"),
+    ],
+)
+def test_lrs_rejects_invalid_contracts(
+    layer_index: int,
+    num_layers: int,
+    alpha0: float,
+    batch_indices: torch.Tensor,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        layerwise_reliability_shrinkage(
+            torch.tensor([0.1, 0.9]),
+            batch_indices,
+            layer_index=layer_index,
+            num_layers=num_layers,
+            alpha0=alpha0,
+        )
 
 
 def test_fgl_zero_preserves_every_stock_key_value_and_stock_subtotal_exact() -> None:
