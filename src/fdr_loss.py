@@ -8,6 +8,7 @@ FGL and optional preliminary-box localization supervision.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -51,6 +52,47 @@ def stock_loss_subtotal(losses: Mapping[str, Tensor]) -> Tensor:
     for value in values[1:]:
         total = total + value
     return total
+
+
+def layerwise_reliability_shrinkage(
+    matched_iou: Tensor,
+    batch_indices: Tensor,
+    *,
+    layer_index: int,
+    num_layers: int,
+    alpha0: float,
+) -> Tensor:
+    """Shrink detached IoU reliability toward its same-image layer mean."""
+
+    if matched_iou.ndim != 1:
+        raise ValueError("matched_iou must be one-dimensional")
+    if batch_indices.ndim != 1 or batch_indices.shape != matched_iou.shape:
+        raise ValueError("batch_indices must match the one-dimensional IoU shape")
+    if num_layers < 2:
+        raise ValueError("num_layers must be at least two")
+    if layer_index < 0 or layer_index >= num_layers:
+        raise ValueError("layer_index must identify an existing decoder layer")
+    if not math.isfinite(alpha0) or alpha0 < 0.0 or alpha0 >= 1.0:
+        raise ValueError("alpha0 must satisfy 0 <= alpha0 < 1")
+    if not matched_iou.is_floating_point():
+        raise ValueError("matched_iou must be floating point")
+
+    quality = matched_iou.detach()
+    if alpha0 == 0.0 or layer_index == num_layers - 1:
+        return quality
+
+    quality_fp32 = quality.float()
+    if quality_fp32.numel() == 0:
+        return quality_fp32
+    alpha = float(alpha0) * (1.0 - float(layer_index) / float(num_layers - 1))
+    weights = quality_fp32.clone()
+    for batch_index in torch.unique(batch_indices):
+        mask = batch_indices == batch_index
+        if int(mask.sum().item()) <= 1:
+            continue
+        image_quality = quality_fp32[mask]
+        weights[mask] = (1.0 - alpha) * image_quality + alpha * image_quality.mean()
+    return weights
 
 
 def edge_adaptive_fgl_weights(
@@ -461,5 +503,6 @@ __all__ = [
     "MatchIndices",
     "adjacent_bin_fgl",
     "edge_adaptive_fgl_weights",
+    "layerwise_reliability_shrinkage",
     "stock_loss_subtotal",
 ]
