@@ -61,8 +61,9 @@ def layerwise_reliability_shrinkage(
     layer_index: int,
     num_layers: int,
     alpha0: float,
+    eligible_mask: Tensor | None = None,
 ) -> Tensor:
-    """Shrink detached IoU reliability toward its same-image layer mean."""
+    """Shrink eligible detached IoUs toward their same-image layer mean."""
 
     if matched_iou.ndim != 1:
         raise ValueError("matched_iou must be one-dimensional")
@@ -76,6 +77,15 @@ def layerwise_reliability_shrinkage(
         raise ValueError("alpha0 must satisfy 0 <= alpha0 < 1")
     if not matched_iou.is_floating_point():
         raise ValueError("matched_iou must be floating point")
+    batch_indices = batch_indices.detach().to(device=matched_iou.device)
+    if eligible_mask is not None:
+        if (
+            eligible_mask.dtype != torch.bool
+            or eligible_mask.ndim != 1
+            or eligible_mask.shape != matched_iou.shape
+        ):
+            raise ValueError("eligible_mask must be boolean and match matched_iou")
+        eligible_mask = eligible_mask.to(device=matched_iou.device)
 
     quality = matched_iou.detach()
     if alpha0 == 0.0 or layer_index == num_layers - 1:
@@ -86,13 +96,45 @@ def layerwise_reliability_shrinkage(
         return quality_fp32
     alpha = float(alpha0) * (1.0 - float(layer_index) / float(num_layers - 1))
     weights = quality_fp32.clone()
+    eligible = (
+        torch.ones_like(batch_indices, dtype=torch.bool)
+        if eligible_mask is None
+        else eligible_mask
+    )
     for batch_index in torch.unique(batch_indices):
-        mask = batch_indices == batch_index
-        if int(mask.sum().item()) <= 1:
+        mask = (batch_indices == batch_index) & eligible
+        group_indices = torch.nonzero(mask, as_tuple=False).flatten()
+        if int(group_indices.numel()) <= 1:
             continue
-        image_quality = quality_fp32[mask]
-        weights[mask] = (1.0 - alpha) * image_quality + alpha * image_quality.mean()
+        image_quality = quality_fp32[group_indices]
+        image_weights = (
+            (1.0 - alpha) * image_quality + alpha * image_quality.mean()
+        )
+        correction_index = int(torch.argmax(image_weights))
+        for _ in range(2):
+            residual = image_quality.sum() - image_weights.sum()
+            image_weights[correction_index] += residual
+        weights[group_indices] = image_weights
+        image_indices = torch.nonzero(
+            batch_indices == batch_index, as_tuple=False
+        ).flatten()
+        global_correction_index = group_indices[correction_index]
+        for _ in range(2):
+            residual = (
+                quality_fp32[image_indices].double().sum()
+                - weights[image_indices].double().sum()
+            )
+            weights[global_correction_index] += residual.to(dtype=weights.dtype)
     return weights
+
+
+def representable_fgl_targets(target_indices: Tensor) -> Tensor:
+    """Select boxes whose four adjacent-bin targets avoid both boundaries."""
+
+    if target_indices.ndim != 1 or target_indices.numel() % 4:
+        raise ValueError("target_indices must contain four flattened box edges")
+    box_edges = target_indices.detach().reshape(-1, 4)
+    return (box_edges > 0.0).all(dim=1) & (box_edges < REG_MAX - 1).all(dim=1)
 
 
 def edge_adaptive_fgl_weights(
@@ -306,6 +348,7 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                 layer_index=layer_index,
                 num_layers=num_layers,
                 alpha0=self.reliability_shrinkage_alpha,
+                eligible_mask=representable_fgl_targets(target_indices),
             )
         edge_iou = matched_iou.repeat_interleave(4)
         if self.edge_adaptive_fgl:
@@ -535,5 +578,6 @@ __all__ = [
     "adjacent_bin_fgl",
     "edge_adaptive_fgl_weights",
     "layerwise_reliability_shrinkage",
+    "representable_fgl_targets",
     "stock_loss_subtotal",
 ]

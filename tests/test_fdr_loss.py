@@ -13,6 +13,7 @@ from src.fdr_loss import (
     adjacent_bin_fgl,
     edge_adaptive_fgl_weights,
     layerwise_reliability_shrinkage,
+    representable_fgl_targets,
     stock_loss_subtotal,
 )
 
@@ -185,6 +186,38 @@ def test_lrs_never_mixes_images_and_handles_empty_or_singleton_groups() -> None:
     assert torch.isfinite(empty).all()
 
 
+def test_lrs_representability_mask_preserves_excluded_weights_exactly() -> None:
+    quality = torch.tensor([0.0, 0.2, 0.8, 1.0])
+    batch_indices = torch.zeros(4, dtype=torch.long)
+    eligible = torch.tensor([False, True, True, False])
+
+    weights = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.25,
+        eligible_mask=eligible,
+    )
+
+    torch.testing.assert_close(weights[~eligible], quality[~eligible], rtol=0, atol=0)
+    torch.testing.assert_close(
+        weights[eligible].sum(), quality[eligible].sum(), rtol=0, atol=2e-6
+    )
+    assert weights[1] > quality[1]
+    assert weights[2] < quality[2]
+
+
+def test_representable_fgl_targets_exclude_any_boundary_edge() -> None:
+    target_indices = torch.tensor(
+        [[0.0, 1.0, 2.0, 3.0], [1.0, 2.0, 30.0, 30.9]]
+    )
+
+    mask = representable_fgl_targets(target_indices.reshape(-1))
+
+    assert torch.equal(mask, torch.tensor([False, True]))
+
+
 @pytest.mark.parametrize(
     ("layer_index", "num_layers", "alpha0", "batch_indices", "message"),
     [
@@ -211,6 +244,58 @@ def test_lrs_rejects_invalid_contracts(
             num_layers=num_layers,
             alpha0=alpha0,
         )
+
+
+def test_lrs_rejects_a_mismatched_eligibility_mask() -> None:
+    with pytest.raises(ValueError, match="eligible_mask"):
+        layerwise_reliability_shrinkage(
+            torch.tensor([0.1, 0.9]),
+            torch.tensor([0, 0]),
+            layer_index=0,
+            num_layers=6,
+            alpha0=0.25,
+            eligible_mask=torch.tensor([True]),
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_lrs_accepts_stock_cpu_match_indices_for_cuda_quality() -> None:
+    quality = torch.tensor([0.1, 0.9], device="cuda:0")
+    weights = layerwise_reliability_shrinkage(
+        quality,
+        torch.tensor([0, 0]),
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.25,
+        eligible_mask=torch.tensor([True, True], device="cuda:0"),
+    )
+
+    assert weights.device == quality.device
+    torch.testing.assert_close(weights.sum(), quality.sum(), rtol=0, atol=2e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_lrs_conserves_large_mixed_cuda_groups_within_gate_tolerance() -> None:
+    quality = torch.rand(300, generator=torch.Generator().manual_seed(17)).cuda()
+    batch_indices = torch.cat(
+        (torch.zeros(150, dtype=torch.long), torch.ones(150, dtype=torch.long))
+    )
+    eligible = torch.arange(300, device="cuda:0") % 5 != 0
+
+    weights = layerwise_reliability_shrinkage(
+        quality,
+        batch_indices,
+        layer_index=0,
+        num_layers=6,
+        alpha0=0.25,
+        eligible_mask=eligible,
+    )
+
+    cuda_batch_indices = batch_indices.cuda()
+    for batch_index in (0, 1):
+        mask = cuda_batch_indices == batch_index
+        error = (weights[mask].double().sum() - quality[mask].double().sum()).abs()
+        assert float(error) <= 2e-6
 
 
 def test_fgl_zero_preserves_every_stock_key_value_and_stock_subtotal_exact() -> None:

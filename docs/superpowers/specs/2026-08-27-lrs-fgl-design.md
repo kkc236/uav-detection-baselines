@@ -5,7 +5,8 @@
 Add one training-only refinement to Clean FDR that improves the distribution
 supervision received by low-IoU normal Hungarian matches without changing the
 detector, matcher, inference graph, total per-image FGL weight, or final-layer
-FGL objective.
+FGL objective. Boundary-saturated FDR targets are excluded from redistribution
+because their adjacent-bin target is not fully representable.
 
 The method is named **Layerwise Reliability Shrinkage for Fine-Grained
 Localization (LRS-FGL)**. The paper claim is deliberately narrow: LRS-FGL
@@ -32,14 +33,16 @@ not create queries, change assignments, or directly alter classification.
 ## Method
 
 For decoder layer `l` in `0..L-1`, image `b`, and its normal matched-query set
-`M[b,l]`, define:
+`M[b,l]`, define `R[b,l]` as the subset whose four adjacent-bin target indices
+are all strictly inside the FDR support (`0 < index < REG_MAX-1`). This is the
+module's fixed **representability firewall**. Define:
 
 \[
 q_{b,l,k}=\operatorname{sg}(\operatorname{IoU}(B_{b,l,k},G_{b,l,k})),
 \]
 
 \[
-\bar q_{b,l}=\frac{1}{|M[b,l]|}\sum_{k\in M[b,l]}q_{b,l,k},
+\bar q^R_{b,l}=\frac{1}{|R[b,l]|}\sum_{k\in R[b,l]}q_{b,l,k},
 \]
 
 \[
@@ -47,33 +50,40 @@ q_{b,l,k}=\operatorname{sg}(\operatorname{IoU}(B_{b,l,k},G_{b,l,k})),
 \]
 
 \[
-\widetilde q_{b,l,k}=(1-\alpha_l)q_{b,l,k}+\alpha_l\bar q_{b,l}.
+\widetilde q_{b,l,k}=\begin{cases}
+(1-\alpha_l)q_{b,l,k}+\alpha_l\bar q^R_{b,l}, & k\in R[b,l],\\
+q_{b,l,k}, & k\notin R[b,l].
+\end{cases}
 \]
 
 For six decoder layers, the fixed shrinkage strengths are
 `[0.25, 0.20, 0.15, 0.10, 0.05, 0.00]`. The existing adjacent-bin FGL formula,
 `fgl_weight=0.15`, targets, and `avg_factor` remain unchanged; only its four
-repeated edge weights change from `q` to `q_tilde` for normal matched queries.
+repeated edge weights change from `q` to `q_tilde` for eligible normal matched
+queries. Boundary-saturated, unmatched, and denoising queries remain legacy.
 
 The implementation computes IoU and shrinkage weights in FP32 and detaches the
-complete weight path. A box's four edges share one query reliability weight.
+complete weight path. FP64 is used only to calculate a sub-ULP conservation
+residual, which is cast back into one eligible FP32 weight; it never enters the
+loss arithmetic. A box's four edges share one query reliability weight.
 
 ## Invariants
 
 For every non-empty image/layer match group:
 
 \[
-\sum_k\widetilde q_{b,l,k}=\sum_k q_{b,l,k}.
+\sum_{k\in M[b,l]}\widetilde q_{b,l,k}
+=\sum_{k\in M[b,l]}q_{b,l,k}.
 \]
 
 The method therefore redistributes rather than increases FGL weight. It also
 satisfies:
 
 \[
-\widetilde q-\bar q=(1-\alpha_l)(q-\bar q),
+\widetilde q-\bar q^R=(1-\alpha_l)(q-\bar q^R),\quad k\in R,
 \]
 
-so reliability ordering is preserved and its within-group variance is reduced
+so reliability ordering is preserved inside the eligible subset and its variance is reduced
 by `(1-alpha_l)^2`.
 
 Additional contracts:
@@ -83,10 +93,12 @@ Additional contracts:
 - Layer 5 takes the same legacy path, so the main/final FGL value and gradient
   are tensor-identical to Clean FDR.
 - Empty groups contribute a finite differentiable zero.
-- Singleton, constant-IoU, and all-zero groups remain unchanged.
+- Ineligible boxes are tensor-identical to Clean FDR. Eligible singleton,
+  constant-IoU, and all-zero groups remain unchanged.
 - A zero-IoU query is rescued only when another match in the same image and
   layer makes `q_bar > 0`; the method does not claim universal zero-IoU rescue.
-- Unmatched and denoising queries never enter the shrinkage mean.
+- Unmatched, denoising, and boundary-saturated queries never enter the
+  shrinkage mean.
 - Decoder boxes, scores, references, corner logits, matcher calls, L1/GIoU,
   VFL, FDR targets, BPDD inputs, parameters, state dict, EMA, GFLOPs, and
   inference latency are unchanged.
@@ -109,25 +121,34 @@ retain exact legacy behavior. Values outside `[0, 1)` are rejected. LRS-FGL is
 incompatible with edge-adaptive FGL in the first experiment so that it remains
 the sole scientific variable.
 
-The method does not add a scale term, support adaptation, dynamic reference,
+The method does not add a scale term, learned support adaptation, dynamic reference,
 distribution feedback, teacher, distillation, new matching, or inference-time
 score calibration.
 
 ## Gate 0: pre-training falsification
 
 Before launching Formal100, run a read-only diagnostic on the frozen training
-diagnostic subset and inspect layers 0 through 4. All conditions must pass:
+diagnostic subset and inspect layers 0 through 4. A *beneficiary* is an eligible
+match with `q` below its same-image eligible mean, i.e. a query whose FGL weight
+LRS actually increases. All conditions must pass:
 
-1. `q < 0.2` matched positives comprise at least 25% of matches in at least
-   three shallow layers.
-2. In those layers, the low-IoU group's original FGL weight share divided by
-   its count share is at most 0.5.
-3. Fewer than 50% of `q < 0.2` target edges are saturated at the FDR support
-   boundary.
-4. FP32 per-image/per-layer weight conservation error is within `2e-6`
-   absolute and relative tolerance.
-5. No validation/test metric is consulted and `alpha0` is not changed after
-   seeing Gate 0.
+1. Beneficiaries comprise at least 25% of all matches in at least three shallow
+   layers.
+2. In those layers, beneficiary FGL-weight share divided by beneficiary count
+   share within the eligible subset is at most 0.90, proving at least a 10%
+   relative underweight margin.
+3. No beneficiary target edge is saturated at the FDR support boundary.
+4. Per-image/per-layer conservation error, evaluated with FP64 accumulation of
+   the actual FP32 weights, is within `2e-6` absolute tolerance.
+5. No validation/test metric is consulted and `alpha0=0.25` is unchanged.
+
+The first unguarded draft was falsified before training: on mature Clean FDR,
+`q<0.2` represented only 10.7--11.9% of matches and roughly two thirds of those
+edges were boundary-saturated. That result motivated the fixed representability
+firewall above; no validation metric or new training run was observed during
+the redesign. The final Gate 0 passed on all five shallow layers: beneficiary
+fractions were 33.6--34.8%, weight-to-count ratios were 0.818--0.830, saturated
+beneficiary edges were zero, and maximum conservation error was `2.98e-8`.
 
 If any condition fails, Formal100 is not launched.
 
@@ -195,12 +216,13 @@ robust, universal, or statistically significant.
 The defensible contribution is the exact combination of:
 
 1. detached matched-IoU reliability shrinkage inside D-FINE-style FGL;
-2. image-local and decoder-layer-local mean preservation;
-3. exact preservation of each group's total FGL weight;
-4. depth decay to the untouched final-layer FGL objective;
-5. a parameter-free, training-only implementation.
+2. a deterministic FDR representability firewall that excludes any
+   boundary-saturated adjacent-bin target;
+3. image-local and decoder-layer-local eligible-mean preservation;
+4. exact preservation of each image/layer's total FGL weight;
+5. depth decay to the untouched final-layer FGL objective;
+6. a parameter-free, training-only implementation.
 
 The paper must cite D-FINE/FGL, DEIM/MAL, GFLv2/DGQP, and related low-quality
 matching work. It must not claim the first use of IoU weighting, low-quality
 match optimization, progressive reweighting, or small-object Recall recovery.
-

@@ -63,6 +63,7 @@ def build_method_record() -> dict[str, object]:
         "schedule": [0.25, 0.20, 0.15, 0.10, 0.05, 0.0],
         "scope": "normal_decoder_fgl_only",
         "grouping": "same_image_same_layer",
+        "eligibility": "all_four_target_edges_interior",
         "resume_policy": "restart_from_epoch_0",
     }
 

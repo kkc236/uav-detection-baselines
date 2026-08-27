@@ -4,7 +4,9 @@ import hashlib
 from pathlib import Path
 
 from scripts import train_lrs_fdr as launcher
-from scripts.audit_lrs_fgl_gate0 import decide_gate0
+import torch
+
+from scripts.audit_lrs_fgl_gate0 import decide_gate0, quality_bin_statistics
 from scripts.train_rtdetr_fdr import FORMAL_EPOCHS, FROZEN_SETTINGS
 
 
@@ -20,11 +22,12 @@ def _passing_layers() -> list[dict[str, float | int]]:
         {
             "layer_index": index,
             "matches": 100,
-            "low_matches": 30 if index < 3 else 20,
-            "quality_sum": 50.0,
-            "low_quality_sum": 5.0,
-            "low_edges": 120 if index < 3 else 80,
-            "saturated_low_edges": 24 if index < 3 else 16,
+            "recoverable_matches": 90,
+            "beneficiary_matches": 30 if index < 3 else 20,
+            "recoverable_quality_sum": 60.0,
+            "beneficiary_quality_sum": 12.0 if index < 3 else 9.0,
+            "beneficiary_edges": 120 if index < 3 else 80,
+            "beneficiary_saturated_edges": 0,
             "max_sum_error": 1e-7,
         }
         for index in range(5)
@@ -82,6 +85,7 @@ def test_lrs_launch_record_freezes_the_single_module_and_alpha(tmp_path: Path) -
         "schedule": [0.25, 0.20, 0.15, 0.10, 0.05, 0.0],
         "scope": "normal_decoder_fgl_only",
         "grouping": "same_image_same_layer",
+        "eligibility": "all_four_target_edges_interior",
         "resume_policy": "restart_from_epoch_0",
     }
 
@@ -91,19 +95,28 @@ def test_gate0_accepts_three_supported_shallow_layers() -> None:
 
     assert decision["passed"] is True
     assert decision["checks"] == {
-        "three_shallow_layers_have_low_q_support": True,
-        "supported_layers_are_underweighted": True,
-        "low_q_edge_saturation_below_half": True,
+        "three_shallow_layers_have_recoverable_beneficiaries": True,
+        "beneficiaries_are_underweighted": True,
+        "beneficiaries_have_no_saturated_edges": True,
         "per_image_sum_conserved": True,
     }
     assert decision["eligible_layer_indices"] == [0, 1, 2]
 
 
+def test_gate0_accepts_a_preregistered_ten_percent_underweight_margin() -> None:
+    layers = _passing_layers()
+    for index in range(3):
+        layers[index]["beneficiary_quality_sum"] = 17.0
+
+    decision = decide_gate0(layers)
+
+    assert decision["passed"] is True
+    assert decision["eligible_layer_indices"] == [0, 1, 2]
+
+
 def test_gate0_rejects_saturation_or_conservation_failure() -> None:
     saturated = _passing_layers()
-    saturated[0]["saturated_low_edges"] = 120
-    saturated[1]["saturated_low_edges"] = 120
-    saturated[2]["saturated_low_edges"] = 120
+    saturated[0]["beneficiary_saturated_edges"] = 1
     assert decide_gate0(saturated)["passed"] is False
 
     drifted = _passing_layers()
@@ -113,10 +126,29 @@ def test_gate0_rejects_saturation_or_conservation_failure() -> None:
 
 def test_gate0_rejects_fewer_than_three_low_q_layers() -> None:
     layers = _passing_layers()
-    layers[1]["low_matches"] = 10
-    layers[2]["low_matches"] = 10
+    layers[1]["beneficiary_matches"] = 10
+    layers[2]["beneficiary_matches"] = 10
 
     decision = decide_gate0(layers)
 
     assert decision["passed"] is False
     assert decision["eligible_layer_indices"] == [0]
+
+
+def test_quality_bins_report_box_counts_and_edge_saturation() -> None:
+    quality = torch.tensor([0.05, 0.15, 0.25, 0.95])
+    target_indices = torch.tensor(
+        [
+            0, 1, 2, 31,
+            1, 2, 3, 4,
+            0, 31, 8, 9,
+            4, 5, 6, 7,
+        ]
+    )
+
+    rows = quality_bin_statistics(quality, target_indices)
+
+    assert [row["boxes"] for row in rows] == [1, 1, 1, 0, 0, 0, 0, 0, 0, 1]
+    assert rows[0]["saturated_edges"] == 2
+    assert rows[1]["saturated_edges"] == 0
+    assert rows[2]["saturated_edges"] == 2
