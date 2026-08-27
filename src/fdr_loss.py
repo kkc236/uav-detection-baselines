@@ -170,15 +170,27 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         supervise_pre_boxes: bool = True,
         supervise_dn_fdr: bool = True,
         edge_adaptive_fgl: bool = False,
+        reliability_shrinkage_alpha: float = 0.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         if fgl_weight < 0:
             raise ValueError("fgl_weight must be non-negative")
+        if (
+            not math.isfinite(reliability_shrinkage_alpha)
+            or reliability_shrinkage_alpha < 0.0
+            or reliability_shrinkage_alpha >= 1.0
+        ):
+            raise ValueError(
+                "reliability_shrinkage_alpha must satisfy 0 <= alpha < 1"
+            )
+        if edge_adaptive_fgl and reliability_shrinkage_alpha > 0.0:
+            raise ValueError("edge-adaptive FGL and LRS are mutually exclusive")
         self.fgl_weight = float(fgl_weight)
         self.supervise_pre_boxes = bool(supervise_pre_boxes)
         self.supervise_dn_fdr = bool(supervise_dn_fdr)
         self.edge_adaptive_fgl = bool(edge_adaptive_fgl)
+        self.reliability_shrinkage_alpha = float(reliability_shrinkage_alpha)
         self.stock_match_calls = 0
         self.fgl_extra_match_calls = 0
         self._normal_assignment_queue: list[MatchIndices] | None = None
@@ -258,6 +270,10 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         pre_boxes: Tensor,
         gt_bboxes: Tensor,
         matches: MatchIndices,
+        *,
+        layer_index: int,
+        num_layers: int,
+        apply_reliability_shrinkage: bool,
     ) -> Tensor:
         predicted_index, target_index = self._get_index(matches)
         if target_index.numel() == 0:
@@ -279,6 +295,18 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
         matched_iou = bbox_iou(
             matched_boxes.detach(), matched_targets_cxcywh, xywh=True
         ).squeeze(-1)
+        if (
+            apply_reliability_shrinkage
+            and self.reliability_shrinkage_alpha > 0.0
+            and num_layers > 1
+        ):
+            matched_iou = layerwise_reliability_shrinkage(
+                matched_iou,
+                predicted_index[0],
+                layer_index=layer_index,
+                num_layers=num_layers,
+                alpha0=self.reliability_shrinkage_alpha,
+            )
         edge_iou = matched_iou.repeat_interleave(4)
         if self.edge_adaptive_fgl:
             edge_iou = edge_adaptive_fgl_weights(
@@ -327,6 +355,9 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
                 pre_boxes,
                 gt_bboxes,
                 assignments[layer],
+                layer_index=layer,
+                num_layers=int(pred_bboxes.shape[0]),
+                apply_reliability_shrinkage=postfix == "",
             )
             for layer in range(pred_bboxes.shape[0])
         ]

@@ -262,6 +262,9 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
             edge_adaptive_fgl=bool(
                 self.fdr_loss_options.get("edge_adaptive_fgl", False)
             ),
+            reliability_shrinkage_alpha=float(
+                self.fdr_loss_options.get("reliability_shrinkage_alpha", 0.0)
+            ),
         )
 
     def loss(

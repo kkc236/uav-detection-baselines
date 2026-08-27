@@ -66,6 +66,34 @@ def _corner_logits(
     )
 
 
+def _two_positive_fgl_inputs() -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    list[tuple[torch.Tensor, torch.Tensor]],
+]:
+    targets = torch.tensor(
+        [[0.30, 0.30, 0.20, 0.20], [0.70, 0.70, 0.20, 0.20]],
+        dtype=torch.float32,
+    )
+    predictions = torch.tensor(
+        [
+            [
+                [0.30, 0.30, 0.20, 0.20],
+                [0.78, 0.78, 0.20, 0.20],
+            ],
+            [[0.50, 0.50, 0.10, 0.10], [0.50, 0.50, 0.10, 0.10]],
+        ],
+        dtype=torch.float32,
+    )
+    references = predictions.detach().clone()
+    matches = [
+        (torch.tensor([0, 1]), torch.tensor([0, 1])),
+        (torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)),
+    ]
+    return predictions, references, targets, matches
+
+
 class CountingMatcher(nn.Module):
     def __init__(self, matches: list[tuple[torch.Tensor, torch.Tensor]]) -> None:
         super().__init__()
@@ -351,9 +379,127 @@ def test_edge_adaptive_fgl_weights_prioritize_the_harder_edge() -> None:
 def test_fdr_criterion_declares_edge_adaptive_fgl_as_an_opt_in_contract() -> None:
     stock = FDRDetectionLoss(nc=3, use_vfl=True)
     ace = FDRDetectionLoss(nc=3, use_vfl=True, edge_adaptive_fgl=True)
+    lrs = FDRDetectionLoss(
+        nc=3, use_vfl=True, reliability_shrinkage_alpha=0.25
+    )
 
     assert stock.edge_adaptive_fgl is False
+    assert stock.reliability_shrinkage_alpha == 0.0
     assert ace.edge_adaptive_fgl is True
+    assert lrs.reliability_shrinkage_alpha == 0.25
+
+
+def test_lrs_and_edge_adaptive_fgl_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        FDRDetectionLoss(
+            nc=3,
+            use_vfl=True,
+            edge_adaptive_fgl=True,
+            reliability_shrinkage_alpha=0.25,
+        )
+
+
+def test_lrs_zero_matches_legacy_fgl_loss_and_gradient_exactly() -> None:
+    predictions, references, targets, matches = _two_positive_fgl_inputs()
+    base_logits = torch.randn((2, 2, 4 * 33), generator=torch.Generator().manual_seed(7))
+    legacy_logits = base_logits.detach().clone().requires_grad_(True)
+    disabled_logits = base_logits.detach().clone().requires_grad_(True)
+    legacy = FDRDetectionLoss(nc=3, use_vfl=True)
+    disabled = FDRDetectionLoss(
+        nc=3, use_vfl=True, reliability_shrinkage_alpha=0.0
+    )
+
+    legacy_loss = legacy._fgl_for_layer(
+        legacy_logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=0,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    disabled_loss = disabled._fgl_for_layer(
+        disabled_logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=0,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    legacy_loss.backward()
+    disabled_loss.backward()
+
+    torch.testing.assert_close(disabled_loss, legacy_loss, rtol=0, atol=0)
+    torch.testing.assert_close(
+        disabled_logits.grad, legacy_logits.grad, rtol=0, atol=0
+    )
+
+
+def test_lrs_changes_shallow_normal_fgl_but_not_final_layer_or_dn() -> None:
+    predictions, references, targets, matches = _two_positive_fgl_inputs()
+    logits = torch.randn((2, 2, 4 * 33), generator=torch.Generator().manual_seed(11))
+    clean = FDRDetectionLoss(nc=3, use_vfl=True)
+    lrs = FDRDetectionLoss(
+        nc=3, use_vfl=True, reliability_shrinkage_alpha=0.25
+    )
+
+    clean_shallow = clean._fgl_for_layer(
+        logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=0,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    lrs_shallow = lrs._fgl_for_layer(
+        logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=0,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    clean_final = clean._fgl_for_layer(
+        logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=5,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    lrs_final = lrs._fgl_for_layer(
+        logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=5,
+        num_layers=6,
+        apply_reliability_shrinkage=True,
+    )
+    lrs_dn = lrs._fgl_for_layer(
+        logits,
+        predictions,
+        references,
+        targets,
+        matches,
+        layer_index=0,
+        num_layers=6,
+        apply_reliability_shrinkage=False,
+    )
+
+    assert not torch.equal(lrs_shallow, clean_shallow)
+    torch.testing.assert_close(lrs_final, clean_final, rtol=0, atol=0)
+    torch.testing.assert_close(lrs_dn, clean_shallow, rtol=0, atol=0)
 
 
 def test_fgl_target_reference_is_detached_from_preliminary_box() -> None:

@@ -43,6 +43,7 @@ def _declarative_cfg(
     supervise_pre_boxes: bool = True,
     supervise_dn_fdr: bool = True,
     edge_adaptive_fgl: bool = False,
+    reliability_shrinkage_alpha: float = 0.0,
     distribution_feedback: bool = False,
 ) -> dict:
     cfg = deepcopy(yaml_model_load("rtdetr-l.yaml"))
@@ -72,6 +73,7 @@ def _declarative_cfg(
         "supervise_pre_boxes": supervise_pre_boxes,
         "supervise_dn_fdr": supervise_dn_fdr,
         "edge_adaptive_fgl": edge_adaptive_fgl,
+        "reliability_shrinkage_alpha": reliability_shrinkage_alpha,
     }
     return cfg
 
@@ -355,7 +357,7 @@ def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
             fgl_weight=0.0,
             supervise_pre_boxes=False,
             supervise_dn_fdr=False,
-            edge_adaptive_fgl=True,
+            reliability_shrinkage_alpha=0.25,
         ),
         nc=10,
         verbose=False,
@@ -364,7 +366,18 @@ def test_fdr_criterion_reads_loss_options_from_model_yaml() -> None:
     assert criterion.fgl_weight == 0.0
     assert criterion.supervise_pre_boxes is False
     assert criterion.supervise_dn_fdr is False
-    assert criterion.edge_adaptive_fgl is True
+    assert criterion.edge_adaptive_fgl is False
+    assert criterion.reliability_shrinkage_alpha == 0.25
+
+
+def test_lrs_config_is_clean_fdr_plus_one_loss_option() -> None:
+    clean = yaml_model_load(FDR_CONFIG_ROOT / "rtdetr-l-clean-fdr.yaml")
+    lrs = yaml_model_load(FDR_CONFIG_ROOT / "rtdetr-l-lrs-fdr.yaml")
+    lrs_loss = lrs["fdr_loss"].copy()
+
+    assert lrs_loss.pop("reliability_shrinkage_alpha") == 0.25
+    assert lrs_loss == clean["fdr_loss"]
+    assert lrs["head"] == clean["head"]
 
 
 @pytest.mark.parametrize(
