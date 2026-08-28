@@ -1,0 +1,103 @@
+{
+  "format_version": 1,
+  "status": "completed",
+  "verification_status": "ANALYZED",
+  "selection_rule": "maximize metrics/mAP50-95(B) independently per arm and report all metrics from that same row",
+  "protocol": {
+    "dataset": "VisDrone",
+    "epochs": 100,
+    "seed": 0,
+    "image_size": 640,
+    "batch": 8,
+    "optimizer": "MuSGD",
+    "initial_state_sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D",
+    "dataset_sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+  },
+  "lrs_fgl_authority": {
+    "source_commit": "9fa9078011d92cc23fc1f0eec06ff34983986ff0",
+    "source_tree_sha256": "2345E1B06301A1E1563163481691BEB00A15D4FDC5028AF4399A1ABA2AE8AE3E",
+    "config_sha256": "6225C4BBC6B67C3C364E23476FC12A078F2091D61223632468765EA260160C87",
+    "alpha0": 0.25,
+    "alpha_schedule": [0.25, 0.2, 0.15, 0.1, 0.05, 0.0]
+  },
+  "arms": {
+    "original_fdr": {
+      "completed_epochs": 100,
+      "best_epoch": 92,
+      "precision": 0.57064,
+      "recall": 0.49006,
+      "map50": 0.48473,
+      "map50_95": 0.29078,
+      "tail10_mean_map50_95": 0.289968,
+      "tail10_slope_per_epoch": -0.00003272727272727148,
+      "results_sha256": "DBF7B452A4578679F340E4FE5C0DEC0EC9EBF9C36AD3FEDD5A31DA824F0D0291"
+    },
+    "clean_fdr": {
+      "completed_epochs": 100,
+      "best_epoch": 88,
+      "precision": 0.58777,
+      "recall": 0.49849,
+      "map50": 0.4932,
+      "map50_95": 0.29696,
+      "tail10_mean_map50_95": 0.296102,
+      "tail10_slope_per_epoch": 0.000043030303030303676,
+      "results_sha256": "E4E13C2AB06FFABBF05087D026819D0A92DE6773304A8A8D580E21837DB8C283"
+    },
+    "clean_fdr_plus_lrs_fgl": {
+      "completed_epochs": 100,
+      "best_epoch": 84,
+      "precision": 0.5786,
+      "recall": 0.50141,
+      "map50": 0.49188,
+      "map50_95": 0.29703,
+      "tail10_mean_map50_95": 0.295253,
+      "tail10_slope_per_epoch": -0.0002432121212121212,
+      "results_sha256": "2927B93DF87F069148FC36FAADB00740F329172DA5634BC018F72B713A460FAE",
+      "best_checkpoint_sha256": "BA5CDFFE8E2A0E147CE0D6D30CCBD3A0D25E31A7DCF69F8B247D2A079B492DFFA",
+      "last_checkpoint_sha256": "5DDFDD172FF0043A0175C0AD00F38254EAA2F5A2D69D09074BA5892005B804334"
+    }
+  },
+  "deltas": {
+    "lrs_fgl_vs_original_fdr": {
+      "precision": 0.00796,
+      "recall": 0.01135,
+      "map50": 0.00715,
+      "map50_95": 0.00625,
+      "tail10_mean_map50_95": 0.005285
+    },
+    "lrs_fgl_vs_clean_fdr": {
+      "precision": -0.00917,
+      "recall": 0.00292,
+      "map50": -0.00132,
+      "map50_95": 0.00007,
+      "tail10_mean_map50_95": -0.000849
+    }
+  },
+  "runtime_health": {
+    "optimizer_evidence_rows": 10556,
+    "amp_steps_skipped": 0,
+    "nonfinite_gradient_rows": 0,
+    "lrs_fdr_gradient_norm_p99": 17.08077621459961,
+    "clean_fdr_gradient_norm_p99": 17.26584815979004,
+    "private_gradient_p99_below_twice_clean": true
+  },
+  "gate0": {
+    "passed": true,
+    "eligible_shallow_layers": [0, 1, 2, 3, 4],
+    "beneficiary_fraction_range": [0.33600844772967264, 0.3480464625131996],
+    "beneficiary_weight_to_count_ratio_range": [0.817875737960375, 0.8296984573747496],
+    "beneficiary_saturated_edges": 0,
+    "max_per_image_sum_error": 2.9802322387695312e-08
+  },
+  "decision": {
+    "strong_go": false,
+    "strong_map_threshold_passed": false,
+    "recall_threshold_passed": true,
+    "tail10_mean_over_clean_passed": false,
+    "weak_numeric_map_positive": true,
+    "ap75_gate": "UNMEASURED",
+    "tiny_ap_gate": "UNMEASURED",
+    "low_iou_next_layer_mechanism_gate": "UNMEASURED",
+    "verdict": "CAUTION: overall method is positive versus original FDR, but LRS-FGL is only a provisional weak internal-ablation positive versus Clean FDR"
+  }
+}

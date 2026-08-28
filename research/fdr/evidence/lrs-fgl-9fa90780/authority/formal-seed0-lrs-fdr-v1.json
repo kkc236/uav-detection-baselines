@@ -1,0 +1,84 @@
+{
+  "config": {
+    "path": "/data/uav/source/uav-detection-baselines-lrs-fgl-9fa90780/configs/rtdetr-l-lrs-fdr.yaml",
+    "sha256": "6225C4BBC6B67C3C364E23476FC12A078F2091D61223632468765EA260160C87"
+  },
+  "dataset": {
+    "file_count": 14038,
+    "sha256": "FD92E9FF4B3B58FCDD5A32F7E770FC3398E566B627DB0E188CB5FF9F3B7BBDAB"
+  },
+  "format_version": 1,
+  "initial_state": {
+    "path": "/data/uav/protocols/fdr-d97e1eb7/initial-state.pt",
+    "sha256": "51AAB2EB3FB7D123501C69C7B8DC90FF3EA0B9344A108EDEEF2C7D6DCDBB742D"
+  },
+  "lrs_fgl": {
+    "alpha0": 0.25,
+    "eligibility": "all_four_target_edges_interior",
+    "grouping": "same_image_same_layer",
+    "kind": "layerwise_reliability_shrinkage_v1",
+    "resume_policy": "restart_from_epoch_0",
+    "schedule": [
+      0.25,
+      0.2,
+      0.15,
+      0.1,
+      0.05,
+      0.0
+    ],
+    "scope": "normal_decoder_fgl_only"
+  },
+  "method": "lrs_fdr",
+  "settings": {
+    "amp": true,
+    "batch": 8,
+    "cache": false,
+    "close_mosaic": 10,
+    "copy_paste": 0.0,
+    "cos_lr": false,
+    "cutmix": 0.0,
+    "data": "/data/uav/runs/lrs-fdr-9fa90780/authority/data/formal-data.yaml",
+    "degrees": 0.0,
+    "deterministic": true,
+    "device": "0",
+    "epochs": 100,
+    "exist_ok": false,
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "imgsz": 640,
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "max_det": 300,
+    "mixup": 0.0,
+    "model": "/data/uav/source/uav-detection-baselines-lrs-fgl-9fa90780/configs/rtdetr-l-lrs-fdr.yaml",
+    "momentum": 0.937,
+    "mosaic": 1.0,
+    "name": "formal-seed0-lrs-fdr-v1",
+    "nbs": 64,
+    "nms": false,
+    "optimizer": "MuSGD",
+    "perspective": 0.0,
+    "plots": true,
+    "pretrained": false,
+    "project": "/data/uav/runs/lrs-fdr-9fa90780",
+    "save": true,
+    "save_period": -1,
+    "scale": 0.5,
+    "seed": 0,
+    "shear": 0.0,
+    "translate": 0.1,
+    "val": true,
+    "warmup_bias_lr": 0.0,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "weight_decay": 0.0005,
+    "workers": 8
+  },
+  "source": {
+    "git_commit": "9fa9078011d92cc23fc1f0eec06ff34983986ff0",
+    "tree_sha256": "2345E1B06301A1E1563163481691BEB00A15D4FDC5028AF4399A1ABA2AE8AE3E"
+  }
+}

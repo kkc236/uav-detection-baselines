@@ -1,0 +1,475 @@
+{
+  "checkpoint": {
+    "path": "/data/uav/runs/dcf-fdr-ec4e2a46-clean/formal-seed0-clean-fdr-v1/weights/best.pt",
+    "sha256": "87139A4AFBB85690A2B0EC48F382F902655FB58E20CE8E90C995DF3E1C236550"
+  },
+  "data_scope": "fixed_train10_only",
+  "decision": {
+    "beneficiary_edge_saturation": 0.0,
+    "checks": {
+      "beneficiaries_are_underweighted": true,
+      "beneficiaries_have_no_saturated_edges": true,
+      "per_image_sum_conserved": true,
+      "three_shallow_layers_have_recoverable_beneficiaries": true
+    },
+    "eligible_layer_indices": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "layers": [
+      {
+        "beneficiary_count_share": 0.43056825604180277,
+        "beneficiary_edges": 13184,
+        "beneficiary_fraction": 0.3480464625131996,
+        "beneficiary_matches": 3296,
+        "beneficiary_quality_sum": 2029.9301528930664,
+        "beneficiary_saturated_edges": 0,
+        "beneficiary_weight_share": 0.35215133015250116,
+        "beneficiary_weight_to_count_ratio": 0.817875737960375,
+        "layer_index": 0,
+        "matches": 9470,
+        "max_sum_error": 2.9802322387695312e-08,
+        "quality_bins": [
+          {
+            "boxes": 980,
+            "edges": 3920,
+            "lower": 0.0,
+            "saturated_edges": 2890,
+            "upper": 0.1
+          },
+          {
+            "boxes": 143,
+            "edges": 572,
+            "lower": 0.1,
+            "saturated_edges": 187,
+            "upper": 0.2
+          },
+          {
+            "boxes": 205,
+            "edges": 820,
+            "lower": 0.2,
+            "saturated_edges": 162,
+            "upper": 0.3
+          },
+          {
+            "boxes": 288,
+            "edges": 1152,
+            "lower": 0.3,
+            "saturated_edges": 161,
+            "upper": 0.4
+          },
+          {
+            "boxes": 469,
+            "edges": 1876,
+            "lower": 0.4,
+            "saturated_edges": 152,
+            "upper": 0.5
+          },
+          {
+            "boxes": 785,
+            "edges": 3140,
+            "lower": 0.5,
+            "saturated_edges": 135,
+            "upper": 0.6
+          },
+          {
+            "boxes": 1292,
+            "edges": 5168,
+            "lower": 0.6,
+            "saturated_edges": 107,
+            "upper": 0.7
+          },
+          {
+            "boxes": 1779,
+            "edges": 7116,
+            "lower": 0.7,
+            "saturated_edges": 61,
+            "upper": 0.8
+          },
+          {
+            "boxes": 2164,
+            "edges": 8656,
+            "lower": 0.8,
+            "saturated_edges": 27,
+            "upper": 0.9
+          },
+          {
+            "boxes": 1365,
+            "edges": 5460,
+            "lower": 0.9,
+            "saturated_edges": 5,
+            "upper": 1.0
+          }
+        ],
+        "recoverable_matches": 7655,
+        "recoverable_quality_sum": 5764.368835449219
+      },
+      {
+        "beneficiary_count_share": 0.42048588312541035,
+        "beneficiary_edges": 12808,
+        "beneficiary_fraction": 0.33812038014783524,
+        "beneficiary_matches": 3202,
+        "beneficiary_quality_sum": 1995.5864639282227,
+        "beneficiary_saturated_edges": 0,
+        "beneficiary_weight_share": 0.3443957725816853,
+        "beneficiary_weight_to_count_ratio": 0.8190424135570061,
+        "layer_index": 1,
+        "matches": 9470,
+        "max_sum_error": 2.9802322387695312e-08,
+        "quality_bins": [
+          {
+            "boxes": 953,
+            "edges": 3812,
+            "lower": 0.0,
+            "saturated_edges": 2788,
+            "upper": 0.1
+          },
+          {
+            "boxes": 154,
+            "edges": 616,
+            "lower": 0.1,
+            "saturated_edges": 209,
+            "upper": 0.2
+          },
+          {
+            "boxes": 188,
+            "edges": 752,
+            "lower": 0.2,
+            "saturated_edges": 174,
+            "upper": 0.3
+          },
+          {
+            "boxes": 272,
+            "edges": 1088,
+            "lower": 0.3,
+            "saturated_edges": 154,
+            "upper": 0.4
+          },
+          {
+            "boxes": 441,
+            "edges": 1764,
+            "lower": 0.4,
+            "saturated_edges": 154,
+            "upper": 0.5
+          },
+          {
+            "boxes": 771,
+            "edges": 3084,
+            "lower": 0.5,
+            "saturated_edges": 161,
+            "upper": 0.6
+          },
+          {
+            "boxes": 1197,
+            "edges": 4788,
+            "lower": 0.6,
+            "saturated_edges": 112,
+            "upper": 0.7
+          },
+          {
+            "boxes": 1836,
+            "edges": 7344,
+            "lower": 0.7,
+            "saturated_edges": 92,
+            "upper": 0.8
+          },
+          {
+            "boxes": 2189,
+            "edges": 8756,
+            "lower": 0.8,
+            "saturated_edges": 39,
+            "upper": 0.9
+          },
+          {
+            "boxes": 1469,
+            "edges": 5876,
+            "lower": 0.9,
+            "saturated_edges": 6,
+            "upper": 1.0
+          }
+        ],
+        "recoverable_matches": 7615,
+        "recoverable_quality_sum": 5794.4569091796875
+      },
+      {
+        "beneficiary_count_share": 0.4241424802110818,
+        "beneficiary_edges": 12860,
+        "beneficiary_fraction": 0.33949313621964095,
+        "beneficiary_matches": 3215,
+        "beneficiary_quality_sum": 2031.0721855163574,
+        "beneficiary_saturated_edges": 0,
+        "beneficiary_weight_share": 0.34983526985281205,
+        "beneficiary_weight_to_count_ratio": 0.8248060172579519,
+        "layer_index": 2,
+        "matches": 9470,
+        "max_sum_error": 2.9802322387695312e-08,
+        "quality_bins": [
+          {
+            "boxes": 928,
+            "edges": 3712,
+            "lower": 0.0,
+            "saturated_edges": 2756,
+            "upper": 0.1
+          },
+          {
+            "boxes": 139,
+            "edges": 556,
+            "lower": 0.1,
+            "saturated_edges": 198,
+            "upper": 0.2
+          },
+          {
+            "boxes": 197,
+            "edges": 788,
+            "lower": 0.2,
+            "saturated_edges": 209,
+            "upper": 0.3
+          },
+          {
+            "boxes": 250,
+            "edges": 1000,
+            "lower": 0.3,
+            "saturated_edges": 170,
+            "upper": 0.4
+          },
+          {
+            "boxes": 440,
+            "edges": 1760,
+            "lower": 0.4,
+            "saturated_edges": 177,
+            "upper": 0.5
+          },
+          {
+            "boxes": 731,
+            "edges": 2924,
+            "lower": 0.5,
+            "saturated_edges": 163,
+            "upper": 0.6
+          },
+          {
+            "boxes": 1204,
+            "edges": 4816,
+            "lower": 0.6,
+            "saturated_edges": 124,
+            "upper": 0.7
+          },
+          {
+            "boxes": 1794,
+            "edges": 7176,
+            "lower": 0.7,
+            "saturated_edges": 109,
+            "upper": 0.8
+          },
+          {
+            "boxes": 2270,
+            "edges": 9080,
+            "lower": 0.8,
+            "saturated_edges": 62,
+            "upper": 0.9
+          },
+          {
+            "boxes": 1517,
+            "edges": 6068,
+            "lower": 0.9,
+            "saturated_edges": 14,
+            "upper": 1.0
+          }
+        ],
+        "recoverable_matches": 7580,
+        "recoverable_quality_sum": 5805.795928955078
+      },
+      {
+        "beneficiary_count_share": 0.4223429631592897,
+        "beneficiary_edges": 12748,
+        "beneficiary_fraction": 0.3365364308342133,
+        "beneficiary_matches": 3187,
+        "beneficiary_quality_sum": 2033.4037857055664,
+        "beneficiary_saturated_edges": 0,
+        "beneficiary_weight_share": 0.35016352253579475,
+        "beneficiary_weight_to_count_ratio": 0.8290975654393182,
+        "layer_index": 3,
+        "matches": 9470,
+        "max_sum_error": 2.9802322387695312e-08,
+        "quality_bins": [
+          {
+            "boxes": 897,
+            "edges": 3588,
+            "lower": 0.0,
+            "saturated_edges": 2671,
+            "upper": 0.1
+          },
+          {
+            "boxes": 139,
+            "edges": 556,
+            "lower": 0.1,
+            "saturated_edges": 211,
+            "upper": 0.2
+          },
+          {
+            "boxes": 186,
+            "edges": 744,
+            "lower": 0.2,
+            "saturated_edges": 206,
+            "upper": 0.3
+          },
+          {
+            "boxes": 278,
+            "edges": 1112,
+            "lower": 0.3,
+            "saturated_edges": 199,
+            "upper": 0.4
+          },
+          {
+            "boxes": 389,
+            "edges": 1556,
+            "lower": 0.4,
+            "saturated_edges": 156,
+            "upper": 0.5
+          },
+          {
+            "boxes": 731,
+            "edges": 2924,
+            "lower": 0.5,
+            "saturated_edges": 197,
+            "upper": 0.6
+          },
+          {
+            "boxes": 1216,
+            "edges": 4864,
+            "lower": 0.6,
+            "saturated_edges": 165,
+            "upper": 0.7
+          },
+          {
+            "boxes": 1795,
+            "edges": 7180,
+            "lower": 0.7,
+            "saturated_edges": 114,
+            "upper": 0.8
+          },
+          {
+            "boxes": 2296,
+            "edges": 9184,
+            "lower": 0.8,
+            "saturated_edges": 65,
+            "upper": 0.9
+          },
+          {
+            "boxes": 1543,
+            "edges": 6172,
+            "lower": 0.9,
+            "saturated_edges": 13,
+            "upper": 1.0
+          }
+        ],
+        "recoverable_matches": 7546,
+        "recoverable_quality_sum": 5807.012023925781
+      },
+      {
+        "beneficiary_count_share": 0.42246415294742434,
+        "beneficiary_edges": 12728,
+        "beneficiary_fraction": 0.33600844772967264,
+        "beneficiary_matches": 3182,
+        "beneficiary_quality_sum": 2036.6563987731934,
+        "beneficiary_saturated_edges": 0,
+        "beneficiary_weight_share": 0.35051785599660823,
+        "beneficiary_weight_to_count_ratio": 0.8296984573747496,
+        "layer_index": 4,
+        "matches": 9470,
+        "max_sum_error": 2.9802322387695312e-08,
+        "quality_bins": [
+          {
+            "boxes": 880,
+            "edges": 3520,
+            "lower": 0.0,
+            "saturated_edges": 2649,
+            "upper": 0.1
+          },
+          {
+            "boxes": 133,
+            "edges": 532,
+            "lower": 0.1,
+            "saturated_edges": 201,
+            "upper": 0.2
+          },
+          {
+            "boxes": 200,
+            "edges": 800,
+            "lower": 0.2,
+            "saturated_edges": 233,
+            "upper": 0.3
+          },
+          {
+            "boxes": 257,
+            "edges": 1028,
+            "lower": 0.3,
+            "saturated_edges": 191,
+            "upper": 0.4
+          },
+          {
+            "boxes": 412,
+            "edges": 1648,
+            "lower": 0.4,
+            "saturated_edges": 191,
+            "upper": 0.5
+          },
+          {
+            "boxes": 675,
+            "edges": 2700,
+            "lower": 0.5,
+            "saturated_edges": 176,
+            "upper": 0.6
+          },
+          {
+            "boxes": 1217,
+            "edges": 4868,
+            "lower": 0.6,
+            "saturated_edges": 183,
+            "upper": 0.7
+          },
+          {
+            "boxes": 1816,
+            "edges": 7264,
+            "lower": 0.7,
+            "saturated_edges": 129,
+            "upper": 0.8
+          },
+          {
+            "boxes": 2307,
+            "edges": 9228,
+            "lower": 0.8,
+            "saturated_edges": 75,
+            "upper": 0.9
+          },
+          {
+            "boxes": 1573,
+            "edges": 6292,
+            "lower": 0.9,
+            "saturated_edges": 18,
+            "upper": 1.0
+          }
+        ],
+        "recoverable_matches": 7532,
+        "recoverable_quality_sum": 5810.421249389648
+      }
+    ],
+    "passed": true
+  },
+  "fixed_subset_sha256": "52660F55552FFD953E2EE26F55FD0A1CB14217DBBEA0F5F3B981C3514F8D93A0",
+  "formal100_eligible": true,
+  "format_version": 1,
+  "official_val_opened": false,
+  "purpose": "lrs_fgl_pretraining_signal_gate",
+  "runtime": {
+    "augment": false,
+    "batch": 8,
+    "batch_limit": 16,
+    "device": "cuda:0",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "imgsz": 640
+  },
+  "status": "passed"
+}
