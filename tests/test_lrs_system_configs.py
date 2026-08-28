@@ -29,6 +29,15 @@ LRS_LOSS = {
     "edge_adaptive_fgl": False,
     "reliability_shrinkage_alpha": 0.25,
 }
+EXPECTED_FIA_POST_P3 = [
+    [21, 1, "FIA", [256]],
+    [21, 1, "Conv", [256, 3, 2]],
+    [[23, 17], 1, "Concat", [1]],
+    [-1, 3, "RepC3", [256]],
+    [25, 1, "Conv", [256, 3, 2]],
+    [[26, 12], 1, "Concat", [1]],
+    [-1, 3, "RepC3", [256]],
+]
 
 
 def _load(path: Path) -> dict:
@@ -76,10 +85,12 @@ def test_fia_is_p3_only_in_h_and_i(base: dict) -> None:
         head = payload["head"]
 
         # Backbone has indices 0-9, so global model index 22 is head entry 12.
+        assert len(head) == 20
         assert head[:12] == base["head"][:12]
-        assert head[12] == [21, 1, "FIA", [256]]
-        assert head[13] == [21, 1, "Conv", [256, 3, 2]]
-        assert head[-1][0] == [22, 25, 28]
+        assert head[12:19] == EXPECTED_FIA_POST_P3
+        assert head[19][0] == [22, 25, 28]
+        assert head[19][1:] == base["head"][-1][1:]
+        assert head[19][2] == "FDRRTDETRDecoder"
         assert sum(layer[2] == "FIA" for layer in head) == 1
 
 
