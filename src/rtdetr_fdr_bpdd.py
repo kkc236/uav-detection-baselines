@@ -87,6 +87,9 @@ class FDRBPDDDetectionModel(FDRRTDETRDetectionModel):
             edge_adaptive_fgl=bool(
                 self.fdr_loss_options.get("edge_adaptive_fgl", False)
             ),
+            reliability_shrinkage_alpha=float(
+                self.fdr_loss_options.get("reliability_shrinkage_alpha", 0.0)
+            ),
             bpdd_options=self.bpdd_options,
         )
 
