@@ -29,6 +29,7 @@ from src.fdr_head import (
 from src.fdr_loss import FDRDetectionLoss
 from src.fdr_protocol import load_fdr_initial_state
 from src.frequency_cm import FrequencyCM
+from src.fia import FIA
 from src.ira import IRA
 from src.pr_ira import PRIRA
 from src.rtdetr_lpr import FixedPairedProtocolMixin
@@ -44,6 +45,7 @@ def register_fdr_module() -> None:
 
     ultralytics_tasks.FDRRTDETRDecoder = FDRRTDETRDecoder
     ultralytics_tasks.FrequencyCM = FrequencyCM
+    ultralytics_tasks.FIA = FIA
     ultralytics_tasks.IRA = IRA
     ultralytics_tasks.PRIRA = PRIRA
 
