@@ -45,6 +45,12 @@ python -m pip install -r requirements.txt
 
 若最后一条 `test` 失败，停止执行；这表示当前 checkout 不是发布 tag。控制器会在最终提交后创建并推送该 tag，因此“推送分支 + 创建/推送 tag”解决 fresh-clone 的源码定位问题；新服务器不得只依赖可变分支名。
 
+tag 创建并推送后，再用下列命令核对 tag 指向的 commit；输出必须等于控制器报告的 release commit，不要在手册或命令中预先写死某个当前 commit：
+
+```bash
+git rev-parse 'visdrone-lrs-system-v1^{commit}'
+```
+
 GPU/驱动预检：
 
 ```bash
@@ -182,7 +188,9 @@ python scripts/train_visdrone_lrs_system.py \
 本 release 当前提供的是训练加每 epoch 的同 Trainer validation。`results.csv` 使用 Ultralytics 的共同列名；可以用下列命令从 Baseline 和 Full 的各自 `results.csv` 提取同一 schema 下、按 best val `mAP50-95` 选择的 epoch 及其 Precision、Recall、AP50：
 
 ```bash
-python - "$RUNS_ROOT/uavdt-baseline/results.csv" "$RUNS_ROOT/uavdt-full/results.csv" <<'PY'
+export UAVDT_RUNS_ROOT=/data/uav/runs/uavdt-lrs-system
+# 以下是示例目录；执行前必须替换为服务器上已绑定的实际 Baseline/Full 路径。
+python - "$UAVDT_RUNS_ROOT/baseline/results.csv" "$UAVDT_RUNS_ROOT/full/results.csv" <<'PY'
 import csv
 import sys
 from pathlib import Path
@@ -219,9 +227,9 @@ UAVDT 只做以下两臂：
 | Baseline | 已完成的既有参考 | 可复用，但必须先绑定其完整 authority |
 | Full | `LRS-FDR+BPDD+FIA` | 待启动；仅在 Baseline 绑定和 UAVDT authority 就绪后训练 |
 
-Baseline 只是已完成结果的可复用参考，不重新编造或补写缺失实验值。启动 Full 之前，必须以 Baseline authority、`args.yaml` 和训练 log 为唯一事实来源，逐项抽取并绑定：checkpoint 路径、SHA-256 和 bytes；初始 checkpoint/initial artifact 的精确路径、SHA-256、格式和身份；source commit/tree hash；数据 YAML、split、类别映射和数据签名；pretrained/scratch policy；seed、deterministic flag；device、GPU model、Python/CUDA/PyTorch/Ultralytics 运行时；imgsz、batch、effective batch、nominal batch `nbs`、workers；epochs、optimizer、lr0、lrf、momentum、weight decay、schedule、warmup epochs/momentum/bias lr、AMP 和 cache；全部 augmentation 与 preprocessing；evaluator、confidence、IoU thresholds、max_det、NMS；`save`、`save_period`、`plots`、`val` 及其他实际运行字段；checkpoint/resume 规则、best-val 选择规则及全部已报告指标。缺失字段必须从这些既有材料中提取；不得猜测或填入默认值。
+Baseline 只是已完成结果的可复用参考，不重新编造或补写缺失实验值。启动 Full 之前，必须以 Baseline authority、`args.yaml` 和训练 log 为唯一事实来源，逐项抽取并绑定：checkpoint 路径、SHA-256 和 bytes；初始 checkpoint/initial artifact 的精确路径、SHA-256、格式和身份；source commit/tree hash；数据 YAML、split、类别映射和数据签名；pretrained/scratch policy；seed、deterministic flag；device、GPU model、Python/CUDA/PyTorch/Ultralytics 运行时；imgsz、batch、effective batch、nominal batch `nbs`、workers；epochs、optimizer、lr0、lrf、momentum、weight decay、schedule、warmup epochs/momentum/bias lr、AMP 和 cache；全部 augmentation 与 preprocessing；evaluator、confidence、IoU thresholds、max_det、NMS；`save`、`save_period`、`plots`、`val` 及其他实际运行字段；checkpoint/resume/fresh-start 规则、best-val 选择规则及全部已报告指标。缺失字段必须从这些既有材料中提取；不得猜测或填入默认值。初始化策略和 initial artifact 应尽量与 Baseline 使用同一份；若无法做到，必须在 authority 中披露不一致，并将该比较降级为 reference-only。
 
-Full 必须逐项匹配已绑定 Baseline 的 dataset split、class mapping、seed、image size、batch/effective batch、nominal batch `nbs`、epochs、optimizer/schedule、augmentation、preprocessing、evaluator、confidence、IoU thresholds、max_det、NMS、device/GPU、workers、AMP、cache、deterministic flag、warmup 设置和 best-val 选择规则；还必须使用 Baseline 绑定的 pretrained/scratch policy 和对应初始状态身份。唯一允许的实验差异是 method graph；数据、训练、预处理和评估协议不得因换数据集而隐式漂移。Only method graph may differ。
+Full 必须逐项匹配每一个已绑定 Baseline 字段，包括 dataset split、class mapping、seed、image size、batch/effective batch、nominal batch `nbs`、epochs、optimizer/schedule、augmentation、preprocessing、evaluator、confidence、IoU thresholds、max_det、NMS、device/GPU、workers、AMP、cache、deterministic flag、warmup 设置、Python/CUDA/PyTorch/Ultralytics 版本、`save`、`save_period`、`plots`、`val`、checkpoint/resume/fresh-start 规则和 best-val 选择规则；还必须使用 Baseline 绑定的 pretrained/scratch policy 和对应初始状态身份。除最终 checkpoint bytes 以及 method graph 必然导致的 source/config path/hash 外，不得有其他差异。初始化策略和 initial artifact 应尽量与 Baseline 使用同一份；若无法做到，必须披露 mismatch，并将比较标记为 reference-only。Only method graph may differ。
 
 ### 7.2 UAVDT 入口前置条件
 
@@ -241,9 +249,9 @@ Full 必须逐项匹配已绑定 Baseline 的 dataset split、class mapping、se
 
 ### 7.4 接受标准与 claim boundary
 
-Full 必须在匹配协议下完成 seed0 训练，并与 Baseline 使用相同的 Trainer validation。按相同列 schema 从两个 `results.csv` 选择 best-val `mAP50-95`，报告 Precision、Recall、AP50 和 mAP50-95；AP75、逐类结果和独立复评必须等签入统一 evaluator 后，作为论文定稿 gate 补齐。若 Full 的 best-val mAP50-95 高于 Baseline，这是 UAVDT 上的第二数据集 in-domain effectiveness / multi-dataset applicability 正向支持；它不是 zero-shot cross-dataset transfer/generalization 证据。若不高，不否定 VisDrone 结论，也不能声称跨数据集泛化优势。
+Full 必须在匹配协议下完成 seed0 训练，并与 Baseline 使用相同的 Trainer validation。按相同列 schema 从两个 `results.csv` 选择 best-val `mAP50-95`，报告 Precision、Recall、AP50 和 mAP50-95；AP75、逐类结果和独立复评必须等签入统一 evaluator 后，作为论文定稿 gate 补齐。若 Full 的 best-val mAP50-95 高于 Baseline，这是“整体方法在第二数据集上的相对效果”以及 multi-dataset applicability 的正向支持；它不是 zero-shot cross-dataset transfer/generalization 证据。若不高，不否定 VisDrone 结论，也不能声称跨数据集泛化优势。
 
-这两个臂只能检验整体 transfer；不能隔离单个模块贡献，也不能据此主张统计显著性。UAVDT 结论必须保持为匹配协议下的两臂、单 seed 证据，除非后续另行完成预先规定的多 seed 设计。
+这两个臂只能检验整体方法在第二数据集上的相对效果；不能隔离单个模块贡献，也不能据此主张统计显著性。UAVDT 结论必须保持为匹配协议下的两臂、单 seed 证据，除非后续另行完成预先规定的多 seed 设计。
 
 执行优先级固定为：
 
