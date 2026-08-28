@@ -326,3 +326,35 @@ def test_invalid_arm_is_rejected_by_argparse_and_build_settings(
     assert exc_info.value.code == 2
     with pytest.raises(ValueError, match="unknown LRS system arm"):
         module.build_settings("x", tmp_path / "data.yaml", tmp_path / "runs", None)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", ".", "..", "../escape", "..\\escape", "/absolute", "C:\\absolute"],
+)
+def test_run_name_rejects_empty_absolute_or_non_component_values(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    module = _load_module()
+
+    with pytest.raises(ValueError, match="name"):
+        module.build_settings(
+            "g",
+            tmp_path / "data.yaml",
+            tmp_path / "runs",
+            name,
+        )
+
+
+def test_run_name_accepts_a_safe_single_component(tmp_path: Path) -> None:
+    module = _load_module()
+
+    settings = module.build_settings(
+        "g",
+        tmp_path / "data.yaml",
+        tmp_path / "runs",
+        "formal-seed0_custom-run_1",
+    )
+
+    assert settings["name"] == "formal-seed0_custom-run_1"

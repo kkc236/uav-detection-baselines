@@ -56,6 +56,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_run_name(name: str) -> str:
+    path = Path(name)
+    if (
+        not name
+        or name in {".", ".."}
+        or path.is_absolute()
+        or "/" in name
+        or "\\" in name
+        or path.name != name
+    ):
+        raise ValueError("run name must be one non-empty safe path component")
+    return name
+
+
 def build_settings(
     arm: str,
     data_yaml: Path,
@@ -64,6 +78,9 @@ def build_settings(
 ) -> dict[str, Any]:
     if arm not in ARM_METHODS:
         raise ValueError(f"unknown LRS system arm: {arm}")
+    run_name = validate_run_name(
+        name if name is not None else f"formal-seed0-{ARM_METHODS[arm]}-v1"
+    )
     return {
         **FROZEN_SETTINGS,
         "model": str(ARM_CONFIGS[arm].resolve()),
@@ -72,7 +89,7 @@ def build_settings(
         "epochs": FORMAL_EPOCHS,
         "seed": 0,
         "project": str(Path(output_root).resolve()),
-        "name": name or f"formal-seed0-{ARM_METHODS[arm]}-v1",
+        "name": run_name,
         "exist_ok": False,
     }
 
