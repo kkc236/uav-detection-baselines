@@ -8,14 +8,24 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 from scripts import train_lrs_fdr
 from scripts.train_rtdetr_fdr import FORMAL_EPOCHS, FROZEN_SETTINGS
+from src.fdr_protocol import build_fdr_initial_state
 from src.rtdetr_lrs_system import ARM_CONFIGS, TRAINER_TYPES
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "train_visdrone_lrs_system.py"
+
+
+class _WriteMarkerOnLoad:
+    def __init__(self, marker: Path) -> None:
+        self.marker = marker
+
+    def __reduce__(self):
+        return (self.marker.write_text, ("unsafe pickle executed",))
 
 
 def _load_module():
@@ -25,6 +35,44 @@ def _load_module():
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def _representative_fdr_artifact() -> dict[str, object]:
+    control = {"model.shared": torch.tensor([1.0, 2.0])}
+    fdr = {
+        **control,
+        "model.private": torch.tensor([3.0, 4.0]),
+    }
+    return build_fdr_initial_state(
+        control,
+        fdr,
+        private_prefixes=("model.private",),
+        metadata={"source": "launcher-security-regression"},
+    )
+
+
+def test_initial_state_validator_blocks_pickle_code_execution(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    marker = tmp_path / "pickle-executed.txt"
+    malicious = tmp_path / "malicious.pt"
+    torch.save(_WriteMarkerOnLoad(marker), malicious)
+
+    with pytest.raises(Exception):
+        module.validate_initial_state_file(malicious)
+
+    assert not marker.exists()
+
+
+def test_initial_state_validator_accepts_weights_only_fdr_artifact(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    state = tmp_path / "valid.pt"
+    torch.save(_representative_fdr_artifact(), state)
+
+    assert module.validate_initial_state_file(state) == state.resolve()
 
 
 def _patch_runtime(

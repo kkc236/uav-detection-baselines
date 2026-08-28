@@ -108,6 +108,14 @@ class _StateTarget:
         return SimpleNamespace(missing_keys=missing, unexpected_keys=unexpected)
 
 
+class _WriteMarkerOnLoad:
+    def __init__(self, marker: Path) -> None:
+        self.marker = marker
+
+    def __reduce__(self):
+        return (self.marker.write_text, ("unsafe pickle executed",))
+
+
 def _small_fia_target() -> _StateTarget:
     source = _small_non_fia_state()
     target = {
@@ -351,6 +359,17 @@ def test_fia_initial_state_loads_every_shared_tensor_exactly(
     assert all(
         name.startswith(FIA_STATE_PREFIX) for name in report["fia_private_keys"]
     )
+
+
+def test_fia_artifact_loader_blocks_pickle_code_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "pickle-executed.txt"
+    malicious = tmp_path / "malicious.pt"
+    torch.save(_WriteMarkerOnLoad(marker), malicious)
+
+    with pytest.raises(Exception):
+        lrs_system._load_fia_artifact(_small_fia_target(), malicious)
+
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize(

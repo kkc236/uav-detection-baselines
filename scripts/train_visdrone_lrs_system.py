@@ -14,10 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
-from scripts.train_ace_fdr import (  # noqa: E402
-    require_clean_tracked_worktree,
-    validate_initial_state_file,
-)
+from scripts.train_ace_fdr import require_clean_tracked_worktree  # noqa: E402
 from scripts.train_rtdetr_fdr import (  # noqa: E402
     FORMAL_EPOCHS,
     FROZEN_SETTINGS,
@@ -25,7 +22,11 @@ from scripts.train_rtdetr_fdr import (  # noqa: E402
     prepare_data_yaml,
 )
 from src.lpr_protocol import dataset_signature  # noqa: E402
-from src.rtdetr_lrs_system import ARM_CONFIGS, TRAINER_TYPES  # noqa: E402
+from src.rtdetr_lrs_system import (  # noqa: E402
+    ARM_CONFIGS,
+    TRAINER_TYPES,
+    load_fdr_initial_state_artifact,
+)
 
 
 ARM_METHODS = {
@@ -68,6 +69,15 @@ def validate_run_name(name: str) -> str:
     ):
         raise ValueError("run name must be one non-empty safe path component")
     return name
+
+
+def validate_initial_state_file(path: Path) -> Path:
+    requested = Path(path)
+    if requested.is_symlink() or not requested.is_file():
+        raise FileNotFoundError(f"FDR initial state not found: {requested}")
+    resolved = requested.resolve()
+    load_fdr_initial_state_artifact(resolved)
+    return resolved
 
 
 def build_settings(

@@ -107,6 +107,16 @@ def load_fia_initial_state(
     }
 
 
+def load_fdr_initial_state_artifact(path: str | Path) -> Mapping[str, Any]:
+    """Safely deserialize and validate an operator-supplied FDR artifact."""
+
+    artifact = torch.load(Path(path), map_location="cpu", weights_only=True)
+    if not isinstance(artifact, Mapping):
+        raise TypeError("FDR initial state must be a checkpoint mapping")
+    validate_fdr_initial_state(artifact)
+    return artifact
+
+
 def initialize_fia_graph(model: nn.Module, *, private_seed: int) -> FIA:
     """Validate the P3-only FIA topology and initialize only its private layer."""
 
@@ -259,7 +269,7 @@ def _fia_gradient_parameter_groups(
 def _load_fia_artifact(model: nn.Module, path: str | Path | None) -> None:
     if path is None:
         return
-    artifact = torch.load(Path(path), map_location="cpu", weights_only=False)
+    artifact = load_fdr_initial_state_artifact(path)
     load_fia_initial_state(model, artifact)
 
 
@@ -366,6 +376,7 @@ __all__ = [
     "ROOT",
     "TRAINER_TYPES",
     "initialize_fia_graph",
+    "load_fdr_initial_state_artifact",
     "load_fia_initial_state",
     "remap_fia_shared_key",
 ]
