@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,7 +10,7 @@ import yaml
 
 from src.bpdd_loss import BPDDDetectionLoss
 from src.fdr_loss import FDRDetectionLoss
-from src.fdr_protocol import build_fdr_initial_state
+from src.fdr_protocol import build_fdr_initial_state, validate_fdr_initial_state
 from src.fia import FIA
 from src import rtdetr_lrs_system as lrs_system
 from src.rtdetr_fdr import FDRTrainer
@@ -63,6 +64,60 @@ def _is_fdr_private(name: str) -> bool:
     )
 
 
+def _small_non_fia_state() -> dict[str, torch.Tensor]:
+    return {
+        "model.0.weight": torch.tensor([1.0, 2.0]),
+        "model.21.weight": torch.tensor([3.0, 4.0]),
+        "model.22.weight": torch.tensor([5.0, 6.0]),
+        "model.28.dec_bbox_head.0.weight": torch.tensor([7.0, 8.0]),
+    }
+
+
+def _build_small_non_fia_artifact(
+    source: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    public = {
+        name: value for name, value in source.items() if not _is_fdr_private(name)
+    }
+    return build_fdr_initial_state(
+        public,
+        source,
+        private_prefixes=("model.28.dec_bbox_head.",),
+        metadata={"source": "small-rebuilt-lrs-non-fia"},
+    )
+
+
+class _StateTarget:
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        self.state = {name: value.clone() for name, value in state.items()}
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return self.state
+
+    def load_state_dict(
+        self,
+        state: dict[str, torch.Tensor],
+        strict: bool = True,
+    ) -> SimpleNamespace:
+        missing = sorted(set(self.state) - set(state))
+        unexpected = sorted(set(state) - set(self.state))
+        if strict and (missing or unexpected):
+            raise RuntimeError("strict state mismatch")
+        for name in set(state) & set(self.state):
+            self.state[name].copy_(state[name])
+        return SimpleNamespace(missing_keys=missing, unexpected_keys=unexpected)
+
+
+def _small_fia_target() -> _StateTarget:
+    source = _small_non_fia_state()
+    target = {
+        remap_fia_shared_key(name): value.clone()
+        for name, value in source.items()
+    }
+    target[f"{FIA_STATE_PREFIX}residual_scale"] = torch.zeros(())
+    return _StateTarget(target)
+
+
 @pytest.fixture(scope="module")
 def non_fia_artifact(
     arm_models: dict[str, FDRBPDDDetectionModel],
@@ -81,6 +136,59 @@ def non_fia_artifact(
         ),
         metadata={"source": "rebuilt-lrs-non-fia"},
     )
+
+
+@pytest.fixture(scope="class")
+def controlled_fia_pair() -> dict[str, Any]:
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(8421)
+        base = LRSFDRBPDDDetectionModel(nc=10, verbose=False)
+        base_rng = torch.random.get_rng_state().clone()
+
+        torch.manual_seed(8421)
+        fia = LRSFDRFIADetectionModel(nc=10, verbose=False)
+        fia_rng = torch.random.get_rng_state().clone()
+    return {
+        "base": base,
+        "fia": fia,
+        "base_rng": base_rng,
+        "fia_rng": fia_rng,
+    }
+
+
+class TestFIAConstructionIsolation:
+    def test_fia_construction_preserves_the_base_cpu_rng_trajectory(
+        self,
+        controlled_fia_pair: dict[str, Any],
+    ) -> None:
+        assert torch.equal(
+            controlled_fia_pair["fia_rng"], controlled_fia_pair["base_rng"]
+        )
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(8422)
+            before_private_init = torch.random.get_rng_state().clone()
+            initialize_fia_graph(
+                controlled_fia_pair["fia"], private_seed=20_000
+            )
+            after_private_init = torch.random.get_rng_state()
+        assert torch.equal(after_private_init, before_private_init)
+
+    def test_fia_shared_state_matches_base_before_artifact_loading(
+        self,
+        controlled_fia_pair: dict[str, Any],
+    ) -> None:
+        base_state = controlled_fia_pair["base"].state_dict()
+        fia_state = controlled_fia_pair["fia"].state_dict()
+
+        for name, expected in base_state.items():
+            torch.testing.assert_close(
+                fia_state[remap_fia_shared_key(name)], expected, rtol=0, atol=0
+            )
+        remaining = set(fia_state) - {
+            remap_fia_shared_key(name) for name in base_state
+        }
+        assert remaining
+        assert all(name.startswith(FIA_STATE_PREFIX) for name in remaining)
 
 
 def test_bpdd_criterion_preserves_lrs_alpha() -> None:
@@ -198,6 +306,36 @@ def test_fia_initial_state_loads_every_shared_tensor_exactly(
         **non_fia_artifact["fdr_public_state"],
         **non_fia_artifact["private_state"],
     }
+    representatives = {
+        "pre_fia_public": next(
+            name
+            for name, value in source.items()
+            if name.startswith("model.")
+            and int(name.split(".", 2)[1]) < FIA_MODEL_INDEX
+            and value.is_floating_point()
+        ),
+        "shifted_post_fia_shared": next(
+            name
+            for name, value in source.items()
+            if name.startswith("model.")
+            and FIA_MODEL_INDEX <= int(name.split(".", 2)[1]) < 28
+            and not _is_fdr_private(name)
+            and value.is_floating_point()
+        ),
+        "fdr_private": next(
+            name
+            for name, value in source.items()
+            if _is_fdr_private(name) and value.is_floating_point()
+        ),
+    }
+    target_state = model.state_dict()
+    with torch.no_grad():
+        for source_name in representatives.values():
+            target_state[remap_fia_shared_key(source_name)].add_(1)
+    for source_name in representatives.values():
+        assert not torch.equal(
+            target_state[remap_fia_shared_key(source_name)], source[source_name]
+        )
 
     report = load_fia_initial_state(model, non_fia_artifact)
 
@@ -213,6 +351,38 @@ def test_fia_initial_state_loads_every_shared_tensor_exactly(
     assert all(
         name.startswith(FIA_STATE_PREFIX) for name in report["fia_private_keys"]
     )
+
+
+@pytest.mark.parametrize(
+    ("malformation", "error"),
+    [
+        ("missing_source", "only model.22 FIA tensors may remain private"),
+        ("unexpected_source", "shared keys are missing after FIA insertion"),
+        ("shape", "shared tensor shape changed"),
+        ("dtype", "shared tensor dtype changed"),
+    ],
+)
+def test_fia_initial_state_rejects_every_target_incompatibility(
+    malformation: str,
+    error: str,
+) -> None:
+    source = _small_non_fia_state()
+    target = _small_fia_target()
+    if malformation == "missing_source":
+        source.pop("model.21.weight")
+    elif malformation == "unexpected_source":
+        source["model.30.unexpected"] = torch.ones(1)
+    elif malformation == "shape":
+        source["model.0.weight"] = torch.ones(3)
+    elif malformation == "dtype":
+        source["model.21.weight"] = torch.ones(2, dtype=torch.int64)
+    else:
+        raise AssertionError(f"unhandled test malformation: {malformation}")
+    artifact = _build_small_non_fia_artifact(source)
+    validate_fdr_initial_state(artifact)
+
+    with pytest.raises(ValueError, match=error):
+        load_fia_initial_state(target, artifact)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -283,8 +453,13 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
     model_name: str,
     expected_seeds: tuple[int, int | None],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, Any] = {}
+    artifact_path = tmp_path / "valid-initial-state.pt"
+    torch.save(
+        _build_small_non_fia_artifact(_small_non_fia_state()), artifact_path
+    )
 
     class _ModelDouble:
         def __init__(self, cfg: Path, **kwargs: Any) -> None:
@@ -292,10 +467,33 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
             captured.update(kwargs)
 
     monkeypatch.setattr(lrs_system, model_name, _ModelDouble)
+    if arm == "g":
+        def _standard_loader_spy(
+            model: Any,
+            path: Path,
+            *,
+            variant: str,
+        ) -> None:
+            validate_fdr_initial_state(
+                torch.load(path, map_location="cpu", weights_only=False)
+            )
+            captured["loader"] = "standard"
+            captured["loader_model"] = model
+            captured["loader_path"] = path
+            captured["loader_variant"] = variant
+
+        monkeypatch.setattr(lrs_system, "_load_initial_state", _standard_loader_spy)
+    else:
+        def _strict_loader_spy(model: Any, artifact: dict[str, Any]) -> None:
+            validate_fdr_initial_state(artifact)
+            captured["loader"] = "strict-remapped"
+            captured["loader_model"] = model
+
+        monkeypatch.setattr(lrs_system, "load_fia_initial_state", _strict_loader_spy)
     trainer = trainer_type.__new__(trainer_type)
     trainer.data = {"nc": 10, "channels": 3}
     trainer.experiment_seed = 37
-    trainer.initial_state_path = None
+    trainer.initial_state_path = artifact_path
 
     model = trainer.get_model(cfg="ignored.yaml", weights=None, verbose=True)
 
@@ -305,6 +503,13 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
     assert captured["ch"] == 3
     assert captured["verbose"] is True
     assert captured["private_seed"] == expected_seeds[0]
+    assert captured["loader_model"] is model
+    if arm == "g":
+        assert captured["loader"] == "standard"
+        assert captured["loader_path"] == artifact_path
+        assert captured["loader_variant"] == "fdr"
+    else:
+        assert captured["loader"] == "strict-remapped"
     if expected_seeds[1] is None:
         assert "fia_private_seed" not in captured
     else:
