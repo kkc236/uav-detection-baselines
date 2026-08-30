@@ -158,9 +158,9 @@ def test_arm_maps_are_exact_and_build_settings_rejects_unknown_arm(
     module = _load_module()
 
     assert module.ARM_METHODS == {
-        "g": "lrs_fdr_bpdd",
+        "g": "lrs_fdr_ac_bpdd",
         "h": "lrs_fdr_fia",
-        "i": "lrs_fdr_bpdd_fia",
+        "i": "lrs_fdr_ac_bpdd_fia",
     }
     assert module.ARM_CONFIGS == ARM_CONFIGS
     assert module.TRAINER_TYPES == TRAINER_TYPES
@@ -245,7 +245,7 @@ def test_authority_record_is_deterministic_hashed_and_conflict_safe(
     assert record == {
         "format_version": 1,
         "arm": "g",
-        "method": "lrs_fdr_bpdd",
+        "method": "lrs_fdr_ac_bpdd",
         "source": source,
         "config": {"path": str(config.resolve()), "sha256": _sha256(config)},
         "initial_state": {"path": str(state.resolve()), "sha256": _sha256(state)},
@@ -296,11 +296,11 @@ def test_dry_run_writes_and_prints_authority_without_constructing_trainer(
     )
 
     assert result == 0
-    authority = output_root / "authority" / "formal-seed0-lrs_fdr_bpdd-v1.json"
+    authority = output_root / "authority" / "formal-seed0-lrs_fdr_ac_bpdd-v1.json"
     record = json.loads(authority.read_text(encoding="utf-8"))
     assert json.loads(capsys.readouterr().out) == record
     assert record["arm"] == "g"
-    assert record["method"] == "lrs_fdr_bpdd"
+    assert record["method"] == "lrs_fdr_ac_bpdd"
 
 
 @pytest.mark.parametrize("arm", ["g", "h", "i"])

@@ -3,7 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
 import yaml
+
+from src.rtdetr_fdr_bpdd import _parse_bpdd_options
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,4 +34,14 @@ def test_bpdd_yaml_preserves_the_complete_fdr_graph_and_loss() -> None:
         "matched_layer": "final",
         "include_dn": False,
     }
+
+
+def test_bpdd_parser_rejects_two_assignment_authorities() -> None:
+    with pytest.raises(ValueError, match="one authority"):
+        _parse_bpdd_options(
+            {
+                "matched_layer": "final",
+                "assignment_mode": "consistent",
+            }
+        )
 

@@ -30,9 +30,9 @@ from src.rtdetr_lrs_system import (  # noqa: E402
 
 
 ARM_METHODS = {
-    "g": "lrs_fdr_bpdd",
+    "g": "lrs_fdr_ac_bpdd",
     "h": "lrs_fdr_fia",
-    "i": "lrs_fdr_bpdd_fia",
+    "i": "lrs_fdr_ac_bpdd_fia",
 }
 
 

@@ -15,11 +15,11 @@ CONFIGS = {
 }
 BPDD_OPTIONS = {
     "enabled": True,
-    "weight": 0.5,
+    "weight": 0.15,
     "temperature": 0.5,
     "margin": 0.02,
     "eps": 1.0e-6,
-    "matched_layer": "final",
+    "assignment_mode": "consistent",
     "include_dn": False,
 }
 LRS_LOSS = {

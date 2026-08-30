@@ -26,6 +26,7 @@ _BPDD_OPTION_KEYS = {
     "margin",
     "eps",
     "matched_layer",
+    "assignment_mode",
     "include_dn",
 }
 
@@ -34,16 +35,22 @@ def _parse_bpdd_options(payload: dict[str, Any]) -> BPDDOptions:
     unknown = set(payload) - _BPDD_OPTION_KEYS
     if unknown:
         raise ValueError(f"unknown BPDD loss options: {sorted(unknown)}")
-    if payload.get("matched_layer", "final") != "final":
-        raise ValueError("BPDD v1 requires the final stock assignment")
+    if "assignment_mode" in payload and "matched_layer" in payload:
+        raise ValueError("BPDD assignment mode must have one authority")
+    assignment_mode = payload.get("assignment_mode")
+    if assignment_mode is None:
+        if payload.get("matched_layer", "final") != "final":
+            raise ValueError("legacy BPDD requires the final stock assignment")
+        assignment_mode = "final"
     if bool(payload.get("include_dn", False)):
-        raise ValueError("BPDD v1 excludes denoising Queries")
+        raise ValueError("BPDD excludes denoising Queries")
     return BPDDOptions(
         enabled=bool(payload.get("enabled", True)),
         weight=float(payload.get("weight", 0.5)),
         temperature=float(payload.get("temperature", 0.5)),
         margin=float(payload.get("margin", 0.02)),
         eps=float(payload.get("eps", 1e-6)),
+        assignment_mode=str(assignment_mode),
     )
 
 
