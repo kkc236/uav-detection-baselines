@@ -16,7 +16,14 @@ from ultralytics.nn.modules.head import RTDETRDecoder
 from ultralytics.nn.modules.transformer import MLP
 from ultralytics.nn.modules.utils import inverse_sigmoid
 
-from src.fdr_math import Integral, REG_MAX, REG_SCALE, UP, distance2bbox
+from src.fdr_math import (
+    Integral,
+    REG_MAX,
+    REG_SCALE,
+    UP,
+    distance2bbox,
+    project_feasible_fdr_distances,
+)
 
 
 FDR_OUTPUT_DIM = 4 * (REG_MAX + 1)
@@ -235,6 +242,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_corner_logits: Tensor | None = None
         self.last_references: Tensor | None = None
         self.last_pre_bboxes: Tensor | None = None
+        self.last_geometry_statistics: dict[str, Tensor] = {}
 
     def __setstate__(self, state: dict) -> None:
         """Restore exact pinned defaults in pre-declarative pickled checkpoints."""
@@ -292,6 +300,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_corner_logits = None
         self.last_references = None
         self.last_pre_bboxes = None
+        self.last_geometry_statistics = {}
 
     def forward(
         self,
@@ -319,6 +328,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         class_logits: list[Tensor] = []
         corner_logits: list[Tensor] = []
         references: list[Tensor] = []
+        geometry_records: list[dict[str, Tensor]] = []
         preliminary: Tensor | None = None
         initial_reference: Tensor | None = None
 
@@ -362,9 +372,15 @@ class FDRDeformableTransformerDecoder(nn.Module):
                 if self.cumulative
                 else delta_corners
             )
+            raw_distance = self.integral(cumulative_corners)
+            safe_distance, geometry = project_feasible_fdr_distances(
+                raw_distance,
+                reg_scale=self.reg_scale,
+            )
+            geometry_records.append(geometry)
             refined = distance2bbox(
                 initial_reference,
-                self.integral(cumulative_corners),
+                safe_distance,
                 self.reg_scale,
             )
 
@@ -384,6 +400,22 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_pre_bboxes = preliminary
         self.last_corner_logits = torch.stack(corner_logits)
         self.last_references = torch.stack(references)
+        self.last_geometry_statistics = {
+            "total": torch.stack([item["total"] for item in geometry_records]).sum(),
+            "horizontal_infeasible": torch.stack(
+                [item["horizontal_infeasible"] for item in geometry_records]
+            ).sum(),
+            "vertical_infeasible": torch.stack(
+                [item["vertical_infeasible"] for item in geometry_records]
+            ).sum(),
+            "minimum_raw_horizontal": torch.stack(
+                [item["minimum_raw_horizontal"] for item in geometry_records]
+            ).amin(),
+            "minimum_raw_vertical": torch.stack(
+                [item["minimum_raw_vertical"] for item in geometry_records]
+            ).amin(),
+            "minimum_extent": geometry_records[0]["minimum_extent"],
+        }
         return torch.stack(decoded_boxes), torch.stack(class_logits)
 
 
