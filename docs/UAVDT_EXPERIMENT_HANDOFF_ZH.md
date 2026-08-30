@@ -53,6 +53,7 @@ python scripts/train_uavdt_full.py \
 
 ## 训练验收
 
+- 每轮训练诊断写入运行目录的 `full-runtime.jsonl`；
 - 不出现负 `giou_loss`、非有限梯度或 AMP scale 从 128 降到 64；
 - 解码后的宽高始终为正；
 - 记录原始横向/纵向非法 extent 数量及最小值，防止投影掩盖持续崩塌；

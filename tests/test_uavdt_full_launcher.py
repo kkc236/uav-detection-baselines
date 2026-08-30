@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 import yaml
 
 
@@ -215,3 +216,59 @@ def test_dry_run_maps_only_revised_full_and_never_constructs_trainer(
     assert record["settings"]["epochs"] == 100
     printed = json.loads(capsys.readouterr().out)
     assert printed == record
+
+
+def test_runtime_recorder_persists_bpdd_and_raw_geometry_evidence(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+
+    class FDR:
+        last_geometry_statistics = {
+            "total": torch.tensor(12),
+            "horizontal_infeasible": torch.tensor(2),
+            "vertical_infeasible": torch.tensor(1),
+            "minimum_raw_horizontal": torch.tensor(-3.5),
+            "minimum_raw_vertical": torch.tensor(-2.0),
+            "minimum_extent": torch.tensor(1e-3),
+        }
+
+    class Model:
+        fdr = FDR()
+        last_bpdd_statistics = {
+            "stable_match_ratio": torch.tensor(0.75),
+            "active_edge_ratio": torch.tensor(0.5),
+            "mean_reliability": torch.tensor(0.25),
+            "candidate_source_matches": torch.tensor(8),
+            "stable_source_matches": torch.tensor(6),
+        }
+        last_fdr_losses = {"loss_bpdd": torch.tensor(0.125)}
+
+    class Trainer:
+        model = Model()
+        epoch = 4
+        save_dir = tmp_path / "run"
+        last_gradient_norms = {"gradients_finite": True}
+
+    trainer = Trainer()
+    recorder = module.RuntimeEvidenceRecorder()
+    recorder.reset(trainer)
+    recorder.capture(trainer)
+    record = recorder.write(trainer)
+
+    assert record["completed_epoch"] == 5
+    assert record["batches"] == 1
+    assert record["bpdd_stable_match_ratio_mean"] == pytest.approx(0.75)
+    assert record["bpdd_active_edge_ratio_mean"] == pytest.approx(0.5)
+    assert record["loss_bpdd_mean"] == pytest.approx(0.125)
+    assert record["geometry_horizontal_infeasible"] == 2
+    assert record["geometry_vertical_infeasible"] == 1
+    assert record["geometry_minimum_raw_horizontal"] == pytest.approx(-3.5)
+    assert record["gradients_finite"] is True
+    rows = [
+        json.loads(line)
+        for line in (trainer.save_dir / "full-runtime.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert rows == [record]
