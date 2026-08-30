@@ -4,6 +4,7 @@ import torch
 
 from src.bpdd_loss import BPDDDetectionLoss, BPDDOptions
 from src.fdr_loss import FDRDetectionLoss
+from src.fdr_math import REG_MAX, REG_SCALE, UP, bbox2distance, cxcywh_to_xyxy
 
 
 def _batch() -> dict:
@@ -170,4 +171,56 @@ def test_bpdd_empty_final_assignment_adds_finite_zero_loss() -> None:
     torch.testing.assert_close(losses["loss_bpdd"], torch.zeros_like(losses["loss_bpdd"]))
     assert corners.grad is not None
     assert criterion.last_bpdd_statistics["matched_queries"].item() == 0
+
+
+def test_assignment_consistent_mode_uses_decoder_layer_matches() -> None:
+    boxes, scores = _predictions()
+    pre_boxes = torch.tensor(
+        [[[0.5, 0.5, 0.2, 0.2], [0.3, 0.3, 0.1, 0.1], [0.8, 0.8, 0.1, 0.1]]]
+    )
+    batch = {
+        "cls": torch.tensor([1], dtype=torch.long),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2]], dtype=torch.float32),
+        "gt_groups": [1],
+    }
+    target_indices, _, _ = bbox2distance(
+        pre_boxes[0, :1],
+        cxcywh_to_xyxy(batch["bboxes"]),
+        REG_MAX,
+        REG_SCALE,
+        UP,
+    )
+    corners = torch.zeros((2, 1, 3, 4, REG_MAX + 1))
+    corners[1].fill_(-6.0)
+    for edge, index in enumerate(target_indices.long()):
+        corners[1, 0, 0, edge, index] = 6.0
+        corners[1, 0, 0, edge, index + 1] = 6.0
+    corners = corners.reshape(2, 1, 3, 132).requires_grad_(True)
+    criterion = BPDDDetectionLoss(
+        nc=3,
+        use_vfl=True,
+        fgl_weight=0.0,
+        supervise_pre_boxes=False,
+        bpdd_options=BPDDOptions(
+            assignment_mode="consistent", weight=0.15, margin=0.0
+        ),
+    )
+
+    losses = criterion(
+        (boxes, scores),
+        batch,
+        normal_match_indices=[_matches(2), _matches(0), _matches(0)],
+        corner_logits=corners,
+        pre_boxes=pre_boxes,
+    )
+    losses["loss_bpdd"].backward()
+
+    assert losses["loss_bpdd"].item() > 0
+    assert criterion.last_bpdd_statistics["stable_match_ratio"].item() == 1.0
+    assert criterion.last_bpdd_statistics["stable_source_matches"].item() == 1
+    assert criterion.stock_match_calls == 0
+    assert criterion.fgl_extra_match_calls == 0
+    gradient = corners.grad.reshape(2, 1, 3, 4, REG_MAX + 1)
+    assert gradient[0, 0, 0].abs().sum() > 0
+    torch.testing.assert_close(gradient[1], torch.zeros_like(gradient[1]))
 

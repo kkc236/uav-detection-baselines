@@ -7,10 +7,12 @@ import torch
 
 from src.bpdd_loss import (
     BPDDOptions,
+    assignment_consistent_bpdd_loss,
     bpdd_distribution_loss,
     build_progressive_teachers,
     interpolated_edge_nll,
 )
+from src.fdr_math import REG_MAX, REG_SCALE, UP, bbox2distance, cxcywh_to_xyxy
 
 
 def _targets(matches: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -188,3 +190,93 @@ def test_bpdd_promotes_half_precision_math_and_rejects_wrong_shapes() -> None:
             left,
             options=BPDDOptions(),
         )
+
+
+def _match_triples(query: int, target: int) -> tuple[torch.Tensor, ...]:
+    return (
+        torch.tensor([0]),
+        torch.tensor([query]),
+        torch.tensor([target]),
+    )
+
+
+def _assignment_consistent_fixture() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    pre_boxes = torch.tensor([[[0.5, 0.5, 0.2, 0.2]]])
+    gt_bboxes = torch.tensor(
+        [[0.5, 0.5, 0.2, 0.2], [0.7, 0.7, 0.1, 0.1]]
+    )
+    target_indices, _, _ = bbox2distance(
+        pre_boxes[0],
+        cxcywh_to_xyxy(gt_bboxes[:1]),
+        REG_MAX,
+        REG_SCALE,
+        UP,
+    )
+    logits = torch.zeros((2, 1, 1, 4, REG_MAX + 1))
+    logits[1].fill_(-6.0)
+    for edge, index in enumerate(target_indices.long()):
+        logits[1, 0, 0, edge, index] = 6.0
+        logits[1, 0, 0, edge, index + 1] = 6.0
+    return logits, pre_boxes, gt_bboxes
+
+
+def test_assignment_consistent_bpdd_rejects_target_switch() -> None:
+    logits, pre_boxes, gt_bboxes = _assignment_consistent_fixture()
+
+    result = assignment_consistent_bpdd_loss(
+        logits,
+        pre_boxes,
+        gt_bboxes,
+        [_match_triples(0, 0), _match_triples(0, 1)],
+        options=BPDDOptions(assignment_mode="consistent", margin=0.0),
+    )
+
+    torch.testing.assert_close(result.loss, torch.zeros_like(result.loss))
+    assert result.statistics["stable_match_ratio"].item() == 0.0
+    assert result.statistics["stable_source_matches"].item() == 0
+
+
+def test_assignment_consistent_bpdd_trains_only_stable_student() -> None:
+    logits, pre_boxes, gt_bboxes = _assignment_consistent_fixture()
+    logits.requires_grad_(True)
+
+    result = assignment_consistent_bpdd_loss(
+        logits,
+        pre_boxes,
+        gt_bboxes,
+        [_match_triples(0, 0), _match_triples(0, 0)],
+        options=BPDDOptions(
+            assignment_mode="consistent", weight=0.15, margin=0.0
+        ),
+    )
+    result.loss.backward()
+
+    assert result.loss.item() > 0
+    assert result.statistics["stable_match_ratio"].item() == pytest.approx(1.0)
+    assert result.statistics["active_edge_ratio"].item() == pytest.approx(1.0)
+    assert logits.grad is not None
+    assert logits.grad[0].abs().sum() > 0
+    torch.testing.assert_close(logits.grad[1], torch.zeros_like(logits.grad[1]))
+
+
+def test_assignment_consistent_bpdd_worse_teacher_is_noop() -> None:
+    logits, pre_boxes, gt_bboxes = _assignment_consistent_fixture()
+    logits = logits.flip(0).clone().requires_grad_(True)
+
+    result = assignment_consistent_bpdd_loss(
+        logits,
+        pre_boxes,
+        gt_bboxes,
+        [_match_triples(0, 0), _match_triples(0, 0)],
+        options=BPDDOptions(assignment_mode="consistent", margin=0.0),
+    )
+    result.loss.backward()
+
+    torch.testing.assert_close(result.loss, torch.zeros_like(result.loss))
+    assert logits.grad is not None
+    torch.testing.assert_close(logits.grad, torch.zeros_like(logits.grad))
+
+
+def test_assignment_consistent_bpdd_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError, match="assignment_mode"):
+        BPDDOptions(assignment_mode="broadcast")

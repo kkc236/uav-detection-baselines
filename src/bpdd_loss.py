@@ -6,6 +6,7 @@ It owns no model parameters and is never called by the inference path.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import math
 
@@ -25,6 +26,7 @@ class BPDDOptions:
     temperature: float = 0.5
     margin: float = 0.02
     eps: float = 1e-6
+    assignment_mode: str = "final"
 
     def __post_init__(self) -> None:
         numeric = {
@@ -43,6 +45,8 @@ class BPDDOptions:
             raise ValueError("BPDD margin must be non-negative")
         if self.eps <= 0:
             raise ValueError("BPDD eps must be positive")
+        if self.assignment_mode not in {"final", "consistent"}:
+            raise ValueError("assignment_mode must be 'final' or 'consistent'")
 
 
 @dataclass(frozen=True)
@@ -135,16 +139,35 @@ class BPDDDetectionLoss(FDRDetectionLoss):
         batch = args[1] if len(args) >= 2 else kwargs.get("batch")
         if not isinstance(batch, dict) or "bboxes" not in batch:
             raise TypeError("BPDD requires the stock target batch")
-        matched = self._matched_bpdd_inputs(
-            corner_logits,
-            pre_boxes,
-            batch["bboxes"],
-            assignments[-1],
-        )
-        result = bpdd_distribution_loss(
-            *matched,
-            options=self.bpdd_options,
-        )
+        if self.bpdd_options.assignment_mode == "consistent":
+            decoder_assignments = assignments[1:]
+            layer_matches: list[LayerMatchTriples] = []
+            for matches in decoder_assignments:
+                predicted_index, target_index = self._get_index(matches)
+                batch_index, query_index = predicted_index
+                layer_matches.append(
+                    (batch_index, query_index, target_index)
+                )
+            result = assignment_consistent_bpdd_loss(
+                corner_logits.reshape(
+                    *corner_logits.shape[:-1], 4, REG_MAX + 1
+                ),
+                pre_boxes,
+                batch["bboxes"],
+                layer_matches,
+                options=self.bpdd_options,
+            )
+        else:
+            matched = self._matched_bpdd_inputs(
+                corner_logits,
+                pre_boxes,
+                batch["bboxes"],
+                assignments[-1],
+            )
+            result = bpdd_distribution_loss(
+                *matched,
+                options=self.bpdd_options,
+            )
         losses["loss_bpdd"] = result.loss
         self.last_bpdd_statistics = result.statistics
         return losses
@@ -254,6 +277,241 @@ def _zero_result(corner_logits: Tensor, matched_queries: int) -> BPDDResult:
     )
 
 
+LayerMatchTriples = tuple[Tensor, Tensor, Tensor]
+
+
+def assignment_consistent_bpdd_loss(
+    corner_logits: Tensor,
+    pre_boxes: Tensor,
+    gt_bboxes: Tensor,
+    layer_matches: Sequence[LayerMatchTriples],
+    *,
+    options: BPDDOptions,
+) -> BPDDResult:
+    """Distill only across future layers that preserve a query-target match."""
+
+    if corner_logits.ndim != 5:
+        raise ValueError(
+            "corner_logits must have shape [layers,batch,queries,4,bins]"
+        )
+    layers, batch_size, queries, edges, bins = corner_logits.shape
+    if layers < 2 or edges != 4 or bins != REG_MAX + 1:
+        raise ValueError(
+            "corner_logits must have shape [layers>=2,batch,queries,4,33]"
+        )
+    if pre_boxes.shape != (batch_size, queries, 4):
+        raise ValueError("pre_boxes must have shape [batch,queries,4]")
+    if gt_bboxes.ndim != 2 or gt_bboxes.shape[-1] != 4:
+        raise ValueError("gt_bboxes must have shape [targets,4]")
+    if len(layer_matches) != layers:
+        raise ValueError("expected one assignment triple per decoder layer")
+    if options.assignment_mode != "consistent":
+        raise ValueError("assignment-consistent BPDD requires consistent mode")
+
+    normalized_matches: list[LayerMatchTriples] = []
+    for triple in layer_matches:
+        if len(triple) != 3:
+            raise ValueError("each layer match must contain batch, query, target")
+        batch_index, query_index, target_index = triple
+        if not (
+            batch_index.ndim == query_index.ndim == target_index.ndim == 1
+            and batch_index.shape == query_index.shape == target_index.shape
+        ):
+            raise ValueError("layer match indices must be same-shaped vectors")
+        batch_index = batch_index.to(device=corner_logits.device, dtype=torch.long)
+        query_index = query_index.to(device=corner_logits.device, dtype=torch.long)
+        target_index = target_index.to(device=corner_logits.device, dtype=torch.long)
+        if batch_index.numel() and (
+            int(batch_index.min()) < 0
+            or int(batch_index.max()) >= batch_size
+            or int(query_index.min()) < 0
+            or int(query_index.max()) >= queries
+            or int(target_index.min()) < 0
+            or int(target_index.max()) >= gt_bboxes.shape[0]
+        ):
+            raise ValueError("layer match index is out of range")
+        normalized_matches.append((batch_index, query_index, target_index))
+
+    graph_zero = corner_logits.float().sum() * 0.0
+    candidate_matches = sum(
+        int(batch_index.numel())
+        for batch_index, _, _ in normalized_matches[:-1]
+    )
+    candidate_edges = candidate_matches * edges
+    if (
+        not options.enabled
+        or options.weight == 0
+        or candidate_matches == 0
+    ):
+        scalar_zero = graph_zero.detach()
+        return BPDDResult(
+            loss=graph_zero,
+            statistics={
+                "active_edge_ratio": scalar_zero,
+                "mean_reliability": scalar_zero,
+                "mean_teacher_improvement": scalar_zero,
+                "mixture_beats_final_ratio": scalar_zero,
+                "mean_mixture_advantage_over_final": scalar_zero,
+                "stable_match_ratio": scalar_zero,
+                "matched_queries": torch.tensor(
+                    candidate_matches, dtype=torch.long, device=corner_logits.device
+                ),
+                "candidate_source_matches": torch.tensor(
+                    candidate_matches, dtype=torch.long, device=corner_logits.device
+                ),
+                "stable_source_matches": torch.tensor(
+                    0, dtype=torch.long, device=corner_logits.device
+                ),
+                "eligible_edges": torch.tensor(
+                    0, dtype=torch.long, device=corner_logits.device
+                ),
+            },
+        )
+
+    logits = corner_logits.float()
+    pre_boxes = pre_boxes.detach().to(device=corner_logits.device)
+    gt_bboxes = gt_bboxes.to(device=corner_logits.device)
+    terms: list[Tensor] = []
+    reliabilities: list[Tensor] = []
+    improvements: list[Tensor] = []
+    active_masks: list[Tensor] = []
+    stable_matches = torch.zeros((), dtype=torch.long, device=corner_logits.device)
+
+    for source_layer in range(layers - 1):
+        batch_index, query_index, target_index = normalized_matches[source_layer]
+        matches = int(batch_index.numel())
+        if matches == 0:
+            continue
+
+        matched_reference = pre_boxes[batch_index, query_index]
+        matched_targets = gt_bboxes[target_index]
+        target_indices, weight_right, weight_left = bbox2distance(
+            matched_reference,
+            cxcywh_to_xyxy(matched_targets),
+            REG_MAX,
+            REG_SCALE,
+            UP,
+        )
+        target_indices = target_indices.reshape(matches, edges).long()
+        weight_right = weight_right.reshape(matches, edges).float()
+        weight_left = weight_left.reshape(matches, edges).float()
+
+        future_stability: list[Tensor] = []
+        for future_layer in range(source_layer + 1, layers):
+            future_batch, future_query, future_target = normalized_matches[
+                future_layer
+            ]
+            if future_batch.numel() == 0:
+                stable = torch.zeros(
+                    matches, dtype=torch.bool, device=corner_logits.device
+                )
+            else:
+                stable = (
+                    (future_batch[:, None] == batch_index[None, :])
+                    & (future_query[:, None] == query_index[None, :])
+                    & (future_target[:, None] == target_index[None, :])
+                ).any(dim=0)
+            future_stability.append(stable)
+        stable_tensor = torch.stack(future_stability)
+        stable_source = stable_tensor.any(dim=0)
+        stable_matches = stable_matches + stable_source.sum()
+
+        future_logits = logits[source_layer + 1 :, batch_index, query_index]
+        future_probabilities = future_logits.detach().softmax(dim=-1)
+        future_log_probabilities = future_probabilities.clamp_min(
+            options.eps
+        ).log()
+        future_errors = interpolated_edge_nll(
+            future_log_probabilities,
+            target_indices,
+            weight_right,
+            weight_left,
+        )
+        stable_edges = stable_tensor.unsqueeze(-1).expand_as(future_errors)
+        scores = -future_errors / options.temperature
+        scores = scores.masked_fill(~stable_edges, float("-inf"))
+        has_teacher = stable_edges.any(dim=0)
+        max_score = scores.amax(dim=0)
+        safe_max = torch.where(has_teacher, max_score, torch.zeros_like(max_score))
+        unnormalized = torch.where(
+            stable_edges,
+            torch.exp(scores - safe_max.unsqueeze(0)),
+            torch.zeros_like(scores),
+        )
+        mixture_weights = unnormalized / unnormalized.sum(dim=0).clamp_min(
+            options.eps
+        )
+        teacher = (
+            mixture_weights.unsqueeze(-1) * future_probabilities
+        ).sum(dim=0).detach()
+        teacher_log = teacher.clamp_min(options.eps).log()
+        teacher_error = interpolated_edge_nll(
+            teacher_log,
+            target_indices,
+            weight_right,
+            weight_left,
+        )
+
+        source_log = torch.log_softmax(
+            logits[source_layer, batch_index, query_index], dim=-1
+        )
+        source_error = interpolated_edge_nll(
+            source_log,
+            target_indices,
+            weight_right,
+            weight_left,
+        )
+        improvement = source_error.detach() - teacher_error.detach()
+        reliability = (
+            (improvement - options.margin)
+            / source_error.detach().clamp_min(options.eps)
+        ).clamp(0.0, 1.0)
+        reliability = torch.where(
+            has_teacher, reliability, torch.zeros_like(reliability)
+        )
+        divergence = (teacher * (teacher_log - source_log)).sum(dim=-1)
+        terms.append(reliability * divergence)
+        reliabilities.append(reliability)
+        improvements.append(
+            torch.where(has_teacher, improvement, torch.zeros_like(improvement))
+        )
+        active_masks.append(reliability > 0)
+
+    if not terms:
+        raise RuntimeError("candidate BPDD matches produced no source terms")
+    term_tensor = torch.cat([value.reshape(-1) for value in terms])
+    reliability_tensor = torch.cat(
+        [value.reshape(-1) for value in reliabilities]
+    )
+    improvement_tensor = torch.cat(
+        [value.reshape(-1) for value in improvements]
+    )
+    active_tensor = torch.cat([value.reshape(-1) for value in active_masks])
+    loss = term_tensor.sum() * options.weight / max(candidate_edges, 1)
+    scalar_zero = graph_zero.detach()
+    return BPDDResult(
+        loss=loss,
+        statistics={
+            "active_edge_ratio": active_tensor.float().mean().detach(),
+            "mean_reliability": reliability_tensor.mean().detach(),
+            "mean_teacher_improvement": improvement_tensor.clamp_min(0).mean().detach(),
+            "mixture_beats_final_ratio": scalar_zero,
+            "mean_mixture_advantage_over_final": scalar_zero,
+            "stable_match_ratio": (
+                stable_matches.float() / max(candidate_matches, 1)
+            ).detach(),
+            "matched_queries": torch.tensor(
+                candidate_matches, dtype=torch.long, device=corner_logits.device
+            ),
+            "candidate_source_matches": torch.tensor(
+                candidate_matches, dtype=torch.long, device=corner_logits.device
+            ),
+            "stable_source_matches": stable_matches.detach(),
+            "eligible_edges": stable_matches.detach() * edges,
+        },
+    )
+
+
 def bpdd_distribution_loss(
     corner_logits: Tensor,
     target_indices: Tensor,
@@ -349,6 +607,7 @@ __all__ = [
     "BPDDDetectionLoss",
     "BPDDOptions",
     "BPDDResult",
+    "assignment_consistent_bpdd_loss",
     "bpdd_distribution_loss",
     "build_progressive_teachers",
     "interpolated_edge_nll",
