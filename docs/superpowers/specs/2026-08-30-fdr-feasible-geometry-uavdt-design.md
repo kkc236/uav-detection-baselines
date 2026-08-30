@@ -1,26 +1,33 @@
-# FDR Feasible-Geometry Repair and UAVDT Full Mapping
+# Assignment-Consistent BPDD, FDR Feasible Geometry, and UAVDT Full Mapping
 
 Date: 2026-08-30
 
 ## 1. Decision
 
-Implement a parameter-free, straight-through pairwise extent projection between
-the FDR Integral output and the pinned `distance2bbox` primitive.  The projection
-must be an exact identity for every already-feasible FDR distance tuple and must
-keep a useful localization gradient when a horizontal or vertical extent becomes
-infeasible.  Do not clamp the GIoU loss, do not clamp each signed FDR edge, and do
-not remove or relax the fixed AMP128 invariant.
+Implement two root-cause repairs in one versioned Full method.  First, replace
+BPDD's final-assignment broadcast with assignment-consistent progressive
+distillation: a shallow query may learn only from future layers that match the
+same query to the same ground-truth object, and only when their detached mixture
+is better on that ground-truth target.  Use a conservative BPDD loss budget of
+`0.15` instead of `0.5`.
+
+Second, insert a parameter-free, straight-through pairwise extent projection
+between the FDR Integral output and the pinned `distance2bbox` primitive.  The
+projection must be an exact identity for every already-feasible FDR distance
+tuple and must keep a useful localization gradient when a horizontal or vertical
+extent becomes infeasible.  Do not clamp the GIoU loss, do not clamp each signed
+FDR edge, and do not remove or relax the fixed AMP128 invariant.
 
 The repair is developed from frozen source commit
 `445120b7337dad0ccc41d18ad081b6b33580dcd2` on branch
 `codex/fdr-feasible-geometry-uavdt`.
 
 The branch also supplies a repository-owned UAVDT Full launcher.  `Full` maps
-only to the existing `LRS-FDR+BPDD+FIA` graph:
+only to the revised `LRS-FDR+AC-BPDD+FIA` graph:
 
 - config: `configs/rtdetr-l-lrs-fdr-bpdd-fia.yaml`;
 - trainer: `src.rtdetr_lrs_system.TRAINER_TYPES["i"]`;
-- method identity: `lrs_fdr_bpdd_fia`.
+- method identity: `lrs_fdr_ac_bpdd_fia`.
 
 ## 2. Observed failure and comparison evidence
 
@@ -44,8 +51,23 @@ zero localization gradient for raw negative widths or heights.
 
 VisDrone did not show the same systemic failure.  Its stored LRS evidence has
 positive epoch-average GIoU losses, zero skipped AMP attempts, and zero
-non-finite optimizer records.  The repair must consequently preserve the exact
-valid path so that the existing VisDrone result is not gratuitously redefined.
+non-finite optimizer records.  These observations separate the geometry failure
+from the BPDD interaction failure; backward compatibility with the old VisDrone
+Full checkpoint is not an acceptance requirement for the revised method.
+
+The same-protocol completed VisDrone arms reveal a separate interaction defect:
+
+| VisDrone best | Precision | Recall | mAP50 | mAP50-95 |
+| --- | ---: | ---: | ---: | ---: |
+| LRS-FDR+BPDD | 0.5926 | 0.4895 | 0.4915 | 0.2938 |
+| LRS-FDR+FIA | 0.5877 | 0.5002 | 0.4949 | 0.2979 |
+| old Full | 0.5844 | 0.4973 | 0.4923 | 0.2960 |
+
+Relative to `LRS-FDR+FIA`, adding old BPDD reduced precision by `0.33pp`,
+recall by `0.29pp`, mAP50 by `0.26pp`, and mAP50-95 by `0.19pp`.  Because the two
+arms differ only by BPDD, this is direct evidence of a negative BPDD marginal
+effect under the current LRS supervision, although it is not proof that BPDD's
+general idea is intrinsically incompatible with LRS.
 
 ## 3. Root-cause contract
 
@@ -63,8 +85,16 @@ assumes positive extents.  Once that assumption is violated, GIoU can exceed one
 the scaled GIoU loss can become negative, and optimization can reward increasingly
 invalid geometry until FP16 gradients overflow.
 
-The interface defect is therefore the absence of a joint feasibility contract
-between the signed FDR edge representation and the stock box criterion.
+The geometry interface defect is therefore the absence of a joint feasibility
+contract between the signed FDR edge representation and the stock box criterion.
+
+The supervision defect is independent.  LRS-FGL consumes each decoder layer's
+own stock assignment, while old BPDD selects the final-layer assignment and
+broadcasts those `(batch, query, target)` pairs across all shallow layers.  If a
+shallow layer assigns a query to target A and the final layer assigns it to target
+B, stock/FGL gradients pull the shared FDR logits toward A while BPDD pulls them
+toward B.  The old BPDD weight `0.5` can amplify this conflict relative to FGL's
+configured weight `0.15`.
 
 ## 4. Feasible-extent operator
 
@@ -113,7 +143,35 @@ called in `src/fdr_head.py` immediately after Integral and immediately before
 `distance2bbox`.  The same decoder path serves training, validation, inference,
 normal queries, and denoising queries.
 
-## 5. Runtime evidence
+## 5. Assignment-consistent BPDD
+
+For each source decoder layer `l < L - 1`, consume that layer's recorded stock
+assignment.  For every matched triple `(batch, query, target)`:
+
+1. Build the adjacent-bin FDR target from that query's detached preliminary box
+   and the source layer's assigned ground-truth box.
+2. Inspect only future layers `k > l` whose stock assignment contains the exact
+   same `(batch, query, target)` triple.
+3. Evaluate every eligible future distribution on the same source target.
+4. Build the detached softmin teacher mixture using the existing temperature
+   `0.5`.
+5. Apply KL distillation only when the mixture improves the source NLL by more
+   than the existing margin `0.02`.
+6. Average over all candidate source edges, including inactive zero-weight edges,
+   and multiply by the revised BPDD weight `0.15`.
+
+No fallback to the final assignment is permitted.  If no future layer preserves
+the same match, that source match contributes exactly zero.  This makes unstable
+early assignments an automatic warm-up gate without consulting epoch number or
+validation metrics.  BPDD remains normal-query-only, parameter-free, and absent
+from validation/inference execution.
+
+The implementation must expose detached per-batch evidence for stable-match
+ratio, active edge ratio, eligible source matches, teacher improvement, and BPDD
+loss.  A zero stable-match ratio is valid runtime behavior but invalid evidence
+for claiming that BPDD materially contributed.
+
+## 6. Runtime geometry evidence
 
 For every decoder forward, retain a plain, non-persistent evidence record with:
 
@@ -129,7 +187,7 @@ or EMA state.  It exists to distinguish a rare numerical boundary event from a
 continuing raw-distribution collapse.  Tests must show that state-dict keys are
 unchanged.
 
-## 6. UAVDT Full cross-server launcher
+## 7. UAVDT Full cross-server launcher
 
 Add `scripts/train_uavdt_full.py`.  It is dataset-specific and must not call the
 VisDrone dataset authority.  Its public inputs are:
@@ -163,7 +221,11 @@ The launcher then dispatches exactly
 `TRAINER_TYPES["i"](..., initial_state_path=..., experiment_seed=<baseline seed>)`.
 No `g`, `h`, ad-hoc YAML, or stock trainer fallback is accepted by this entrypoint.
 
-## 7. TDD and acceptance tests
+The arm-I config must explicitly bind assignment-consistent BPDD and the revised
+`0.15` weight.  Old Full checkpoints and old run identities are rejected because
+their loss semantics are not resume-compatible with the revised method.
+
+## 8. TDD and acceptance tests
 
 Implementation begins only after the following tests are written and observed to
 fail for the expected missing behavior:
@@ -183,11 +245,29 @@ fail for the expected missing behavior:
 5. Require both training and evaluation decoder paths to use the repair.
 6. Require decoder state-dict keys to remain unchanged.
 
+### BPDD alignment tests
+
+1. Construct a query assigned to target A at a shallow layer and target B at the
+   final layer; require old-style final-target supervision to be absent.
+2. Require a source match with no identical future match to contribute exactly
+   zero loss and finite zero gradients.
+3. Require a stable `(batch, query, target)` match with a genuinely better future
+   distribution to produce positive finite loss and a source gradient that
+   reduces NLL on the same target.
+4. Require a stable future distribution that is not better by the margin to be
+   inactive.
+5. Require permutation of match ordering to leave loss and statistics unchanged.
+6. Require BPDD disabled mode to reproduce parent LRS-FDR losses exactly.
+7. Require BPDD to add no parameters, state-dict keys, validation output, or
+   inference computation.
+8. Require the Full YAML to bind weight `0.15` and reject legacy
+   `matched_layer: final` semantics.
+
 ### Full mapping tests
 
 1. Require the launcher to expose only the declared UAVDT Full contract.
 2. Require `Full` to resolve to config arm `i`, trainer arm `i`, and method
-   `lrs_fdr_bpdd_fia`.
+   `lrs_fdr_ac_bpdd_fia`.
 3. Require baseline fields to survive except for the explicit path/identity
    replacements.
 4. Require malformed data YAML, conflicting `nc`, unsafe names, missing inputs,
@@ -203,7 +283,7 @@ fail for the expected missing behavior:
 - UAVDT Full launcher tests;
 - full repository test suite if the focused gates pass.
 
-## 8. Experiment acceptance boundary
+## 9. Experiment acceptance boundary
 
 The code repair is accepted when all automated gates pass and a UAVDT replay of
 the former epoch-14 failure window has:
@@ -215,16 +295,50 @@ the former epoch-14 failure window has:
 - recorded raw infeasible counts that do not grow without bound.
 
 The replay is an engineering gate, not a final paper result.  Final UAVDT Full
-evidence must be a fresh run using this single source branch.  Existing VisDrone
-results may be retained only after the old VisDrone best checkpoint is evaluated
-with the repaired decoder and reports zero feasibility activations; otherwise the
-affected VisDrone arm must be re-evaluated and the activation disclosed.
+evidence must be a fresh run using this single source branch.  The old VisDrone
+Full checkpoint remains historical evidence only and is not resume-compatible
+with assignment-consistent BPDD.
 
-## 9. Explicit non-goals
+Accuracy acceptance is separate from engineering acceptance.  With the same
+initial state and training protocol, revised Full must not be presented as a
+positive BPDD ablation unless its best mAP50-95 exceeds `LRS-FDR+FIA`.  The run
+must also report non-zero stable-match and active-edge evidence.  No runtime
+threshold may depend on validation metrics, and no failed setting may be silently
+renamed as the final method.
+
+## 10. Adversarial audit and failure containment
+
+1. **Cosmetic-module risk:** strict agreement can make BPDD nearly inactive.
+   Countermeasure: report stable matches, active edges, and BPDD loss; zero
+   activity cannot support a BPDD contribution claim.
+2. **Loss-domination risk:** alignment does not guarantee compatible gradient
+   magnitudes.  Countermeasure: reduce the frozen weight from `0.5` to `0.15` and
+   preserve the improvement margin.
+3. **Teacher leakage risk:** future predictions may represent another object.
+   Countermeasure: future layers enter the mixture only with an identical query
+   and target assignment, then are rescored on the source target.
+4. **Validation-overfitting risk:** adaptive gates could be tuned on mAP.
+   Countermeasure: gates use training assignments and detached training NLL only;
+   validation metrics never enter the loss.
+5. **Geometry-masking risk:** forward projection can hide collapsing raw
+   distances.  Countermeasure: record infeasible counts and raw minima separately
+   from repaired boxes and inspect their trend during the UAVDT replay.
+6. **False-success risk:** avoiding AMP failure does not establish detection
+   quality.  Countermeasure: maintain separate engineering and accuracy gates.
+7. **Resume-contamination risk:** legacy checkpoints encode optimizer state from
+   the conflicting loss.  Countermeasure: revised Full is fresh-start-only and
+   has a new immutable method identity.
+8. **Guarantee boundary:** unit tests can prove alignment, finiteness, isolation,
+   and mapping, but cannot guarantee a positive mAP delta.  Only the declared
+   same-protocol experiment can establish that result.
+
+## 11. Explicit non-goals
 
 - Do not clamp negative GIoU losses to zero.
 - Do not clamp each signed FDR distance independently.
-- Do not add a new loss weight or trainable parameter.
-- Do not change BPDD, FIA, LRS-FGL, matching, AMP scale, optimizer, or scheduler.
+- Do not add trainable parameters.
+- Do not change FIA, LRS-FGL, stock matching, AMP scale, optimizer, or scheduler.
+- Do not retain final-assignment broadcast or add an epoch-based BPDD schedule.
+- Do not use validation metrics to activate, weight, or stop BPDD.
 - Do not reuse the VisDrone launcher for UAVDT.
 - Do not claim that code tests alone prove an accuracy improvement.
