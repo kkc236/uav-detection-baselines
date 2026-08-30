@@ -6,6 +6,7 @@ DDF, LQE, and teacher distillation intentionally live outside this module.
 
 from __future__ import annotations
 
+import math
 from numbers import Real
 
 import torch
@@ -195,6 +196,55 @@ def distance2bbox(
     return xyxy_to_cxcywh(bboxes)
 
 
+def project_feasible_fdr_distances(
+    distance: Tensor,
+    *,
+    reg_scale: Tensor | Real = REG_SCALE,
+    minimum_extent: float = 1e-3,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Project paired FDR edges to positive extents with identity gradients."""
+
+    if distance.ndim == 0 or distance.shape[-1] != 4:
+        raise ValueError("distance must end in four FDR edges")
+    if not math.isfinite(float(minimum_extent)) or minimum_extent <= 0:
+        raise ValueError("minimum_extent must be finite and positive")
+    scale = torch.as_tensor(
+        reg_scale, dtype=distance.dtype, device=distance.device
+    ).abs()
+    if scale.numel() != 1 or not torch.isfinite(scale).all() or scale.item() == 0:
+        raise ValueError("reg_scale must be one finite non-zero scalar")
+
+    minimum = torch.as_tensor(
+        minimum_extent, dtype=distance.dtype, device=distance.device
+    )
+    raw_x = scale + distance[..., 0] + distance[..., 2]
+    raw_y = scale + distance[..., 1] + distance[..., 3]
+    safe_x = raw_x + (raw_x.clamp_min(minimum) - raw_x).detach()
+    safe_y = raw_y + (raw_y.clamp_min(minimum) - raw_y).detach()
+    correction_x = (safe_x - raw_x) * 0.5
+    correction_y = (safe_y - raw_y) * 0.5
+    safe = torch.stack(
+        (
+            distance[..., 0] + correction_x,
+            distance[..., 1] + correction_y,
+            distance[..., 2] + correction_x,
+            distance[..., 3] + correction_y,
+        ),
+        dim=-1,
+    )
+    stats = {
+        "total": torch.tensor(
+            raw_x.numel(), dtype=torch.long, device=distance.device
+        ),
+        "horizontal_infeasible": (raw_x < minimum).sum().detach(),
+        "vertical_infeasible": (raw_y < minimum).sum().detach(),
+        "minimum_raw_horizontal": raw_x.detach().amin(),
+        "minimum_raw_vertical": raw_y.detach().amin(),
+        "minimum_extent": minimum.detach(),
+    }
+    return safe, stats
+
+
 def bbox2distance(
     points: Tensor,
     bbox: Tensor,
@@ -314,6 +364,7 @@ __all__ = [
     "cxcywh_to_xyxy",
     "distance2bbox",
     "fine_grained_localization_loss",
+    "project_feasible_fdr_distances",
     "translate_gt",
     "unimodal_distribution_focal_loss",
     "weighting_function",
