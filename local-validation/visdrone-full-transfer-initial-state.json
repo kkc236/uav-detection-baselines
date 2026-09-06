@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "status": "passed",
+  "artifact_role": "visdrone_full_transfer",
+  "artifact": {
+    "path": "C:/Users/16946/Documents/OBJECTIVE CHECK PAPER/artifacts/visdrone-full-transfer/initial-state.pt",
+    "bytes": 134404103,
+    "sha256": "78EBC638394C1F9E16E490291039D3506AE0277CAC699DB0286A645023B17825"
+  },
+  "source_checkpoint": {
+    "asset": "DFR-BDPP-FIA-best.pt",
+    "bytes": 67871120,
+    "sha256": "FD972586E2833A28AA02D04AC9E460B0D7C8CFC4E6E8BCB48DA273F0E905593C",
+    "legacy_model_type": "src.rtdetr_fdr_bpdd_fia.FDRBPDDFIADetectionModel",
+    "stripped_epoch": -1,
+    "extraction": "EMA converted to FP32 tensor-only state"
+  },
+  "target": {
+    "model_type": "src.rtdetr_lrs_system.LRSFDRBPDDFIADetectionModel",
+    "arm": "i",
+    "nc": 10,
+    "channels": 3,
+    "tensor_count": 969,
+    "tensor_state_sha256": "C86A5B7EADFAFDAB19724EF662F7D6EB06F4E56E1C9745D5522FB235A23C6BCB"
+  },
+  "checks": {
+    "source_file_authority": true,
+    "weights_only_deserialization": true,
+    "exact_key_set": true,
+    "exact_shape_and_dtype_contract": true,
+    "strict_load_missing_keys": 0,
+    "strict_load_unexpected_keys": 0,
+    "loaded_tensor_mismatches": 0,
+    "cpu_smoke_forward_finite": true
+  },
+  "implementation_commit": "bc55350"
+}
