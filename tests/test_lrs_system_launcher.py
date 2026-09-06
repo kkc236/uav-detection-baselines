@@ -13,6 +13,7 @@ import torch
 from scripts import train_lrs_fdr
 from scripts.train_rtdetr_fdr import FORMAL_EPOCHS, FROZEN_SETTINGS
 from src.fdr_protocol import build_fdr_initial_state
+from src.full_transfer_state import build_full_transfer_artifact
 from src.rtdetr_lrs_system import ARM_CONFIGS, TRAINER_TYPES
 
 
@@ -75,6 +76,25 @@ def test_initial_state_validator_accepts_weights_only_fdr_artifact(
     assert module.validate_initial_state_file(state) == state.resolve()
 
 
+def test_transfer_initial_state_is_accepted_only_for_full_arm(tmp_path: Path) -> None:
+    module = _load_module()
+    state = tmp_path / "full-transfer.pt"
+    torch.save(
+        build_full_transfer_artifact(
+            {"model.weight": torch.ones(1)},
+            source_checkpoint_sha256="A" * 64,
+            source_checkpoint_bytes=67_871_120,
+            nc=10,
+        ),
+        state,
+    )
+
+    assert module.validate_initial_state_file(state, arm="i") == state.resolve()
+    for arm in ("f", "g", "h"):
+        with pytest.raises(ValueError, match="only.*arm i"):
+            module.validate_initial_state_file(state, arm=arm)
+
+
 def _patch_runtime(
     monkeypatch: pytest.MonkeyPatch,
     module,
@@ -98,7 +118,7 @@ def _patch_runtime(
     monkeypatch.setattr(
         module,
         "validate_initial_state_file",
-        lambda path: Path(path).resolve(),
+        lambda path, arm=None: Path(path).resolve(),
     )
     monkeypatch.setattr(
         module,

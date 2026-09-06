@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+import torch
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -22,6 +24,10 @@ from scripts.train_rtdetr_fdr import (  # noqa: E402
     prepare_data_yaml,
 )
 from src.lpr_protocol import dataset_signature  # noqa: E402
+from src.full_transfer_state import (  # noqa: E402
+    ARTIFACT_ROLE as FULL_TRANSFER_ROLE,
+    validate_full_transfer_artifact,
+)
 from src.lrs_runtime_evidence import RuntimeEvidenceRecorder  # noqa: E402
 from src.rtdetr_lrs_system import (  # noqa: E402
     ARM_CONFIGS,
@@ -74,12 +80,20 @@ def validate_run_name(name: str) -> str:
     return name
 
 
-def validate_initial_state_file(path: Path) -> Path:
+def validate_initial_state_file(path: Path, *, arm: str | None = None) -> Path:
     requested = Path(path)
     if requested.is_symlink() or not requested.is_file():
         raise FileNotFoundError(f"FDR initial state not found: {requested}")
     resolved = requested.resolve()
-    load_fdr_initial_state_artifact(resolved)
+    artifact = torch.load(resolved, map_location="cpu", weights_only=True)
+    if not isinstance(artifact, Mapping):
+        raise TypeError("initial state must be a checkpoint mapping")
+    if artifact.get("artifact_role") == FULL_TRANSFER_ROLE:
+        if arm != "i":
+            raise ValueError("VisDrone Full transfer state is accepted only by arm i")
+        validate_full_transfer_artifact(artifact, expected_nc=10)
+    else:
+        load_fdr_initial_state_artifact(resolved)
     return resolved
 
 
@@ -164,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         "formal",
         authority_root / "data",
     )
-    initial_state = validate_initial_state_file(args.initial_state)
+    initial_state = validate_initial_state_file(args.initial_state, arm=args.arm)
     settings = build_settings(args.arm, data_yaml, output_root, args.name)
     record = build_launch_record(
         arm=args.arm,
