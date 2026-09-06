@@ -132,6 +132,7 @@ def test_training_and_eval_decode_use_projection_without_new_state_keys() -> Non
     assert decoder.last_geometry_statistics["vertical_infeasible"].item() > 0
     assert tuple(decoder.state_dict()) == before
 
+
     decoder.eval()
     with torch.no_grad():
         eval_boxes, _ = _run_decoder(decoder)
@@ -139,3 +140,13 @@ def test_training_and_eval_decode_use_projection_without_new_state_keys() -> Non
     assert torch.all(eval_boxes[..., 2:] > 0)
     assert decoder.last_geometry_statistics["horizontal_infeasible"].item() > 0
     assert tuple(decoder.state_dict()) == before
+
+
+def test_decoder_geometry_survives_actual_cpu_bfloat16_autocast() -> None:
+    decoder = _invalid_extent_decoder().train()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        boxes, _ = _run_decoder(decoder)
+    assert boxes.dtype == torch.float32
+    assert torch.all(boxes[..., 2:] > 0)
+    boxes.sum().backward()
+    assert decoder.last_geometry_statistics["minimum_decoded_width"] > 0

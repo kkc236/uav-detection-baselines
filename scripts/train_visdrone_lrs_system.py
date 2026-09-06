@@ -22,14 +22,17 @@ from scripts.train_rtdetr_fdr import (  # noqa: E402
     prepare_data_yaml,
 )
 from src.lpr_protocol import dataset_signature  # noqa: E402
+from src.lrs_runtime_evidence import RuntimeEvidenceRecorder  # noqa: E402
 from src.rtdetr_lrs_system import (  # noqa: E402
     ARM_CONFIGS,
+    SYSTEM_REVISION,
     TRAINER_TYPES,
     load_fdr_initial_state_artifact,
 )
 
 
 ARM_METHODS = {
+    "f": "lrs_fdr_feasible",
     "g": "lrs_fdr_ac_bpdd",
     "h": "lrs_fdr_fia",
     "i": "lrs_fdr_ac_bpdd_fia",
@@ -89,7 +92,7 @@ def build_settings(
     if arm not in ARM_METHODS:
         raise ValueError(f"unknown LRS system arm: {arm}")
     run_name = validate_run_name(
-        name if name is not None else f"formal-seed0-{ARM_METHODS[arm]}-v1"
+        name if name is not None else f"formal-seed0-{ARM_METHODS[arm]}-v2"
     )
     return {
         **FROZEN_SETTINGS,
@@ -118,7 +121,8 @@ def build_launch_record(
     config_path = Path(config_path).resolve()
     initial_state_path = Path(initial_state_path).resolve()
     return {
-        "format_version": 1,
+        "format_version": 2,
+        "method_revision": SYSTEM_REVISION,
         "arm": arm,
         "method": ARM_METHODS[arm],
         "source": dict(source_identity),
@@ -182,6 +186,10 @@ def main(argv: list[str] | None = None) -> int:
         initial_state_path=initial_state,
         experiment_seed=0,
     )
+    recorder = RuntimeEvidenceRecorder()
+    trainer.add_callback("on_train_epoch_start", recorder.reset)
+    trainer.add_callback("on_train_batch_end", recorder.capture)
+    trainer.add_callback("on_train_epoch_end", recorder.write)
     trainer.train()
     return 0
 

@@ -369,8 +369,8 @@ def assignment_consistent_bpdd_loss(
         )
 
     logits = corner_logits.float()
-    pre_boxes = pre_boxes.detach().to(device=corner_logits.device)
-    gt_bboxes = gt_bboxes.to(device=corner_logits.device)
+    pre_boxes = pre_boxes.detach().to(device=corner_logits.device, dtype=torch.float32)
+    gt_bboxes = gt_bboxes.to(device=corner_logits.device, dtype=torch.float32)
     terms: list[Tensor] = []
     reliabilities: list[Tensor] = []
     improvements: list[Tensor] = []
@@ -417,10 +417,7 @@ def assignment_consistent_bpdd_loss(
         stable_matches = stable_matches + stable_source.sum()
 
         future_logits = logits[source_layer + 1 :, batch_index, query_index]
-        future_probabilities = future_logits.detach().softmax(dim=-1)
-        future_log_probabilities = future_probabilities.clamp_min(
-            options.eps
-        ).log()
+        future_log_probabilities = future_logits.detach().log_softmax(dim=-1)
         future_errors = interpolated_edge_nll(
             future_log_probabilities,
             target_indices,
@@ -431,20 +428,17 @@ def assignment_consistent_bpdd_loss(
         scores = -future_errors / options.temperature
         scores = scores.masked_fill(~stable_edges, float("-inf"))
         has_teacher = stable_edges.any(dim=0)
-        max_score = scores.amax(dim=0)
-        safe_max = torch.where(has_teacher, max_score, torch.zeros_like(max_score))
-        unnormalized = torch.where(
-            stable_edges,
-            torch.exp(scores - safe_max.unsqueeze(0)),
-            torch.zeros_like(scores),
+        # Empty candidate sets must not produce -inf - (-inf). Their placeholder
+        # distribution is finite, but their gate remains exactly zero below.
+        safe_scores = torch.where(has_teacher.unsqueeze(0), scores, torch.zeros_like(scores))
+        log_weights = safe_scores - torch.logsumexp(safe_scores, dim=0, keepdim=True)
+        teacher_log = torch.logsumexp(
+            log_weights.unsqueeze(-1) + future_log_probabilities, dim=0
         )
-        mixture_weights = unnormalized / unnormalized.sum(dim=0).clamp_min(
-            options.eps
-        )
-        teacher = (
-            mixture_weights.unsqueeze(-1) * future_probabilities
-        ).sum(dim=0).detach()
-        teacher_log = teacher.clamp_min(options.eps).log()
+        teacher_log = torch.where(
+            has_teacher.unsqueeze(-1), teacher_log, torch.full_like(teacher_log, -math.log(bins))
+        ).detach()
+        teacher = teacher_log.exp()
         teacher_error = interpolated_edge_nll(
             teacher_log,
             target_indices,

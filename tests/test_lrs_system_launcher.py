@@ -133,7 +133,7 @@ def test_help_exposes_only_the_unified_frozen_launcher_contract() -> None:
         "--dry-run",
     ):
         assert allowed in result.stdout
-    for arm in ("g", "h", "i"):
+    for arm in ("f", "g", "h", "i"):
         assert arm in result.stdout
     for forbidden in (
         "--epochs",
@@ -158,6 +158,7 @@ def test_arm_maps_are_exact_and_build_settings_rejects_unknown_arm(
     module = _load_module()
 
     assert module.ARM_METHODS == {
+        "f": "lrs_fdr_feasible",
         "g": "lrs_fdr_ac_bpdd",
         "h": "lrs_fdr_fia",
         "i": "lrs_fdr_ac_bpdd_fia",
@@ -181,7 +182,7 @@ def test_arm_settings_differ_only_by_model_and_name_and_freeze_formal100(
     output_root = tmp_path / "runs"
     settings = {
         arm: module.build_settings(arm, data_yaml, output_root)
-        for arm in ("g", "h", "i")
+        for arm in ("f", "g", "h", "i")
     }
     reference = train_lrs_fdr.build_settings(
         data_yaml=data_yaml,
@@ -193,7 +194,7 @@ def test_arm_settings_differ_only_by_model_and_name_and_freeze_formal100(
             k: v for k, v in reference.items() if k not in {"model", "name"}
         }
         assert actual["model"] == str(ARM_CONFIGS[arm].resolve())
-        assert actual["name"] == f"formal-seed0-{module.ARM_METHODS[arm]}-v1"
+        assert actual["name"] == f"formal-seed0-{module.ARM_METHODS[arm]}-v2"
         assert actual["epochs"] == FORMAL_EPOCHS == 100
         assert actual["seed"] == 0
         assert actual["imgsz"] == FROZEN_SETTINGS["imgsz"] == 640
@@ -243,7 +244,8 @@ def test_authority_record_is_deterministic_hashed_and_conflict_safe(
 
     assert repeated == record
     assert record == {
-        "format_version": 1,
+        "format_version": 2,
+        "method_revision": module.SYSTEM_REVISION,
         "arm": "g",
         "method": "lrs_fdr_ac_bpdd",
         "source": source,
@@ -263,10 +265,12 @@ def test_authority_record_is_deterministic_hashed_and_conflict_safe(
         module.write_authority(authority, {**record, "arm": "h"})
 
 
+@pytest.mark.parametrize("arm", ["f", "g", "h", "i"])
 def test_dry_run_writes_and_prints_authority_without_constructing_trainer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    arm: str,
 ) -> None:
     module = _load_module()
     dataset_root, initial_state, output_root = _patch_runtime(
@@ -279,12 +283,12 @@ def test_dry_run_writes_and_prints_authority_without_constructing_trainer(
     monkeypatch.setattr(
         module,
         "TRAINER_TYPES",
-        {arm: forbidden_trainer for arm in ("g", "h", "i")},
+        {arm: forbidden_trainer for arm in ("f", "g", "h", "i")},
     )
     result = module.main(
         [
             "--arm",
-            "g",
+            arm,
             "--dataset-root",
             str(dataset_root),
             "--initial-state",
@@ -296,14 +300,14 @@ def test_dry_run_writes_and_prints_authority_without_constructing_trainer(
     )
 
     assert result == 0
-    authority = output_root / "authority" / "formal-seed0-lrs_fdr_ac_bpdd-v1.json"
+    authority = output_root / "authority" / f"formal-seed0-{module.ARM_METHODS[arm]}-v2.json"
     record = json.loads(authority.read_text(encoding="utf-8"))
     assert json.loads(capsys.readouterr().out) == record
-    assert record["arm"] == "g"
-    assert record["method"] == "lrs_fdr_ac_bpdd"
+    assert record["arm"] == arm
+    assert record["method"] == module.ARM_METHODS[arm]
 
 
-@pytest.mark.parametrize("arm", ["g", "h", "i"])
+@pytest.mark.parametrize("arm", ["f", "g", "h", "i"])
 def test_non_dry_run_dispatches_the_selected_trainer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -319,10 +323,13 @@ def test_non_dry_run_dispatches_the_selected_trainer(
         def __init__(self, **kwargs) -> None:
             calls.append(("init", kwargs))
 
+        def add_callback(self, event, callback):
+            calls.append(("callback", event))
+
         def train(self) -> None:
             calls.append(("train", None))
 
-    trainers = {key: type(f"Unused{key}", (), {}) for key in ("g", "h", "i")}
+    trainers = {key: type(f"Unused{key}", (), {}) for key in ("f", "g", "h", "i")}
     trainers[arm] = SpyTrainer
     monkeypatch.setattr(module, "TRAINER_TYPES", trainers)
 
@@ -350,7 +357,9 @@ def test_non_dry_run_dispatches_the_selected_trainer(
         "initial_state_path": initial_state,
         "experiment_seed": 0,
     }
-    assert calls[1] == ("train", None)
+    assert [value for kind, value in calls if kind == "callback"] == [
+        "on_train_epoch_start", "on_train_batch_end", "on_train_epoch_end"]
+    assert calls[-1] == ("train", None)
 
 
 def test_invalid_arm_is_rejected_by_argparse_and_build_settings(

@@ -24,9 +24,11 @@ from scripts.train_visdrone_lrs_system import (  # noqa: E402
 )
 from src.rtdetr_lrs_system import (  # noqa: E402
     ARM_CONFIGS,
+    SYSTEM_REVISION,
     TRAINER_TYPES,
     load_fdr_initial_state_artifact,
 )
+from src.lrs_runtime_evidence import RuntimeEvidenceRecorder  # noqa: E402
 
 
 METHOD = "lrs_fdr_ac_bpdd_fia"
@@ -156,7 +158,8 @@ def build_launch_record(
     baseline_path = Path(baseline_path).resolve()
     initial_state = Path(initial_state).resolve()
     return {
-        "format_version": 1,
+        "format_version": 2,
+        "method_revision": SYSTEM_REVISION,
         "arm": ARM,
         "method": METHOD,
         "source": dict(source),
@@ -177,124 +180,6 @@ def build_launch_record(
     }
 
 
-def _number(value: Any) -> float | None:
-    if value is None:
-        return None
-    if hasattr(value, "detach"):
-        value = value.detach()
-    if hasattr(value, "item"):
-        value = value.item()
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    return result if result == result and abs(result) != float("inf") else None
-
-
-def _unwrap_model(model: Any) -> Any:
-    return getattr(model, "module", model)
-
-
-class RuntimeEvidenceRecorder:
-    """Aggregate detached training diagnostics without entering model state."""
-
-    def __init__(self) -> None:
-        self.reset(None)
-
-    def reset(self, trainer: Any) -> None:
-        del trainer
-        self.batches = 0
-        self.bpdd_stable_sum = 0.0
-        self.bpdd_active_sum = 0.0
-        self.bpdd_reliability_sum = 0.0
-        self.bpdd_loss_sum = 0.0
-        self.bpdd_observations = 0
-        self.candidate_source_matches = 0
-        self.stable_source_matches = 0
-        self.geometry_total = 0
-        self.geometry_horizontal = 0
-        self.geometry_vertical = 0
-        self.geometry_minimum_horizontal: float | None = None
-        self.geometry_minimum_vertical: float | None = None
-        self.minimum_extent: float | None = None
-
-    def capture(self, trainer: Any) -> None:
-        model = _unwrap_model(trainer.model)
-        bpdd = getattr(model, "last_bpdd_statistics", {})
-        losses = getattr(model, "last_fdr_losses", {})
-        stable = _number(bpdd.get("stable_match_ratio"))
-        active = _number(bpdd.get("active_edge_ratio"))
-        reliability = _number(bpdd.get("mean_reliability"))
-        loss = _number(losses.get("loss_bpdd"))
-        if None not in (stable, active, reliability, loss):
-            self.bpdd_stable_sum += float(stable)
-            self.bpdd_active_sum += float(active)
-            self.bpdd_reliability_sum += float(reliability)
-            self.bpdd_loss_sum += float(loss)
-            self.bpdd_observations += 1
-        self.candidate_source_matches += int(
-            _number(bpdd.get("candidate_source_matches")) or 0
-        )
-        self.stable_source_matches += int(
-            _number(bpdd.get("stable_source_matches")) or 0
-        )
-
-        fdr = getattr(model, "fdr", None)
-        geometry = getattr(fdr, "last_geometry_statistics", {})
-        self.geometry_total += int(_number(geometry.get("total")) or 0)
-        self.geometry_horizontal += int(
-            _number(geometry.get("horizontal_infeasible")) or 0
-        )
-        self.geometry_vertical += int(
-            _number(geometry.get("vertical_infeasible")) or 0
-        )
-        horizontal = _number(geometry.get("minimum_raw_horizontal"))
-        vertical = _number(geometry.get("minimum_raw_vertical"))
-        if horizontal is not None:
-            self.geometry_minimum_horizontal = (
-                horizontal
-                if self.geometry_minimum_horizontal is None
-                else min(self.geometry_minimum_horizontal, horizontal)
-            )
-        if vertical is not None:
-            self.geometry_minimum_vertical = (
-                vertical
-                if self.geometry_minimum_vertical is None
-                else min(self.geometry_minimum_vertical, vertical)
-            )
-        extent = _number(geometry.get("minimum_extent"))
-        if extent is not None:
-            self.minimum_extent = extent
-        self.batches += 1
-
-    def write(self, trainer: Any) -> dict[str, Any]:
-        observations = max(self.bpdd_observations, 1)
-        norms = getattr(trainer, "last_gradient_norms", {})
-        record = {
-            "completed_epoch": int(trainer.epoch) + 1,
-            "batches": self.batches,
-            "bpdd_observations": self.bpdd_observations,
-            "bpdd_stable_match_ratio_mean": (
-                self.bpdd_stable_sum / observations
-            ),
-            "bpdd_active_edge_ratio_mean": self.bpdd_active_sum / observations,
-            "bpdd_mean_reliability": self.bpdd_reliability_sum / observations,
-            "loss_bpdd_mean": self.bpdd_loss_sum / observations,
-            "bpdd_candidate_source_matches": self.candidate_source_matches,
-            "bpdd_stable_source_matches": self.stable_source_matches,
-            "geometry_total": self.geometry_total,
-            "geometry_horizontal_infeasible": self.geometry_horizontal,
-            "geometry_vertical_infeasible": self.geometry_vertical,
-            "geometry_minimum_raw_horizontal": self.geometry_minimum_horizontal,
-            "geometry_minimum_raw_vertical": self.geometry_minimum_vertical,
-            "geometry_minimum_extent": self.minimum_extent,
-            "gradients_finite": bool(norms.get("gradients_finite", False)),
-        }
-        path = Path(trainer.save_dir).resolve() / "full-runtime.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(record, sort_keys=True) + "\n")
-        return record
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -310,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     output_root = args.output_root.resolve()
     epochs = int(baseline.get("epochs", 100))
     seed = int(baseline.get("seed", 0))
-    default_name = f"uavdt-formal{epochs}-seed{seed}-{METHOD}-v1"
+    default_name = f"uavdt-formal{epochs}-seed{seed}-{METHOD}-v2"
     settings = build_settings(
         baseline,
         data_yaml=data_yaml,

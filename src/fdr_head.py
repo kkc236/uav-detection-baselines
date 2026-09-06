@@ -21,8 +21,7 @@ from src.fdr_math import (
     REG_MAX,
     REG_SCALE,
     UP,
-    distance2bbox,
-    project_feasible_fdr_distances,
+    decode_feasible_fdr_boxes,
 )
 
 
@@ -322,7 +321,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         output = embed
         output_detach: Tensor | int = 0
         cumulative_corners: Tensor | int = 0
-        reference = refer_bbox.sigmoid()
+        reference = refer_bbox.float().sigmoid()
 
         decoded_boxes: list[Tensor] = []
         class_logits: list[Tensor] = []
@@ -333,14 +332,17 @@ class FDRDeformableTransformerDecoder(nn.Module):
         initial_reference: Tensor | None = None
 
         for index, layer in enumerate(self.layers):
+            # Geometry stays FP32, while attention/MLP inputs follow the network
+            # dtype (including a fully half-converted model without autocast).
+            layer_reference = reference.to(dtype=output.dtype)
             output = layer(
                 output,
-                reference,
+                layer_reference,
                 feats,
                 shapes,
                 padding_mask,
                 attn_mask,
-                pos_mlp(reference),
+                pos_mlp(layer_reference),
             )
             if index == 0:
                 preliminary = torch.sigmoid(
@@ -372,17 +374,13 @@ class FDRDeformableTransformerDecoder(nn.Module):
                 if self.cumulative
                 else delta_corners
             )
-            raw_distance = self.integral(cumulative_corners)
-            safe_distance, geometry = project_feasible_fdr_distances(
-                raw_distance,
-                reg_scale=self.reg_scale,
-            )
+            # Casting alone is insufficient: autocast would lower F.linear again.
+            with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
+                raw_distance = self.integral(cumulative_corners.float())
+                refined, geometry = decode_feasible_fdr_boxes(
+                    initial_reference, raw_distance, self.reg_scale
+                )
             geometry_records.append(geometry)
-            refined = distance2bbox(
-                initial_reference,
-                safe_distance,
-                self.reg_scale,
-            )
 
             if self.training or index == self.eval_idx:
                 decoded_boxes.append(refined)
@@ -415,6 +413,15 @@ class FDRDeformableTransformerDecoder(nn.Module):
                 [item["minimum_raw_vertical"] for item in geometry_records]
             ).amin(),
             "minimum_extent": geometry_records[0]["minimum_extent"],
+            "minimum_decoded_width": torch.stack(
+                [item["minimum_decoded_width"] for item in geometry_records]
+            ).amin(),
+            "minimum_decoded_height": torch.stack(
+                [item["minimum_decoded_height"] for item in geometry_records]
+            ).amin(),
+            "numerical_floor_edges": torch.stack(
+                [item["numerical_floor_edges"] for item in geometry_records]
+            ).sum(),
         }
         return torch.stack(decoded_boxes), torch.stack(class_logits)
 

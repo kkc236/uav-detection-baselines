@@ -25,6 +25,8 @@ from src.rtdetr_lrs_system import (
     TRAINER_TYPES,
     LRSFDRBPDDFIADetectionModel,
     LRSFDRBPDDFIATrainer,
+    LRSFDRDetectionModel,
+    LRSFDRTrainer,
     LRSFDRBPDDDetectionModel,
     LRSFDRBPDDTrainer,
     LRSFDRFIADetectionModel,
@@ -41,6 +43,7 @@ TEST_ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture(scope="module")
 def arm_models() -> dict[str, FDRBPDDDetectionModel]:
     constructors = {
+        "f": LRSFDRDetectionModel,
         "g": LRSFDRBPDDDetectionModel,
         "h": LRSFDRFIADetectionModel,
         "i": LRSFDRBPDDFIADetectionModel,
@@ -221,9 +224,10 @@ def test_bpdd_criterion_preserves_lrs_alpha() -> None:
     assert criterion.supervise_dn_fdr is False
 
 
-def test_public_arm_contract_uses_only_the_three_new_yamls() -> None:
+def test_public_arm_contract_has_four_current_comparators() -> None:
     assert ROOT == TEST_ROOT
     assert ARM_CONFIGS == {
+        "f": TEST_ROOT / "configs" / "rtdetr-l-lrs-fdr.yaml",
         "g": TEST_ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd.yaml",
         "h": TEST_ROOT / "configs" / "rtdetr-l-lrs-fdr-fia.yaml",
         "i": TEST_ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd-fia.yaml",
@@ -231,11 +235,13 @@ def test_public_arm_contract_uses_only_the_three_new_yamls() -> None:
     assert FIA_MODEL_INDEX == 22
     assert FIA_STATE_PREFIX == "model.22."
     assert MODEL_TYPES == {
+        "f": LRSFDRDetectionModel,
         "g": LRSFDRBPDDDetectionModel,
         "h": LRSFDRFIADetectionModel,
         "i": LRSFDRBPDDFIADetectionModel,
     }
     assert TRAINER_TYPES == {
+        "f": LRSFDRTrainer,
         "g": LRSFDRBPDDTrainer,
         "h": LRSFDRFIATrainer,
         "i": LRSFDRBPDDFIATrainer,
@@ -247,6 +253,9 @@ def test_arm_models_isolate_bpdd_and_fia(
 ) -> None:
     criteria = {arm: model.init_criterion() for arm, model in arm_models.items()}
 
+    assert type(criteria["f"]) is FDRDetectionLoss
+    assert not hasattr(arm_models["f"], "bpdd_options")
+    assert not any(isinstance(module, FIA) for module in arm_models["f"].model)
     assert isinstance(criteria["g"], BPDDDetectionLoss)
     assert type(criteria["h"]) is FDRDetectionLoss
     assert isinstance(criteria["i"], BPDDDetectionLoss)
@@ -456,6 +465,7 @@ def test_fia_gradient_groups_are_disjoint_exhaustive_and_nonempty(
 @pytest.mark.parametrize(
     ("arm", "trainer_type", "model_name", "expected_seeds"),
     [
+        ("f", LRSFDRTrainer, "LRSFDRDetectionModel", (10_037, None)),
         ("g", LRSFDRBPDDTrainer, "LRSFDRBPDDDetectionModel", (10_037, None)),
         ("h", LRSFDRFIATrainer, "LRSFDRFIADetectionModel", (10_037, 20_037)),
         (
@@ -486,7 +496,7 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
             captured.update(kwargs)
 
     monkeypatch.setattr(lrs_system, model_name, _ModelDouble)
-    if arm == "g":
+    if arm in ("f", "g"):
         def _standard_loader_spy(
             model: Any,
             path: Path,
@@ -523,7 +533,7 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
     assert captured["verbose"] is True
     assert captured["private_seed"] == expected_seeds[0]
     assert captured["loader_model"] is model
-    if arm == "g":
+    if arm in ("f", "g"):
         assert captured["loader"] == "standard"
         assert captured["loader_path"] == artifact_path
         assert captured["loader_variant"] == "fdr"
@@ -535,7 +545,7 @@ def test_trainer_dispatches_exact_config_and_private_seeds_without_gpu(
         assert captured["fia_private_seed"] == expected_seeds[1]
 
 
-@pytest.mark.parametrize("trainer_type", [LRSFDRFIATrainer, LRSFDRBPDDFIATrainer])
+@pytest.mark.parametrize("trainer_type", list(TRAINER_TYPES.values()))
 def test_fia_trainers_reject_checkpoint_weights(
     trainer_type: type[FDRTrainer],
 ) -> None:

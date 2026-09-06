@@ -245,6 +245,61 @@ def project_feasible_fdr_distances(
     return safe, stats
 
 
+def decode_feasible_fdr_boxes(
+    points: Tensor,
+    distance: Tensor,
+    reg_scale: Tensor | Real = REG_SCALE,
+    *,
+    minimum_extent: float = 1e-3,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Decode finite normalized references with a precision-safe extent floor.
+
+    The historical distance-space floor is retained. A detached machine-epsilon
+    floor additionally keeps the later CXCYWH-to-XYXY subtraction representable.
+    This wrapper has an explicit identity surrogate for extent gradients; it is
+    not the derivative of a hard projection. Pinned distance2bbox stays unchanged.
+    """
+    if points.shape != distance.shape or distance.ndim == 0 or distance.shape[-1] != 4:
+        raise ValueError("points and distance must have the same four-edge shape")
+    if not points.is_floating_point() or not distance.is_floating_point():
+        raise TypeError("points and distance must be floating tensors")
+    if points.device != distance.device:
+        raise ValueError("points and distance must share a device")
+    if not math.isfinite(float(minimum_extent)) or minimum_extent <= 0:
+        raise ValueError("minimum_extent must be finite and positive")
+    dtype = torch.promote_types(points.dtype, distance.dtype)
+    if dtype in (torch.float16, torch.bfloat16):
+        dtype = torch.float32
+    points, distance = points.to(dtype), distance.to(dtype)
+    scale = torch.as_tensor(reg_scale, dtype=dtype, device=distance.device).abs()
+    if scale.numel() != 1 or not torch.isfinite(scale).all() or scale.item() == 0:
+        raise ValueError("reg_scale must be one finite non-zero scalar")
+    scale = scale.reshape(())
+    left_top, right_bottom = distance[..., :2], distance[..., 2:]
+    reference_extent = points[..., 2:] / scale
+    center = points[..., :2] + (right_bottom - left_top) * reference_extent * 0.5
+    raw_pair = scale + left_top + right_bottom
+    raw_extent = raw_pair * reference_extent
+    numerical_floor = (8 * torch.finfo(dtype).eps * center.detach().abs().clamp_min(1))
+    floor = torch.maximum(minimum_extent * reference_extent.detach(), numerical_floor)
+    bounded = torch.maximum(raw_extent, floor)
+    # Avoid subtracting a large negative raw value from a tiny positive floor.
+    extent = bounded.detach() + (raw_extent - raw_extent.detach())
+    boxes = torch.cat((center, extent), dim=-1)
+    stats = {
+        "total": torch.tensor(raw_pair[..., 0].numel(), dtype=torch.long, device=distance.device),
+        "horizontal_infeasible": (raw_pair[..., 0] < minimum_extent).sum().detach(),
+        "vertical_infeasible": (raw_pair[..., 1] < minimum_extent).sum().detach(),
+        "minimum_raw_horizontal": raw_pair[..., 0].detach().amin(),
+        "minimum_raw_vertical": raw_pair[..., 1].detach().amin(),
+        "minimum_extent": distance.new_tensor(minimum_extent),
+        "minimum_decoded_width": extent[..., 0].detach().amin(),
+        "minimum_decoded_height": extent[..., 1].detach().amin(),
+        "numerical_floor_edges": (raw_extent < numerical_floor).sum().detach(),
+    }
+    return boxes, stats
+
+
 def bbox2distance(
     points: Tensor,
     bbox: Tensor,
@@ -295,7 +350,7 @@ class Integral(nn.Module):
         project = self.project if project is None else project
         shape = x.shape
         x = F.softmax(x.reshape(-1, self.reg_max + 1), dim=1)
-        x = F.linear(x, project.to(x.device)).reshape(-1, 4)
+        x = F.linear(x, project.to(device=x.device, dtype=x.dtype)).reshape(-1, 4)
         return x.reshape(list(shape[:-1]) + [-1])
 
 
@@ -363,6 +418,7 @@ __all__ = [
     "bbox2distance",
     "cxcywh_to_xyxy",
     "distance2bbox",
+    "decode_feasible_fdr_boxes",
     "fine_grained_localization_loss",
     "project_feasible_fdr_distances",
     "translate_gt",

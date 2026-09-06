@@ -360,6 +360,11 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
     ) -> tuple | Tensor:
         """Run stock prediction and retain isolated FDR training evidence."""
 
+        if x.device.type == "cpu" and x.dtype == torch.float16:
+            raise ValueError(
+                "CPU FP16 grid_sample is not supported by this execution contract; "
+                "use FP32 input/model or CPU BF16 autocast. Validate CUDA FP16 separately."
+            )
         output = super().predict(
             x,
             profile=profile,

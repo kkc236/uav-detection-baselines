@@ -59,7 +59,7 @@ future Formal100 execution.
 For every FDR decode path, the final normalized `cxcywh` tensor consumed by box
 losses must have finite width and height strictly greater than zero in FP32, FP16,
 and BF16 execution. Feasible inputs retain the existing decoded values within the
-precision-appropriate tolerance. Horizontal correction preserves horizontal
+precision-appropriate tolerance above the numerical safety floor. Horizontal correction preserves horizontal
 center; vertical correction preserves vertical center.
 
 ### 4.2 Numerical design
@@ -67,9 +67,15 @@ center; vertical correction preserves vertical center.
 Integral output, extent repair, and conversion from edge distances to normalized
 box coordinates are evaluated in FP32 when the incoming distribution tensor uses
 FP16 or BF16. The repaired box remains FP32 through the geometry-sensitive loss
-interface instead of being cast back before the positivity assertion. The minimum
-extent is enforced in final normalized box coordinates, not only in the signed
-FDR-distance coordinate system.
+interface instead of being cast back before the positivity assertion. Keep the
+existing dimensionless extent floor `1e-3`; do not reinterpret it as a normalized
+box width (which would create a new small-object prior). Decode center and extent
+directly from raw paired edges in a separate wrapper, retaining the pinned
+official `distance2bbox` primitive for parity tests. Additionally bound normalized
+width/height below by `8 * finfo(dtype).eps * max(1, abs(center))`. This detached
+machine-precision guard protects subsequent CXCYWH-to-XYXY subtraction. Preserve
+FP64 inputs. The supported contract is finite FDR distances and finite normalized
+references with nonnegative extents; non-finite values remain detectable failures.
 
 The implementation exposes both raw infeasible counts and repaired final minimum
 width/height. Straight-through gradients may be retained only if tests show finite,
@@ -89,7 +95,9 @@ rates remain a runtime warning and publication diagnostic.
 Source distributions, future candidates, and the mixed teacher are evaluated from
 stable log probabilities. A future teacher whose true interpolated target-edge
 NLL is worse than the source cannot receive positive reliability because of an
-epsilon clamp. Epsilon may protect a final arithmetic operation, but it must not
+epsilon clamp. Use `logsumexp` for the masked future mixture. Use a finite uniform
+placeholder only for edges without a teacher, whose reliability remains zero.
+Epsilon may protect a final arithmetic operation, but it must not
 replace a finite log probability with `log(epsilon)` before the comparison.
 
 The gate retains its current narrow meaning: it accepts lower interpolated
@@ -99,7 +107,9 @@ candidate filter; stable-match and active-edge coverage must be reported before
 claiming an AC-BPDD contribution.
 
 No geometric gate, new teacher topology, DN-query BPDD, or temperature search is
-introduced in this deployment.
+introduced in this deployment. Legacy final-assignment BPDD remains historical;
+this repair applies to current AC-BPDD and is versioned in launch authority. New
+runs use v2 names and cannot resume v1 checkpoints.
 
 ## 6. Revised experiment identities
 
@@ -115,12 +125,17 @@ All current-system arms share the revised feasible decoder:
 The new `f` is the previously described `f*`; the launcher uses `f` because arm
 letters are public protocol identifiers. The primary contrasts are `g-f`, `h-f`,
 `i-h`, and `i-g`. The interaction is `(i-h)-(g-f)`. Comparisons against the old
-pre-repair LRS run are historical only.
+pre-repair LRS run are historical only. An unhelpful `g-f` does not imply an
+unhelpful `i-h`: do not eliminate the interaction arm solely from one standalone
+result. Single-seed positive differences are descriptive, not significance tests.
+No universal 0.2/0.3 pp significance threshold is asserted.
 
 The VisDrone launcher must accept `f`, produce a distinct immutable authority
 identity, use the same initial-state and frozen public settings as `g/h/i`, and
-support dry-run without constructing the trainer. No local run will be labeled a
-Formal100 result.
+support dry-run without constructing the trainer. Dry-run checks launch metadata,
+not graph loading or training readiness; add real CPU graph/criterion probes as a
+separate gate. Persist geometry and BPDD runtime evidence in all four arms. No
+local run will be labeled a Formal100 result.
 
 ## 7. Verification strategy
 

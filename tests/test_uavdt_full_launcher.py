@@ -207,7 +207,7 @@ def test_dry_run_maps_only_revised_full_and_never_constructs_trainer(
     )
 
     assert result == 0
-    authority = output_root / "authority" / "uavdt-formal100-seed0-lrs_fdr_ac_bpdd_fia-v1.json"
+    authority = output_root / "authority" / "uavdt-formal100-seed0-lrs_fdr_ac_bpdd_fia-v2.json"
     record = json.loads(authority.read_text(encoding="utf-8"))
     assert record["method"] == "lrs_fdr_ac_bpdd_fia"
     assert record["arm"] == "i"

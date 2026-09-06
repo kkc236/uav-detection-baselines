@@ -16,3 +16,4 @@ results-checkout/
 github_token
 github_token.txt
 *.token
+local-validation/

@@ -1,4 +1,4 @@
-"""Isolated LRS system integrations for VisDrone arms G, H, and I."""
+"""Isolated LRS system integrations for VisDrone arms F, G, H, and I."""
 
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ from src.rtdetr_fdr_bpdd import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SYSTEM_REVISION = "v2-fp32-extent-logspace-ac-bpdd"
 ARM_CONFIGS = {
+    "f": ROOT / "configs" / "rtdetr-l-lrs-fdr.yaml",
     "g": ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd.yaml",
     "h": ROOT / "configs" / "rtdetr-l-lrs-fdr-fia.yaml",
     "i": ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd-fia.yaml",
@@ -139,6 +141,13 @@ def initialize_fia_graph(model: nn.Module, *, private_seed: int) -> FIA:
     return fia
 
 
+class LRSFDRDetectionModel(FDRRTDETRDetectionModel):
+    """Arm F: current feasible LRS-FDR comparator without BPDD or FIA."""
+
+    def __init__(self, cfg=ARM_CONFIGS["f"], ch=3, nc=None, verbose=True, *, private_seed=None):
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose, private_seed=private_seed)
+
+
 class LRSFDRBPDDDetectionModel(FDRBPDDDetectionModel):
     """Arm G: LRS-FDR with parameter-free BPDD and no FIA."""
 
@@ -223,6 +232,7 @@ class LRSFDRBPDDFIADetectionModel(FDRBPDDDetectionModel):
 
 
 MODEL_TYPES = {
+    "f": LRSFDRDetectionModel,
     "g": LRSFDRBPDDDetectionModel,
     "h": LRSFDRFIADetectionModel,
     "i": LRSFDRBPDDFIADetectionModel,
@@ -273,6 +283,21 @@ def _load_fia_artifact(model: nn.Module, path: str | Path | None) -> None:
     load_fia_initial_state(model, artifact)
 
 
+class LRSFDRTrainer(FDRTrainer):
+    """Arm F fresh-start trainer using the identical shared/private artifact."""
+
+    def get_model(self, cfg=None, weights=None, verbose=True) -> LRSFDRDetectionModel:
+        del cfg
+        if weights is not None:
+            raise ValueError("current LRS arms are fresh-only and reject checkpoint weights")
+        model = LRSFDRDetectionModel(
+            ARM_CONFIGS["f"], nc=self.data["nc"], ch=self.data["channels"],
+            verbose=verbose and RANK == -1, private_seed=10_000 + self.experiment_seed,
+        )
+        _load_initial_state(model, getattr(self, "initial_state_path", None), variant="fdr")
+        return model
+
+
 class LRSFDRBPDDTrainer(FDRBPDDTrainer):
     """Arm G trainer with the normal strict FDR artifact loader."""
 
@@ -283,6 +308,8 @@ class LRSFDRBPDDTrainer(FDRBPDDTrainer):
         verbose: bool = True,
     ) -> LRSFDRBPDDDetectionModel:
         del cfg
+        if weights is not None:
+            raise ValueError("current LRS arms are fresh-only and reject checkpoint weights")
         model = LRSFDRBPDDDetectionModel(
             ARM_CONFIGS["g"],
             nc=self.data["nc"],
@@ -290,14 +317,11 @@ class LRSFDRBPDDTrainer(FDRBPDDTrainer):
             verbose=verbose and RANK == -1,
             private_seed=10_000 + self.experiment_seed,
         )
-        if weights:
-            model.load(weights)
-        else:
-            _load_initial_state(
-                model,
-                getattr(self, "initial_state_path", None),
-                variant="fdr",
-            )
+        _load_initial_state(
+            model,
+            getattr(self, "initial_state_path", None),
+            variant="fdr",
+        )
         return model
 
 
@@ -356,6 +380,7 @@ class LRSFDRBPDDFIATrainer(FDRBPDDTrainer):
 
 
 TRAINER_TYPES = {
+    "f": LRSFDRTrainer,
     "g": LRSFDRBPDDTrainer,
     "h": LRSFDRFIATrainer,
     "i": LRSFDRBPDDFIATrainer,
@@ -364,6 +389,9 @@ TRAINER_TYPES = {
 
 __all__ = [
     "ARM_CONFIGS",
+    "SYSTEM_REVISION",
+    "LRSFDRDetectionModel",
+    "LRSFDRTrainer",
     "FIA_MODEL_INDEX",
     "FIA_STATE_PREFIX",
     "LRSFDRBPDDFIADetectionModel",
