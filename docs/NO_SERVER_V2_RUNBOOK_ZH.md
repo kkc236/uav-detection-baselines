@@ -1,5 +1,7 @@
 # LRS 系统 v2：本地验证与服务器交接
 
+> 新服务器直接执行请优先阅读 [`VISDRONE_V2_EXISTING_STATE_HANDOFF_ZH.md`](VISDRONE_V2_EXISTING_STATE_HANDOFF_ZH.md)。该交接包已固定使用现有初始状态 SHA `935D6842...`，并给出 f/g/h/i 四臂命令与输入校验。
+
 当前代码分支：`codex/no-server-correctness-v2`。
 方法修订：`v2-fp32-extent-logspace-ac-bpdd`。
 本页覆盖此前 v1 三臂运行手册的当前操作说明；旧文档只作版本追踪。

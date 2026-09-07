@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "artifact_role": "lrs_v2_existing_state_seed0",
+  "filename": "initial-state-seed0.pt",
+  "bytes": 261864454,
+  "sha256": "935D68428BFC5848DE51F82844658ABBC7EC8C99CBBF6BBF823166D38CB65D5B",
+  "method_revision": "v2-fp32-extent-logspace-ac-bpdd",
+  "dataset": "VisDrone",
+  "seed": 0,
+  "training_protocol": {
+    "epochs": 100,
+    "batch": 8,
+    "imgsz": 640,
+    "pretrained": false,
+    "fresh_start": true
+  },
+  "github_policy": "binary checkpoint is transferred separately and is not committed"
+}
