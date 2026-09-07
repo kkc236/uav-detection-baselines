@@ -28,6 +28,8 @@ _BPDD_OPTION_KEYS = {
     "matched_layer",
     "assignment_mode",
     "include_dn",
+    "decoded_iou_gate",
+    "iou_margin",
 }
 
 
@@ -51,6 +53,8 @@ def _parse_bpdd_options(payload: dict[str, Any]) -> BPDDOptions:
         margin=float(payload.get("margin", 0.02)),
         eps=float(payload.get("eps", 1e-6)),
         assignment_mode=str(assignment_mode),
+        decoded_iou_gate=payload.get("decoded_iou_gate", False),
+        iou_margin=float(payload.get("iou_margin", 0.0)),
     )
 
 

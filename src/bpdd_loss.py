@@ -15,6 +15,7 @@ from torch import Tensor
 
 from src.fdr_loss import FDRDetectionLoss, MatchIndices
 from src.fdr_math import REG_MAX, REG_SCALE, UP, bbox2distance, cxcywh_to_xyxy
+from src.fdr_math import decode_feasible_fdr_boxes, weighting_function
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,8 @@ class BPDDOptions:
     margin: float = 0.02
     eps: float = 1e-6
     assignment_mode: str = "final"
+    decoded_iou_gate: bool = False
+    iou_margin: float = 0.0
 
     def __post_init__(self) -> None:
         numeric = {
@@ -34,6 +37,7 @@ class BPDDOptions:
             "temperature": self.temperature,
             "margin": self.margin,
             "eps": self.eps,
+            "iou_margin": self.iou_margin,
         }
         if not all(math.isfinite(float(value)) for value in numeric.values()):
             raise ValueError("BPDD numerical options must be finite")
@@ -47,6 +51,45 @@ class BPDDOptions:
             raise ValueError("BPDD eps must be positive")
         if self.assignment_mode not in {"final", "consistent"}:
             raise ValueError("assignment_mode must be 'final' or 'consistent'")
+        if not isinstance(self.decoded_iou_gate, bool):
+            raise ValueError("decoded_iou_gate must be a boolean")
+        if not 0 <= self.iou_margin <= 1:
+            raise ValueError("iou_margin must be in [0, 1]")
+        if self.decoded_iou_gate and self.assignment_mode != "consistent":
+            raise ValueError("decoded IoU gate requires consistent assignment")
+
+
+@torch.no_grad()
+def decoded_teacher_iou_gate(source_log, teacher_log, reference, targets, active_edges, margin=0.0):
+    """Compare the effective four-edge teacher using the production v2 decoder.
+
+    Inactive edges retain student distributions, since BPDD does not train them.
+    This is a target-quality filter, not a guarantee about optimizer updates.
+    """
+    with torch.autocast(device_type=source_log.device.type, enabled=False):
+        source = source_log.detach().float().exp()
+        teacher = teacher_log.detach().float().exp()
+        reference, targets = reference.detach().float(), targets.detach().float()
+        if not all(torch.isfinite(x).all() for x in (source, teacher, reference, targets)):
+            raise ValueError("nonfinite decoded IoU gate input")
+        if (reference[..., 2:] <= 0).any() or (targets[..., 2:] <= 0).any():
+            raise ValueError("decoded IoU gate requires positive reference and target sizes")
+        effective = torch.where(active_edges[..., None], teacher, source)
+        support = weighting_function(REG_MAX, UP, REG_SCALE).to(source)
+        student_boxes, _ = decode_feasible_fdr_boxes(reference, (source * support).sum(-1))
+        teacher_boxes, _ = decode_feasible_fdr_boxes(reference, (effective * support).sum(-1))
+        def iou(boxes):
+            # Relative centers avoid cancellation when small boxes sit far from zero.
+            delta = (boxes[..., :2] - targets[..., :2]).abs()
+            size, gt_size = boxes[..., 2:], targets[..., 2:]
+            overlap = torch.minimum(torch.minimum(size, gt_size), (size + gt_size) / 2 - delta).clamp_min(0)
+            inter = overlap.prod(-1)
+            union = size.prod(-1) + gt_size.prod(-1) - inter
+            return inter / union.clamp_min(torch.finfo(torch.float32).tiny)
+        before, after = iou(student_boxes), iou(teacher_boxes)
+        if not torch.isfinite(before).all() or not torch.isfinite(after).all():
+            raise ValueError("nonfinite decoded IoU gate result")
+        return (after > before + margin) & active_edges.any(-1), after - before
 
 
 @dataclass(frozen=True)
@@ -463,6 +506,12 @@ def assignment_consistent_bpdd_loss(
         reliability = torch.where(
             has_teacher, reliability, torch.zeros_like(reliability)
         )
+        if options.decoded_iou_gate:
+            keep, _ = decoded_teacher_iou_gate(
+                source_log, teacher_log, matched_reference, matched_targets,
+                reliability > 0, options.iou_margin,
+            )
+            reliability = reliability * keep.unsqueeze(-1)
         divergence = (teacher * (teacher_log - source_log)).sum(dim=-1)
         terms.append(reliability * divergence)
         reliabilities.append(reliability)
