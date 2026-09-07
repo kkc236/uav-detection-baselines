@@ -58,4 +58,3 @@ bpdd_loss:
   include_dn: false
   decoded_iou_gate: true
   iou_margin: 0.0
-
