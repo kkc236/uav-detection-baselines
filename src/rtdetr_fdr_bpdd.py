@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import yaml
 from torch import Tensor
 from ultralytics.utils import RANK
 
@@ -19,6 +20,21 @@ from src.rtdetr_fdr import (
 BPDD_MODEL_CFG = (
     Path(__file__).resolve().parents[1] / "configs" / "rtdetr-l-fdr-bpdd.yaml"
 )
+
+
+def _resolve_bpdd_model_cfg(cfg: dict | str | Path | None) -> dict | str | Path:
+    """Use explicit BPDD candidates while preserving plain-FDR resume behavior."""
+
+    if cfg is None:
+        return BPDD_MODEL_CFG
+    if isinstance(cfg, dict):
+        return cfg if isinstance(cfg.get("bpdd_loss"), dict) else BPDD_MODEL_CFG
+    path = Path(cfg)
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return BPDD_MODEL_CFG
+    return path if isinstance(payload, dict) and isinstance(payload.get("bpdd_loss"), dict) else BPDD_MODEL_CFG
 _BPDD_OPTION_KEYS = {
     "enabled",
     "weight",
@@ -135,7 +151,7 @@ class FDRBPDDTrainer(FDRTrainer):
         # Resume checkpoints may carry the plain FDR YAML. BPDD has an identical
         # state contract, so normalize the graph authority to the candidate YAML
         # before strictly loading those tensors.
-        model_cfg = cfg if cfg is not None else BPDD_MODEL_CFG
+        model_cfg = _resolve_bpdd_model_cfg(cfg)
         model = FDRBPDDDetectionModel(
             model_cfg,
             nc=self.data["nc"],
