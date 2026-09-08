@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -u
 
-if [[ $# -ne 5 ]]; then
-  echo "usage: $0 CURRENT_PID DATASET_ROOT INITIAL_STATE OUTPUT_ROOT LOG_ROOT" >&2
+if [[ $# -ne 6 ]]; then
+  echo "usage: $0 CURRENT_PID CURRENT_RUN_DIR DATASET_ROOT INITIAL_STATE FIA_OUTPUT_ROOT LOG_ROOT" >&2
   exit 64
 fi
 
 current_pid="$1"
-dataset_root="$2"
-initial_state="$3"
-output_root="$4"
-log_root="$5"
-run_dir="$output_root/formal-seed0-lrs_gfdr-v1"
+current_run_dir="$2"
+dataset_root="$3"
+initial_state="$4"
+output_root="$5"
+log_root="$6"
+run_dir="$current_run_dir"
 fia_dir="$output_root/formal-seed0-lrs_gfdr_fia-v1"
 mkdir -p "$log_root"
 
