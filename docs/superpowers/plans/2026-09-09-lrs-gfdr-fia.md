@@ -16,10 +16,12 @@
 - Create: `configs/rtdetr-l-lrs-gfdr-fia.yaml`
 - Modify: `src/rtdetr_lrs_system.py`
 - Create: `scripts/train_lrs_gfdr_fia.py`
+- Create: `scripts/chain_lrs_gfdr_fia.sh`
 
 - [ ] Add explicit `feasible_geometry: true` to the LRS-GFDR FIA graph.
 - [ ] Add `LRSGFDRFIADetectionModel` and `LRSGFDRFIATrainer` with isolated FIA initialization.
 - [ ] Add a launcher using the frozen Formal100 settings and an isolated output root.
+- [ ] Add a completion-gated chain watcher that refuses to launch FIA after an incomplete or failed LRS-GFDR run.
 
 ### Task 2: Verify and document
 
