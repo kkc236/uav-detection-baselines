@@ -26,6 +26,7 @@ from src.rtdetr_fdr_bpdd import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_REVISION = "v2-fp32-extent-logspace-ac-bpdd"
+LRS_GFDR_CONFIG = ROOT / "configs" / "rtdetr-l-lrs-gfdr.yaml"
 ARM_CONFIGS = {
     "f": ROOT / "configs" / "rtdetr-l-lrs-fdr.yaml",
     "g": ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd.yaml",
@@ -150,6 +151,21 @@ class LRSFDRDetectionModel(FDRRTDETRDetectionModel):
     """Arm F: current feasible LRS-FDR comparator without BPDD or FIA."""
 
     def __init__(self, cfg=ARM_CONFIGS["f"], ch=3, nc=None, verbose=True, *, private_seed=None):
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose, private_seed=private_seed)
+
+
+class LRSGFDRDetectionModel(FDRRTDETRDetectionModel):
+    """Joint LRS-GFDR module with explicit feasible-geometry decoding."""
+
+    def __init__(
+        self,
+        cfg: str | Path | dict = LRS_GFDR_CONFIG,
+        ch: int = 3,
+        nc: int | None = None,
+        verbose: bool = True,
+        *,
+        private_seed: int | None = None,
+    ) -> None:
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose, private_seed=private_seed)
 
 
@@ -312,6 +328,24 @@ class LRSFDRTrainer(FDRTrainer):
         return model
 
 
+class LRSGFDRTrainer(FDRTrainer):
+    """Fresh-start trainer for the explicitly packaged LRS-GFDR module."""
+
+    def get_model(self, cfg=None, weights=None, verbose=True) -> LRSGFDRDetectionModel:
+        del cfg
+        if weights is not None:
+            raise ValueError("LRS-GFDR is fresh-only and rejects checkpoint weights")
+        model = LRSGFDRDetectionModel(
+            LRS_GFDR_CONFIG,
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            private_seed=10_000 + self.experiment_seed,
+        )
+        _load_initial_state(model, getattr(self, "initial_state_path", None), variant="fdr")
+        return model
+
+
 class LRSFDRBPDDTrainer(FDRBPDDTrainer):
     """Arm G trainer with the normal strict FDR artifact loader."""
 
@@ -403,9 +437,12 @@ TRAINER_TYPES = {
 
 __all__ = [
     "ARM_CONFIGS",
+    "LRS_GFDR_CONFIG",
     "SYSTEM_REVISION",
     "LRSFDRDetectionModel",
     "LRSFDRTrainer",
+    "LRSGFDRDetectionModel",
+    "LRSGFDRTrainer",
     "FIA_MODEL_INDEX",
     "FIA_STATE_PREFIX",
     "LRSFDRBPDDFIADetectionModel",
