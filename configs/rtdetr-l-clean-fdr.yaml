@@ -39,8 +39,7 @@ head:
      [nc, [256, 256, 256],
       {hidden_dim: 256, num_queries: 300, num_decoder_layers: 6,
        reg_max: 32, reg_scale: 4.0, up: 0.5, cumulative: true,
-       preliminary_box: false, distribution_feedback: false, feasible_geometry: false,
-       private_seed: 10000}]]
+       preliminary_box: false, distribution_feedback: false, private_seed: 10000}]]
 
 fdr_loss:
   fgl_weight: 0.15
