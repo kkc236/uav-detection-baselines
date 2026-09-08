@@ -27,6 +27,7 @@ from src.rtdetr_fdr_bpdd import (
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_REVISION = "v2-fp32-extent-logspace-ac-bpdd"
 LRS_GFDR_CONFIG = ROOT / "configs" / "rtdetr-l-lrs-gfdr.yaml"
+LRS_GFDR_FIA_CONFIG = ROOT / "configs" / "rtdetr-l-lrs-gfdr-fia.yaml"
 ARM_CONFIGS = {
     "f": ROOT / "configs" / "rtdetr-l-lrs-fdr.yaml",
     "g": ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd.yaml",
@@ -167,6 +168,31 @@ class LRSGFDRDetectionModel(FDRRTDETRDetectionModel):
         private_seed: int | None = None,
     ) -> None:
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose, private_seed=private_seed)
+
+
+class LRSGFDRFIADetectionModel(FDRRTDETRDetectionModel):
+    """LRS-GFDR with the existing P3-only FIA branch."""
+
+    def __init__(
+        self,
+        cfg: str | Path | dict = LRS_GFDR_FIA_CONFIG,
+        ch: int = 3,
+        nc: int | None = None,
+        verbose: bool = True,
+        *,
+        private_seed: int | None = None,
+        fia_private_seed: int = 20_000,
+    ) -> None:
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose, private_seed=private_seed)
+        self.fia_private_seed = int(fia_private_seed)
+        initialize_fia_graph(self, private_seed=self.fia_private_seed)
+
+    @property
+    def fia(self) -> FIA:
+        module = self.model[FIA_MODEL_INDEX]
+        if not isinstance(module, FIA):
+            raise RuntimeError("FIA graph layer was unexpectedly replaced")
+        return module
 
 
 class LRSFDRBPDDDetectionModel(FDRBPDDDetectionModel):
@@ -346,6 +372,33 @@ class LRSGFDRTrainer(FDRTrainer):
         return model
 
 
+class LRSGFDRFIATrainer(FDRTrainer):
+    """Trainer for the isolated LRS-GFDR-FIA extension."""
+
+    def gradient_parameter_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        return _fia_gradient_parameter_groups(self.model)
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> LRSGFDRFIADetectionModel:
+        del cfg
+        if weights is not None:
+            raise ValueError("LRS-GFDR-FIA is fresh-only and rejects checkpoint weights")
+        model = LRSGFDRFIADetectionModel(
+            LRS_GFDR_FIA_CONFIG,
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            private_seed=10_000 + self.experiment_seed,
+            fia_private_seed=20_000 + self.experiment_seed,
+        )
+        _load_fia_artifact(model, getattr(self, "initial_state_path", None))
+        return model
+
+
 class LRSFDRBPDDTrainer(FDRBPDDTrainer):
     """Arm G trainer with the normal strict FDR artifact loader."""
 
@@ -438,11 +491,14 @@ TRAINER_TYPES = {
 __all__ = [
     "ARM_CONFIGS",
     "LRS_GFDR_CONFIG",
+    "LRS_GFDR_FIA_CONFIG",
     "SYSTEM_REVISION",
     "LRSFDRDetectionModel",
     "LRSFDRTrainer",
     "LRSGFDRDetectionModel",
     "LRSGFDRTrainer",
+    "LRSGFDRFIADetectionModel",
+    "LRSGFDRFIATrainer",
     "FIA_MODEL_INDEX",
     "FIA_STATE_PREFIX",
     "LRSFDRBPDDFIADetectionModel",
