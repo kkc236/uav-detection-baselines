@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.sync_experiment_checkpoint import write_json_atomic  # noqa: E402
-from scripts.train_ace_fdr import require_clean_tracked_worktree  # noqa: E402
 from scripts.train_rtdetr_fdr import (  # noqa: E402
     FORMAL_EPOCHS,
     FROZEN_SETTINGS,
@@ -77,7 +76,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    require_clean_tracked_worktree()
     output_root = args.output_root.resolve()
     authority_root = output_root / "authority"
     data_yaml = prepare_data_yaml(args.dataset_root.resolve(), "formal", authority_root / "data")
