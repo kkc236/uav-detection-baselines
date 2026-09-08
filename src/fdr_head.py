@@ -22,6 +22,7 @@ from src.fdr_math import (
     REG_SCALE,
     UP,
     decode_feasible_fdr_boxes,
+    distance2bbox,
 )
 
 
@@ -76,6 +77,7 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         "cumulative": True,
         "preliminary_box": True,
         "distribution_feedback": False,
+        "feasible_geometry": True,
         "private_seed": 10_000,
     }
 
@@ -145,6 +147,7 @@ class FDRRTDETRDecoder(RTDETRDecoder):
                 if bool(resolved["distribution_feedback"])
                 else None
             ),
+            feasible_geometry=bool(resolved["feasible_geometry"]),
         )
         self.dec_bbox_head = distribution_heads
         self.decoder.reg_max = int(resolved["reg_max"])
@@ -153,6 +156,7 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         ]
         self.decoder.cumulative = bool(resolved["cumulative"])
         self.decoder.preliminary_box = bool(resolved["preliminary_box"])
+        self.decoder.feasible_geometry = bool(resolved["feasible_geometry"])
         self.fdr_options = resolved
 
 
@@ -219,6 +223,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         eval_idx: int,
         pre_bbox_head: nn.Module,
         distribution_feedback: DistributionConditionedFeedback | None = None,
+        feasible_geometry: bool = True,
     ) -> None:
         super().__init__()
         if num_layers != FDR_DECODER_LAYERS or len(layers) != FDR_DECODER_LAYERS:
@@ -229,6 +234,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.eval_idx = int(eval_idx)
         self.pre_bbox_head = pre_bbox_head
         self.distribution_feedback = distribution_feedback
+        self.feasible_geometry = bool(feasible_geometry)
         # This must remain a plain Python float. ModelEMA would smooth a tensor
         # buffer and leave residual feedback after the exact-off boundary.
         self.distribution_feedback_scale = 1.0
@@ -255,6 +261,8 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.distribution_feedback = None
         if not hasattr(self, "distribution_feedback_scale"):
             self.distribution_feedback_scale = 1.0
+        if not hasattr(self, "feasible_geometry"):
+            self.feasible_geometry = True
 
     def set_distribution_feedback_scale(self, value: float) -> None:
         """Set the exact adapter multiplier without registering EMA state."""
@@ -277,6 +285,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         *,
         pre_bbox_head: nn.Module,
         distribution_feedback: DistributionConditionedFeedback | None = None,
+        feasible_geometry: bool = True,
     ) -> "FDRDeformableTransformerDecoder":
         """Wrap the exact stock layers and privately copy the preliminary head."""
 
@@ -293,6 +302,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
             eval_idx=stock.eval_idx,
             pre_bbox_head=deepcopy(pre_bbox_head),
             distribution_feedback=distribution_feedback,
+            feasible_geometry=feasible_geometry,
         )
 
     def _clear_evidence(self) -> None:
@@ -377,9 +387,28 @@ class FDRDeformableTransformerDecoder(nn.Module):
             # Casting alone is insufficient: autocast would lower F.linear again.
             with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
                 raw_distance = self.integral(cumulative_corners.float())
-                refined, geometry = decode_feasible_fdr_boxes(
-                    initial_reference, raw_distance, self.reg_scale
-                )
+                if self.feasible_geometry:
+                    refined, geometry = decode_feasible_fdr_boxes(
+                        initial_reference, raw_distance, self.reg_scale
+                    )
+                else:
+                    refined = distance2bbox(
+                        initial_reference, raw_distance, self.reg_scale
+                    )
+                    scale = self.reg_scale.abs().reshape(())
+                    raw_pair = scale + raw_distance[..., :2] + raw_distance[..., 2:]
+                    raw_extent = raw_pair * initial_reference[..., 2:] / scale
+                    geometry = {
+                        "total": raw_pair[..., 0].new_tensor(raw_pair[..., 0].numel(), dtype=torch.long),
+                        "horizontal_infeasible": (raw_pair[..., 0] < 0).sum().detach(),
+                        "vertical_infeasible": (raw_pair[..., 1] < 0).sum().detach(),
+                        "minimum_raw_horizontal": raw_pair[..., 0].detach().amin(),
+                        "minimum_raw_vertical": raw_pair[..., 1].detach().amin(),
+                        "minimum_extent": raw_distance.new_zeros(()),
+                        "minimum_decoded_width": raw_extent[..., 0].detach().amin(),
+                        "minimum_decoded_height": raw_extent[..., 1].detach().amin(),
+                        "numerical_floor_edges": raw_distance.new_zeros((), dtype=torch.long),
+                    }
             geometry_records.append(geometry)
 
             if self.training or index == self.eval_idx:

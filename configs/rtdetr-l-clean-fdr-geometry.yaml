@@ -1,4 +1,4 @@
-# RT-DETR-L Clean FDR control with historical preliminary and DN-FDR mechanisms removed.
+# Matched internal ablation: clean FDR with feasible geometry correction enabled.
 
 nc: 80
 scales:
@@ -39,7 +39,7 @@ head:
      [nc, [256, 256, 256],
       {hidden_dim: 256, num_queries: 300, num_decoder_layers: 6,
        reg_max: 32, reg_scale: 4.0, up: 0.5, cumulative: true,
-       preliminary_box: false, distribution_feedback: false, feasible_geometry: false,
+       preliminary_box: false, distribution_feedback: false, feasible_geometry: true,
        private_seed: 10000}]]
 
 fdr_loss:
