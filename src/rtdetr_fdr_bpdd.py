@@ -30,6 +30,8 @@ _BPDD_OPTION_KEYS = {
     "include_dn",
     "decoded_iou_gate",
     "iou_margin",
+    "residual_gradient_only",
+    "distribution_objective",
 }
 
 
@@ -55,6 +57,8 @@ def _parse_bpdd_options(payload: dict[str, Any]) -> BPDDOptions:
         assignment_mode=str(assignment_mode),
         decoded_iou_gate=payload.get("decoded_iou_gate", False),
         iou_margin=float(payload.get("iou_margin", 0.0)),
+        residual_gradient_only=payload.get("residual_gradient_only", False),
+        distribution_objective=str(payload.get("distribution_objective", "kl")),
     )
 
 
@@ -131,9 +135,9 @@ class FDRBPDDTrainer(FDRTrainer):
         # Resume checkpoints may carry the plain FDR YAML. BPDD has an identical
         # state contract, so normalize the graph authority to the candidate YAML
         # before strictly loading those tensors.
-        del cfg
+        model_cfg = cfg if cfg is not None else BPDD_MODEL_CFG
         model = FDRBPDDDetectionModel(
-            BPDD_MODEL_CFG,
+            model_cfg,
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,

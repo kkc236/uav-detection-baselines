@@ -30,6 +30,8 @@ class BPDDOptions:
     assignment_mode: str = "final"
     decoded_iou_gate: bool = False
     iou_margin: float = 0.0
+    residual_gradient_only: bool = False
+    distribution_objective: str = "kl"
 
     def __post_init__(self) -> None:
         numeric = {
@@ -57,6 +59,51 @@ class BPDDOptions:
             raise ValueError("iou_margin must be in [0, 1]")
         if self.decoded_iou_gate and self.assignment_mode != "consistent":
             raise ValueError("decoded IoU gate requires consistent assignment")
+        if not isinstance(self.residual_gradient_only, bool):
+            raise ValueError("residual_gradient_only must be a boolean")
+        if self.distribution_objective not in {"kl", "mean_huber"}:
+            raise ValueError("distribution_objective must be 'kl' or 'mean_huber'")
+        if self.residual_gradient_only and self.assignment_mode != "consistent":
+            raise ValueError("residual-only gradients require consistent assignment")
+        if self.distribution_objective == "mean_huber" and (
+            self.assignment_mode != "consistent" or not self.decoded_iou_gate
+        ):
+            raise ValueError("mean_huber requires consistent assignment and decoded IoU gate")
+
+
+def _mean_distillation_terms(source_log, teacher_log, reference, targets):
+    """Distill means only where the teacher lies between student and raw GT.
+
+    This gives an independent-edge, infinitesimal logit descent property, not
+    a guarantee for the shared network or a finite optimizer step.
+    """
+    support = weighting_function(REG_MAX, UP, REG_SCALE).to(source_log)
+    student_mean = (source_log.exp() * support).sum(-1)
+    teacher_mean = (teacher_log.detach().exp() * support).sum(-1)
+    with torch.no_grad():
+        reference, targets = reference.detach().float(), targets.detach().float()
+        if not torch.isfinite(reference).all() or not torch.isfinite(targets).all():
+            raise ValueError("mean distillation requires finite reference and targets")
+        if (reference[..., 2:] <= 0).any() or (targets[..., 2:] <= 0).any():
+            raise ValueError("mean distillation requires positive reference and target sizes")
+        # Compute raw, unclipped distances. Boundary-bin labels alone cannot
+        # distinguish an out-of-support GT from a representable boundary target.
+        delta = reference[..., :2] - targets[..., :2]
+        lengths = torch.cat((targets[..., 2:] / 2 + delta,
+                             targets[..., 2:] / 2 - delta), dim=-1)
+        scale = reference[..., 2:].repeat(1, 2) / REG_SCALE
+        raw_gt = lengths / scale - REG_SCALE / 2
+        source_error = student_mean.detach() - raw_gt
+        teacher_error = teacher_mean - raw_gt
+        representable = torch.isfinite(raw_gt) & (raw_gt >= support[0]) & (raw_gt <= support[-1])
+        same_side = ((source_error >= 0) & (teacher_error >= 0)) | (
+            (source_error <= 0) & (teacher_error <= 0)
+        )
+        eligible = representable & same_side & (teacher_error.abs() < source_error.abs())
+    terms = torch.nn.functional.smooth_l1_loss(
+        student_mean, teacher_mean, reduction="none", beta=1.0
+    )
+    return terms, eligible
 
 
 @torch.no_grad()
@@ -489,9 +536,14 @@ def assignment_consistent_bpdd_loss(
             weight_left,
         )
 
-        source_log = torch.log_softmax(
-            logits[source_layer, batch_index, query_index], dim=-1
-        )
+        source_logits = logits[source_layer, batch_index, query_index]
+        if options.residual_gradient_only and source_layer > 0:
+            previous_logits = logits[source_layer - 1, batch_index, query_index]
+            residual = source_logits - previous_logits
+            # Same forward value; cancel the direct cumulative history path.
+            # Earlier transformer features can still receive indirect gradients.
+            source_logits = source_logits.detach() + (residual - residual.detach())
+        source_log = torch.log_softmax(source_logits, dim=-1)
         source_error = interpolated_edge_nll(
             source_log,
             target_indices,
@@ -506,13 +558,19 @@ def assignment_consistent_bpdd_loss(
         reliability = torch.where(
             has_teacher, reliability, torch.zeros_like(reliability)
         )
+        if options.distribution_objective == "mean_huber":
+            divergence, mean_eligible = _mean_distillation_terms(
+                source_log, teacher_log, matched_reference, matched_targets
+            )
+            reliability = torch.where(mean_eligible, reliability, torch.zeros_like(reliability))
+        else:
+            divergence = (teacher * (teacher_log - source_log)).sum(dim=-1)
         if options.decoded_iou_gate:
             keep, _ = decoded_teacher_iou_gate(
                 source_log, teacher_log, matched_reference, matched_targets,
                 reliability > 0, options.iou_margin,
             )
             reliability = reliability * keep.unsqueeze(-1)
-        divergence = (teacher * (teacher_log - source_log)).sum(dim=-1)
         terms.append(reliability * divergence)
         reliabilities.append(reliability)
         improvements.append(
