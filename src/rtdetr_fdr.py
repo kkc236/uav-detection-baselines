@@ -392,9 +392,23 @@ def _load_initial_state(
         return
     artifact = torch.load(Path(path), map_location="cpu", weights_only=False)
     allowed_prefixes = (
-        ("model.28.decoder.distribution_feedback.",)
+        tuple(
+            prefix
+            for prefix in (
+                "model.28.decoder.distribution_feedback.",
+                "model.28.decoder.local_expert.",
+            )
+            if any(
+                name.startswith(prefix)
+                for name in model.state_dict()
+            )
+        )
         if any(
             name.startswith("model.28.decoder.distribution_feedback.")
+            for name in model.state_dict()
+        )
+        or any(
+            name.startswith("model.28.decoder.local_expert.")
             for name in model.state_dict()
         )
         else ()

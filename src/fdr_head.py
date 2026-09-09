@@ -24,6 +24,7 @@ from src.fdr_math import (
     decode_feasible_fdr_boxes,
     distance2bbox,
 )
+from src.bpdd_capacity import LocalBoundaryExpert
 
 
 FDR_OUTPUT_DIM = 4 * (REG_MAX + 1)
@@ -78,6 +79,12 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         "preliminary_box": True,
         "distribution_feedback": False,
         "feasible_geometry": True,
+        "local_expert": False,
+        "local_expert_hidden": 256,
+        "local_expert_heads": 8,
+        "local_expert_ff": 1024,
+        "local_expert_seed": 30_000,
+        "local_expert_chunk_size": 32,
         "private_seed": 10_000,
     }
 
@@ -157,6 +164,18 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         self.decoder.cumulative = bool(resolved["cumulative"])
         self.decoder.preliminary_box = bool(resolved["preliminary_box"])
         self.decoder.feasible_geometry = bool(resolved["feasible_geometry"])
+        if bool(resolved["local_expert"]):
+            self.decoder.local_expert = LocalBoundaryExpert(
+                channels=(hidden_dim, hidden_dim, hidden_dim),
+                hidden=int(resolved["local_expert_hidden"]),
+                nc=int(nc),
+                heads=int(resolved["local_expert_heads"]),
+                ff=int(resolved["local_expert_ff"]),
+                private_seed=int(resolved["local_expert_seed"]),
+                chunk_size=int(resolved["local_expert_chunk_size"]),
+            )
+        else:
+            self.decoder.local_expert = None
         self.fdr_options = resolved
 
 
@@ -234,6 +253,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.eval_idx = int(eval_idx)
         self.pre_bbox_head = pre_bbox_head
         self.distribution_feedback = distribution_feedback
+        self.local_expert: LocalBoundaryExpert | None = None
         self.feasible_geometry = bool(feasible_geometry)
         # This must remain a plain Python float. ModelEMA would smooth a tensor
         # buffer and leave residual feedback after the exact-off boundary.
@@ -249,6 +269,27 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_pre_bboxes: Tensor | None = None
         self.last_geometry_statistics: dict[str, Tensor] = {}
 
+    @staticmethod
+    def _feature_maps(feats: Tensor, shapes: list) -> list[Tensor]:
+        """Unflatten the three projected encoder maps for local sampling."""
+        if feats.ndim != 3 or feats.shape[-1] != 256:
+            raise ValueError("encoder features must have shape [B,N,256]")
+        maps: list[Tensor] = []
+        offset = 0
+        for shape in shapes:
+            if len(shape) != 2:
+                raise ValueError("encoder shape entries must be [height,width]")
+            height, width = int(shape[0]), int(shape[1])
+            count = height * width
+            chunk = feats[:, offset : offset + count]
+            if chunk.shape[1] != count:
+                raise ValueError("encoder feature sequence does not match shapes")
+            maps.append(chunk.transpose(1, 2).reshape(feats.shape[0], feats.shape[2], height, width))
+            offset += count
+        if offset != feats.shape[1] or len(maps) != 3:
+            raise ValueError("local expert requires exactly three encoder feature maps")
+        return maps
+
     def __setstate__(self, state: dict) -> None:
         """Restore exact pinned defaults in pre-declarative pickled checkpoints."""
 
@@ -263,6 +304,8 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.distribution_feedback_scale = 1.0
         if not hasattr(self, "feasible_geometry"):
             self.feasible_geometry = True
+        if not hasattr(self, "local_expert"):
+            self.local_expert = None
 
     def set_distribution_feedback_scale(self, value: float) -> None:
         """Set the exact adapter multiplier without registering EMA state."""
@@ -384,6 +427,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
                 if self.cumulative
                 else delta_corners
             )
+            current_classes = score_head[index](output)
             # Casting alone is insufficient: autocast would lower F.linear again.
             with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
                 raw_distance = self.integral(cumulative_corners.float())
@@ -409,11 +453,27 @@ class FDRDeformableTransformerDecoder(nn.Module):
                         "minimum_decoded_height": raw_extent[..., 1].detach().amin(),
                         "numerical_floor_edges": raw_distance.new_zeros((), dtype=torch.long),
                     }
+            if self.local_expert is not None and index == self.num_layers - 1:
+                cumulative_corners, current_classes = self.local_expert(
+                    output,
+                    cumulative_corners,
+                    current_classes,
+                    refined.detach(),
+                    self._feature_maps(feats, shapes),
+                )
+                with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
+                    raw_distance = self.integral(cumulative_corners.float())
+                    if self.feasible_geometry:
+                        refined, geometry = decode_feasible_fdr_boxes(
+                            initial_reference, raw_distance, self.reg_scale
+                        )
+                    else:
+                        refined = distance2bbox(initial_reference, raw_distance, self.reg_scale)
             geometry_records.append(geometry)
 
             if self.training or index == self.eval_idx:
                 decoded_boxes.append(refined)
-                class_logits.append(score_head[index](output))
+                class_logits.append(current_classes)
                 corner_logits.append(cumulative_corners)
                 references.append(initial_reference)
                 if not self.training:
