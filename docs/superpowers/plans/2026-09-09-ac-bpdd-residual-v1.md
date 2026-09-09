@@ -17,11 +17,11 @@
 - Reference: `tests/test_bpdd_joint_mechanism.py`
 - Reference: `tests/test_lrs_system_launcher.py`
 
-- [ ] Assert the candidate changes only `residual_gradient_only` relative to the G configuration.
-- [ ] Assert LRS alpha and feasible geometry remain enabled.
-- [ ] Assert same-seed initialized candidate and G model states are identical.
-- [ ] Assert launcher identity, config, epoch count, safe name, and frozen settings.
-- [ ] Run the new tests first and observe the expected missing-artifact failures.
+- [x] Assert the candidate changes only `residual_gradient_only` relative to the G configuration.
+- [x] Assert LRS alpha and feasible geometry remain enabled.
+- [x] Assert same-seed initialized candidate and G model states are identical.
+- [x] Assert launcher identity, config, epoch count, safe name, and frozen settings.
+- [x] Run the new tests first and observe the expected missing-artifact failures.
 
 ### Task 2: Implement the isolated candidate
 
@@ -29,10 +29,10 @@
 - Create: `configs/rtdetr-l-lrs-gfdr-ac-bpdd-residual.yaml`
 - Create: `scripts/train_lrs_gfdr_ac_bpdd_residual.py`
 
-- [ ] Copy the effective G graph and make feasible geometry explicit.
-- [ ] Keep KL and existing AC-BPDD gate/settings; enable only residual-gradient isolation.
-- [ ] Build a dedicated Formal100 launcher and versioned launch-authority record.
-- [ ] Re-run candidate, BPDD mechanism, launcher, and LRS system tests.
+- [x] Copy the effective G graph and make feasible geometry explicit.
+- [x] Keep KL and existing AC-BPDD gate/settings; enable only residual-gradient isolation.
+- [x] Build a dedicated Formal100 launcher and versioned launch-authority record.
+- [x] Re-run candidate, BPDD mechanism, launcher, and LRS system tests.
 
 ### Task 3: Freeze, deploy, and launch
 
