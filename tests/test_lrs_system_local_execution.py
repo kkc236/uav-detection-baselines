@@ -76,3 +76,56 @@ def test_shared_runtime_recorder_retains_decoded_extents_and_absence(tmp_path):
     assert record["bpdd_observations"] == 0
     assert record["bpdd_active_edge_ratio_mean"] is None
     assert record["gradients_finite"] is None
+
+
+def test_shared_runtime_recorder_captures_capacity_v2_fields(tmp_path):
+    from src.lrs_runtime_evidence import RuntimeEvidenceRecorder
+
+    model = SimpleNamespace(
+        capacity_method_revision="v2-fp32-extent-logspace-capacity-bpdd",
+        last_capacity_statistics={
+            "active_edge_ratio": torch.tensor(0.25),
+            "active_class_ratio": torch.tensor(0.10),
+            "localization_loss": torch.tensor(0.02),
+            "classification_loss": torch.tensor(0.01),
+            "localization_active_layers": torch.tensor(2),
+            "classification_active_layers": torch.tensor(1),
+            "mean_localization_advantage": torch.tensor(0.03),
+            "mean_classification_advantage": torch.tensor(0.04),
+            "candidate_source_matches": torch.tensor(12),
+            "identity_consistent_matches": torch.tensor(9),
+            "active_edges": torch.tensor(8),
+            "active_classes": torch.tensor(2),
+        },
+        fdr=SimpleNamespace(
+            last_geometry_statistics={},
+            last_expert_geometry_statistics={
+                "total": torch.tensor(20),
+                "horizontal_infeasible": torch.tensor(3),
+                "vertical_infeasible": torch.tensor(2),
+                "minimum_decoded_width": torch.tensor(1e-4),
+                "minimum_decoded_height": torch.tensor(2e-4),
+            },
+        ),
+    )
+    trainer = SimpleNamespace(
+        model=model,
+        epoch=0,
+        save_dir=tmp_path,
+        last_gradient_norms={
+            "gradient_norm": 11.0,
+            "fdr_gradient_norm": 2.0,
+            "expert_gradient_norm": 3.0,
+        },
+    )
+    recorder = RuntimeEvidenceRecorder()
+    recorder.capture(trainer)
+    record = recorder.write(trainer)
+    assert record["method_revision"] == "v2-fp32-extent-logspace-capacity-bpdd"
+    assert record["capacity_observations"] == 1
+    assert record["capacity_active_edge_ratio_mean"] == pytest.approx(0.25)
+    assert record["capacity_classification_active_layers_mean"] == pytest.approx(1.0)
+    assert record["expert_geometry_total"] == 20
+    assert record["gradient_norm"] == pytest.approx(11.0)
+    assert record["expert_gradient_norm"] == pytest.approx(3.0)
+    assert record["gradients_finite"] is True

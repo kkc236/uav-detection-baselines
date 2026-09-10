@@ -237,6 +237,8 @@ def quality_gated_capacity_distillation(
     active_classes = 0
     loc_advantages: list[Tensor] = []
     cls_advantages: list[Tensor] = []
+    loc_active_layers = 0
+    cls_active_layers = 0
 
     teacher_corner_all = expert_corners.detach().to(device=device, dtype=torch.float32)
     teacher_class_all = expert_classes.detach().to(device=device, dtype=torch.float32)
@@ -292,8 +294,10 @@ def quality_gated_capacity_distillation(
         loc_advantages.append((source_error.detach() - teacher_error.detach()).clamp_min(0))
         loc_kl = teacher_log.exp() * (teacher_log - source_log)
         loc_kl = loc_kl.sum(dim=-1)
-        denominator = max(int(loc_active.sum()), 1)
-        loc_terms.append((loc_reliability * loc_kl).sum() / denominator)
+        active_localization_edges = int(loc_active.sum())
+        if active_localization_edges:
+            loc_active_layers += 1
+            loc_terms.append((loc_reliability * loc_kl).sum() / active_localization_edges)
 
         source_class = student_classes[layer, batch_index, query_index]
         teacher_class = teacher_class_all[batch_index, query_index]
@@ -310,13 +314,30 @@ def quality_gated_capacity_distillation(
             margin=options.cls_margin,
             tau=options.cls_tau,
         )
+        # Classification logits are consumed by VFL, whose positive target is
+        # IoU-weighted.  Require the expert's decoded box to improve the same
+        # matched query before its class confidence can be distilled; this
+        # prevents an overconfident but geometrically inferior teacher from
+        # pushing against the base classification objective.
+        cls_quality_keep, _ = decoded_teacher_iou_gate(
+            source_log,
+            teacher_log,
+            matched_reference,
+            matched_targets,
+            torch.ones_like(cls_reliability, dtype=torch.bool),
+            margin=0.0,
+        )
+        cls_reliability = cls_reliability * cls_quality_keep.to(cls_reliability.dtype)
         cls_active = cls_reliability > 0
         active_classes += int(cls_active.sum())
         cls_advantages.append((source_bce.detach() - teacher_bce.detach()).clamp_min(0))
-        cls_terms.append(
-            (cls_reliability * _bernoulli_kl(teacher_class, source_class)).sum()
-            / max(int(cls_active.sum()), 1)
-        )
+        active_classifications = int(cls_active.sum())
+        if active_classifications:
+            cls_active_layers += 1
+            cls_terms.append(
+                (cls_reliability * _bernoulli_kl(teacher_class, source_class)).sum()
+                / active_classifications
+            )
 
     loc_mean = torch.stack(loc_terms).mean() if loc_terms else graph_zero
     cls_mean = torch.stack(cls_terms).mean() if cls_terms else graph_zero
@@ -350,6 +371,8 @@ def quality_gated_capacity_distillation(
         "identity_consistent_matches": torch.tensor(consistent_matches, device=device, dtype=torch.long),
         "active_edges": torch.tensor(active_edges, device=device, dtype=torch.long),
         "active_classes": torch.tensor(active_classes, device=device, dtype=torch.long),
+        "localization_active_layers": scalar_zero.new_tensor(loc_active_layers),
+        "classification_active_layers": scalar_zero.new_tensor(cls_active_layers),
         "localization_loss": localization_loss.detach(),
         "classification_loss": classification_loss.detach(),
     }

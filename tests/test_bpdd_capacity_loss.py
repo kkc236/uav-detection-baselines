@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import src.bpdd_capacity_loss as capacity_loss
 
 from src.bpdd_capacity_loss import (
     CapacityBPDDOptions,
@@ -68,8 +69,15 @@ def test_no_matches_and_identity_mismatch_return_connected_zero() -> None:
     assert result.statistics["identity_consistent_ratio"].item() == 0
 
 
-def test_classification_gate_uses_detached_better_teacher() -> None:
+def test_classification_gate_uses_detached_better_teacher(monkeypatch) -> None:
     values = list(_inputs())
+    monkeypatch.setattr(
+        capacity_loss,
+        "decoded_teacher_iou_gate",
+        lambda source, teacher, reference, targets, active_edges, margin=0.0:
+        (torch.ones(source.shape[0], dtype=torch.bool),
+         torch.ones(source.shape[0])),
+    )
     with torch.no_grad():
         values[1][..., 1] = -3.0
         values[3][..., 1] = 3.0
@@ -82,6 +90,45 @@ def test_classification_gate_uses_detached_better_teacher() -> None:
     assert values[1].grad is not None and values[1].grad.abs().sum() > 0
     assert values[3].grad is None
     assert result.statistics["active_class_ratio"].item() > 0
+
+
+def test_classification_teacher_without_box_quality_gain_is_rejected() -> None:
+    values = list(_inputs())
+    with torch.no_grad():
+        values[1][..., 1] = -3.0
+        values[3][..., 1] = 3.0
+    result = quality_gated_capacity_distillation(
+        *values, [_matches(), _matches()], _matches(),
+        CapacityBPDDOptions(loc_weight=0.0), epoch=20,
+    )
+    assert result.classification_loss.item() == 0.0
+    assert result.statistics["active_classes"].item() == 0
+
+
+def test_only_layers_with_active_class_kd_enter_layer_mean(monkeypatch) -> None:
+    values = list(_inputs())
+    monkeypatch.setattr(
+        capacity_loss,
+        "decoded_teacher_iou_gate",
+        lambda source, teacher, reference, targets, active_edges, margin=0.0:
+        (torch.ones(source.shape[0], dtype=torch.bool),
+         torch.ones(source.shape[0])),
+    )
+    with torch.no_grad():
+        values[1][0, 0, 0, 1] = -3.0
+        values[3][0, 0, 1] = 3.0
+        values[1][1, 0, 0, 1] = 3.0
+        values[3][0, 1] = 0.0
+    one = quality_gated_capacity_distillation(
+        values[0][:1], values[1][:1], values[2], values[3], values[4], values[5], values[6],
+        [_matches()], _matches(), CapacityBPDDOptions(loc_weight=0.0), epoch=20,
+    )
+    two = quality_gated_capacity_distillation(
+        *values, [_matches(), _matches()], _matches(),
+        CapacityBPDDOptions(loc_weight=0.0), epoch=20,
+    )
+    torch.testing.assert_close(two.classification_loss, one.classification_loss)
+    assert two.statistics["classification_active_layers"].item() == 1
 
 
 def test_out_of_support_edges_cannot_contribute_localization() -> None:

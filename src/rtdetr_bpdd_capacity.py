@@ -109,6 +109,8 @@ class CapacityBPDDDetectionLoss(FDRDetectionLoss):
 class CapacityBPDDDetectionModel(FDRRTDETRDetectionModel):
     """LRS-GFDR with a separately supervised local expert."""
 
+    capacity_method_revision = "v2-fp32-extent-logspace-capacity-bpdd"
+
     def __init__(self, cfg=CAPACITY_BPDD_CFG, *args, **kwargs) -> None:
         super().__init__(cfg=cfg, *args, **kwargs)
         payload = self.yaml.get("capacity_bpdd_loss")

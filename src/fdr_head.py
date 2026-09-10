@@ -335,6 +335,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_references: Tensor | None = None
         self.last_pre_bboxes: Tensor | None = None
         self.last_geometry_statistics: dict[str, Tensor] = {}
+        self.last_expert_geometry_statistics: dict[str, Tensor] = {}
         self.last_expert_prediction: ExpertPrediction | None = None
 
     @staticmethod
@@ -378,6 +379,8 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.local_expert_preserve_base = False
         if not hasattr(self, "last_expert_prediction"):
             self.last_expert_prediction = None
+        if not hasattr(self, "last_expert_geometry_statistics"):
+            self.last_expert_geometry_statistics = {}
 
     def set_distribution_feedback_scale(self, value: float) -> None:
         """Set the exact adapter multiplier without registering EMA state."""
@@ -425,6 +428,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_references = None
         self.last_pre_bboxes = None
         self.last_geometry_statistics = {}
+        self.last_expert_geometry_statistics = {}
         self.last_expert_prediction = None
 
     def forward(
@@ -550,13 +554,19 @@ class FDRDeformableTransformerDecoder(nn.Module):
                         expert_distance = self.integral(expert_corners.float())
                         expert_reference = initial_reference[:, normal_slice]
                         if self.feasible_geometry:
-                            expert_boxes, _ = decode_feasible_fdr_boxes(
+                            expert_boxes, expert_geometry = decode_feasible_fdr_boxes(
                                 expert_reference, expert_distance, self.reg_scale
                             )
                         else:
                             expert_boxes = distance2bbox(
                                 expert_reference, expert_distance, self.reg_scale
                             )
+                            expert_geometry = {}
+                    self.last_expert_geometry_statistics = {
+                        name: value.detach()
+                        for name, value in expert_geometry.items()
+                        if isinstance(value, Tensor)
+                    }
                     self.last_expert_prediction = ExpertPrediction(
                         boxes=expert_boxes,
                         classes=expert_classes,
