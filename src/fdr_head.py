@@ -8,6 +8,7 @@ six cumulative 33-bin-per-edge distribution heads used by FDR.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import math
 
 import torch
@@ -29,6 +30,15 @@ from src.bpdd_capacity import LocalBoundaryExpert
 
 FDR_OUTPUT_DIM = 4 * (REG_MAX + 1)
 FDR_DECODER_LAYERS = 6
+
+
+@dataclass(frozen=True)
+class ExpertPrediction:
+    """Normal-query prediction produced by the independent local expert."""
+
+    boxes: Tensor
+    classes: Tensor
+    corners: Tensor
 
 
 class DistributionConditionedFeedback(nn.Module):
@@ -80,6 +90,7 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         "distribution_feedback": False,
         "feasible_geometry": True,
         "local_expert": False,
+        "local_expert_preserve_base": False,
         "local_expert_hidden": 256,
         "local_expert_heads": 8,
         "local_expert_ff": 1024,
@@ -129,9 +140,17 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         num_queries = int(resolved["num_queries"])
         num_layers = int(resolved["num_decoder_layers"])
         private_seed = int(resolved["private_seed"])
+        preserve_base = bool(resolved["local_expert_preserve_base"])
+        if preserve_base and not bool(resolved["local_expert"]):
+            raise ValueError("local_expert_preserve_base requires local_expert=True")
+        if preserve_base and len(parsed_channels) != 4:
+            raise ValueError("preserved local expert requires P2/P3/P4/P5 inputs")
+        decoder_channels = parsed_channels[1:] if preserve_base else parsed_channels
+        if len(decoder_channels) != 3:
+            raise ValueError("RT-DETR decoder requires exactly P3/P4/P5 inputs")
         super().__init__(
             nc=int(nc),
-            ch=parsed_channels,
+            ch=decoder_channels,
             hd=hidden_dim,
             nq=num_queries,
             ndl=num_layers,
@@ -164,9 +183,10 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         self.decoder.cumulative = bool(resolved["cumulative"])
         self.decoder.preliminary_box = bool(resolved["preliminary_box"])
         self.decoder.feasible_geometry = bool(resolved["feasible_geometry"])
+        self.decoder.local_expert_preserve_base = preserve_base
         if bool(resolved["local_expert"]):
             self.decoder.local_expert = LocalBoundaryExpert(
-                channels=(hidden_dim, hidden_dim, hidden_dim),
+                channels=(parsed_channels[:3] if preserve_base else (hidden_dim,) * 3),
                 hidden=int(resolved["local_expert_hidden"]),
                 nc=int(nc),
                 heads=int(resolved["local_expert_heads"]),
@@ -177,6 +197,52 @@ class FDRRTDETRDecoder(RTDETRDecoder):
         else:
             self.decoder.local_expert = None
         self.fdr_options = resolved
+
+    def forward(self, x: list[Tensor], batch: dict | None = None) -> tuple | Tensor:
+        """Route raw P2/P3/P4 to the expert and projected P3/P4/P5 to RT-DETR."""
+
+        if not bool(self.fdr_options["local_expert_preserve_base"]):
+            return super().forward(x, batch)
+
+        from ultralytics.models.utils.ops import get_cdn_group
+
+        self.decoder._clear_evidence()
+        if len(x) != 4:
+            raise ValueError("preserved local expert requires four P2/P3/P4/P5 inputs")
+        local_features = x[:3]
+        feats, shapes = self._get_encoder_input(x[1:])
+        dn_embed, dn_bbox, attn_mask, dn_meta = get_cdn_group(
+            batch,
+            self.nc,
+            self.num_queries,
+            self.denoising_class_embed.weight,
+            self.num_denoising,
+            self.label_noise_ratio,
+            self.box_noise_scale,
+            self.training,
+        )
+        embed, refer_bbox, enc_bboxes, enc_scores = self._get_decoder_input(
+            feats, shapes, dn_embed, dn_bbox
+        )
+        dec_bboxes, dec_scores = self.decoder(
+            embed,
+            refer_bbox,
+            feats,
+            shapes,
+            self.dec_bbox_head,
+            self.dec_score_head,
+            self.query_pos_head,
+            attn_mask=attn_mask,
+            local_features=local_features,
+            normal_query_count=self.num_queries,
+        )
+        if self.training and dn_meta is None:
+            dec_bboxes = dec_bboxes + 0 * self.denoising_class_embed.weight.sum()
+        raw = dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta
+        if self.training:
+            return raw
+        processed = self.postprocess(dec_bboxes.squeeze(0), dec_scores.squeeze(0).sigmoid())
+        return processed if self.export else (processed, raw)
 
 
 def cumulative_distribution_logits(deltas: Tensor) -> Tensor:
@@ -254,6 +320,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.pre_bbox_head = pre_bbox_head
         self.distribution_feedback = distribution_feedback
         self.local_expert: LocalBoundaryExpert | None = None
+        self.local_expert_preserve_base = False
         self.feasible_geometry = bool(feasible_geometry)
         # This must remain a plain Python float. ModelEMA would smooth a tensor
         # buffer and leave residual feedback after the exact-off boundary.
@@ -268,6 +335,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_references: Tensor | None = None
         self.last_pre_bboxes: Tensor | None = None
         self.last_geometry_statistics: dict[str, Tensor] = {}
+        self.last_expert_prediction: ExpertPrediction | None = None
 
     @staticmethod
     def _feature_maps(feats: Tensor, shapes: list) -> list[Tensor]:
@@ -306,6 +374,10 @@ class FDRDeformableTransformerDecoder(nn.Module):
             self.feasible_geometry = True
         if not hasattr(self, "local_expert"):
             self.local_expert = None
+        if not hasattr(self, "local_expert_preserve_base"):
+            self.local_expert_preserve_base = False
+        if not hasattr(self, "last_expert_prediction"):
+            self.last_expert_prediction = None
 
     def set_distribution_feedback_scale(self, value: float) -> None:
         """Set the exact adapter multiplier without registering EMA state."""
@@ -353,6 +425,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
         self.last_references = None
         self.last_pre_bboxes = None
         self.last_geometry_statistics = {}
+        self.last_expert_prediction = None
 
     def forward(
         self,
@@ -365,6 +438,8 @@ class FDRDeformableTransformerDecoder(nn.Module):
         pos_mlp: nn.Module,
         attn_mask: Tensor | None = None,
         padding_mask: Tensor | None = None,
+        local_features: list[Tensor] | None = None,
+        normal_query_count: int | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Return stock-compatible box/class stacks and retain training evidence."""
 
@@ -453,27 +528,68 @@ class FDRDeformableTransformerDecoder(nn.Module):
                         "minimum_decoded_height": raw_extent[..., 1].detach().amin(),
                         "numerical_floor_edges": raw_distance.new_zeros((), dtype=torch.long),
                     }
+            reported_corners = cumulative_corners
+            reported_classes = current_classes
+            reported_boxes = refined
             if self.local_expert is not None and index == self.num_layers - 1:
-                cumulative_corners, current_classes = self.local_expert(
-                    output,
-                    cumulative_corners,
-                    current_classes,
-                    refined.detach(),
-                    self._feature_maps(feats, shapes),
-                )
-                with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
-                    raw_distance = self.integral(cumulative_corners.float())
-                    if self.feasible_geometry:
-                        refined, geometry = decode_feasible_fdr_boxes(
-                            initial_reference, raw_distance, self.reg_scale
-                        )
-                    else:
-                        refined = distance2bbox(initial_reference, raw_distance, self.reg_scale)
+                if self.local_expert_preserve_base:
+                    if local_features is None or normal_query_count is None:
+                        raise ValueError("preserved local expert requires raw features and query count")
+                    normal_count = int(normal_query_count)
+                    if normal_count <= 0 or normal_count > output.shape[1]:
+                        raise ValueError("normal_query_count is outside the decoder query range")
+                    normal_slice = slice(output.shape[1] - normal_count, output.shape[1])
+                    expert_corners, expert_classes = self.local_expert(
+                        output[:, normal_slice],
+                        cumulative_corners[:, normal_slice],
+                        current_classes[:, normal_slice],
+                        refined[:, normal_slice].detach(),
+                        local_features,
+                    )
+                    with torch.autocast(device_type=expert_corners.device.type, enabled=False):
+                        expert_distance = self.integral(expert_corners.float())
+                        expert_reference = initial_reference[:, normal_slice]
+                        if self.feasible_geometry:
+                            expert_boxes, _ = decode_feasible_fdr_boxes(
+                                expert_reference, expert_distance, self.reg_scale
+                            )
+                        else:
+                            expert_boxes = distance2bbox(
+                                expert_reference, expert_distance, self.reg_scale
+                            )
+                    self.last_expert_prediction = ExpertPrediction(
+                        boxes=expert_boxes,
+                        classes=expert_classes,
+                        corners=expert_corners,
+                    )
+                    if not self.training:
+                        reported_corners = expert_corners
+                        reported_classes = expert_classes
+                        reported_boxes = expert_boxes
+                else:
+                    cumulative_corners, current_classes = self.local_expert(
+                        output,
+                        cumulative_corners,
+                        current_classes,
+                        refined.detach(),
+                        self._feature_maps(feats, shapes),
+                    )
+                    with torch.autocast(device_type=cumulative_corners.device.type, enabled=False):
+                        raw_distance = self.integral(cumulative_corners.float())
+                        if self.feasible_geometry:
+                            refined, geometry = decode_feasible_fdr_boxes(
+                                initial_reference, raw_distance, self.reg_scale
+                            )
+                        else:
+                            refined = distance2bbox(initial_reference, raw_distance, self.reg_scale)
+                    reported_corners = cumulative_corners
+                    reported_classes = current_classes
+                    reported_boxes = refined
             geometry_records.append(geometry)
 
             if self.training or index == self.eval_idx:
-                decoded_boxes.append(refined)
-                class_logits.append(current_classes)
+                decoded_boxes.append(reported_boxes)
+                class_logits.append(reported_classes)
                 corner_logits.append(cumulative_corners)
                 references.append(initial_reference)
                 if not self.training:
@@ -520,6 +636,7 @@ __all__ = [
     "FDR_OUTPUT_DIM",
     "FDRDeformableTransformerDecoder",
     "FDRRTDETRDecoder",
+    "ExpertPrediction",
     "DistributionConditionedFeedback",
     "build_distribution_heads",
     "cumulative_distribution_logits",
