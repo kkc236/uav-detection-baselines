@@ -447,6 +447,40 @@ class FDRDetectionLoss(RTDETRDetectionLoss):
             )
         ]
 
+    def fixed_assignment_expert_loss(
+        self,
+        pred_bboxes: Tensor,
+        pred_scores: Tensor,
+        corner_logits: Tensor,
+        pre_boxes: Tensor,
+        batch: dict[str, Any],
+        match_indices: MatchIndices,
+        *,
+        postfix: str = "_expert",
+    ) -> dict[str, Tensor]:
+        """Supervise one expert prediction without invoking the matcher again."""
+
+        losses = self._get_loss(
+            pred_bboxes,
+            pred_scores,
+            batch["bboxes"],
+            batch["cls"],
+            batch["gt_groups"],
+            postfix=postfix,
+            match_indices=_clone_matches(match_indices),
+        )
+        losses.update(
+            self._fgl_group(
+                corner_logits.unsqueeze(0),
+                pred_bboxes.unsqueeze(0),
+                pre_boxes,
+                batch["bboxes"],
+                [_clone_matches(match_indices)],
+                postfix=postfix,
+            )
+        )
+        return losses
+
     def forward(
         self,
         preds: tuple[Tensor, Tensor],

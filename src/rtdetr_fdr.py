@@ -269,6 +269,17 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
             ),
         )
 
+    def _criterion_extra_kwargs(
+        self,
+        dec_bboxes: Tensor,
+        dec_scores: Tensor,
+        evidence: FDRTrainingEvidence,
+    ) -> dict[str, Any]:
+        """Allow research subclasses to pass extra normal-query evidence."""
+
+        del dec_bboxes, dec_scores, evidence
+        return {}
+
     def loss(
         self,
         batch: dict[str, Tensor],
@@ -338,8 +349,11 @@ class FDRRTDETRDetectionModel(RTDETRDetectionModel):
             pre_boxes=fgl_reference,
             dn_corner_logits=evidence.dn_corner_logits,
             dn_pre_boxes=dn_fgl_reference,
+            **self._criterion_extra_kwargs(dec_bboxes, dec_scores, evidence),
         )
-        self.last_fdr_losses = losses
+        self.last_fdr_losses = {
+            name: value.detach() for name, value in losses.items()
+        }
         total = sum(losses.values())
         displayed = torch.stack(
             [
