@@ -4,6 +4,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 def boundary_grid(boxes: Tensor) -> tuple[Tensor, Tensor]:
@@ -61,19 +62,48 @@ class LocalBoundaryExpert(nn.Module):
         self.chunk_size = int(chunk_size)
         if self.chunk_size <= 0 or len(channels) != 3:
             raise ValueError('requires three feature scales and positive chunk_size')
-        # Constructor must not consume the public training RNG.
-        with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(private_seed)
-            self.projections = nn.ModuleList(nn.Conv2d(c,hidden,1) for c in channels)
+        if hidden <= 0 or hidden % heads:
+            raise ValueError('hidden must be positive and divisible by heads')
+        # Allocate on meta so module constructors cannot consume the public RNG,
+        # then initialize every private tensor from one explicit CPU generator.
+        with torch.device('meta'):
+            self.projections = nn.ModuleList(nn.Linear(c,hidden) for c in channels)
             self.position = nn.Linear(3, hidden)
             self.distribution = nn.Linear(8, hidden)
             self.blocks = nn.ModuleList(LocalAttentionBlock(hidden,heads,ff) for _ in range(2))
             self.norm = nn.LayerNorm(hidden)
             self.box_out = nn.Linear(hidden,132)
             self.class_out = nn.Linear(hidden,nc)
-            for layer in (self.box_out,self.class_out):
-                nn.init.zeros_(layer.weight)
-                nn.init.zeros_(layer.bias)
+        self.to_empty(device=torch.device('cpu'))
+        generator = torch.Generator(device='cpu')
+        generator.manual_seed(int(private_seed))
+        for child in self.modules():
+            if isinstance(child, nn.Linear):
+                nn.init.kaiming_uniform_(child.weight, a=5 ** .5, generator=generator)
+                if child.bias is not None:
+                    fan_in, _ = nn.init._calculate_fan_in_and_fan_out(child.weight)
+                    bound = fan_in ** -.5 if fan_in else 0.
+                    nn.init.uniform_(child.bias, -bound, bound, generator=generator)
+            elif isinstance(child, nn.LayerNorm):
+                nn.init.ones_(child.weight)
+                nn.init.zeros_(child.bias)
+            elif isinstance(child, nn.MultiheadAttention):
+                if child.in_proj_weight is not None:
+                    nn.init.xavier_uniform_(child.in_proj_weight, generator=generator)
+                if child.in_proj_bias is not None:
+                    nn.init.zeros_(child.in_proj_bias)
+                if child.bias_k is not None:
+                    nn.init.xavier_normal_(child.bias_k, generator=generator)
+                if child.bias_v is not None:
+                    nn.init.xavier_normal_(child.bias_v, generator=generator)
+        for layer in (self.box_out,self.class_out):
+            nn.init.zeros_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
+    def _attend(self, query: Tensor, tokens: Tensor, valid: Tensor) -> Tensor:
+        for block in self.blocks:
+            query = block(query, tokens, valid)
+        return query
 
     def forward(self, query, corners, classes, boxes, features):
         if query.shape[:2] != corners.shape[:2] or corners.shape[-1] != 132:
@@ -82,7 +112,6 @@ class LocalBoundaryExpert(nn.Module):
             raise ValueError('expert requires P2/P3/P4')
         if query.shape[1] == 0:
             return corners, classes
-        projected = [p(f) for p,f in zip(self.projections,features)]
         grid,valid = boundary_grid(boxes)
         p = corners.detach().float().reshape(*corners.shape[:2],4,33).softmax(-1)
         entropy = -(p*p.clamp_min(1e-9).log()).sum(-1)
@@ -94,17 +123,21 @@ class LocalBoundaryExpert(nn.Module):
             stop=start+self.chunk_size
             local_grid=grid[:,start:stop]
             tokens=[]
-            for scale,f in enumerate(projected):
+            for scale,(projection,feature) in enumerate(zip(self.projections,features)):
                 position=torch.cat((local_grid,torch.full_like(local_grid[...,:1],scale/2)), -1)
-                tokens.append(sample_local_features(f,local_grid) + self.position(position.to(query.dtype)))
+                sampled = sample_local_features(feature,local_grid)
+                tokens.append(projection(sampled) + self.position(position.to(query.dtype)))
             token=torch.cat(tokens,2)
             mask=valid[:,start:stop].repeat(1,1,3)
             batch,count,_,width=token.shape
             q=query[:,start:stop].reshape(batch*count,width)
             token=token.reshape(batch*count,-1,width)
             mask=mask.reshape(batch*count,-1)
-            for block in self.blocks:
-                q=block(q,token,mask)
+            if self.training and torch.is_grad_enabled():
+                q=checkpoint(self._attend,q,token,mask,use_reentrant=False,
+                             preserve_rng_state=False)
+            else:
+                q=self._attend(q,token,mask)
             outputs.append(q.reshape(batch,count,width))
         h=self.norm(torch.cat(outputs,1))
         return corners + self.box_out(h), classes + self.class_out(h)
