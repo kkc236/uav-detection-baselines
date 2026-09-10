@@ -135,3 +135,16 @@ r_l = z_l - z_(l-1)
 - 若 residual-only 让主定位损失明显变差，关闭该开关作为兼容候选；不能把它描述成必然改进。
 - 若修复版只改善稳定性而不提升 mAP，仍保留其工程价值，论文主张回退为可靠性/可审计性改进。
 
+## 审计后修订约束
+
+本节覆盖审计报告提出的冲突，并优先于前文的同名概括：
+
+1. **已实现项按回归保护处理。** v2 已有的 normal-only query 切片、非重入局部注意力 checkpoint、解码 IoU 门控和定位/分类有效层均值不再重复宣称为 v3 新修复；v3 必须先保留它们的行为测试，再修改未完成部分。
+2. **多匹配掩码契约固定。** `decoded_teacher_iou_gate` 的 `active_edges` 必须是 `[matches, 4]`；分类调用端使用完整四边布尔掩码。`matches=0/1/2/4/5`、禁用、warmup 和零分类权重均走真实函数测试。
+3. **分类目标写成可执行公式。** 对每个匹配，先用学生解码框得到 detached `q_iou`；分类目标为 `y_class = one_hot(gt) * q_iou`。对每个类别分别计算学生/教师 BCE，只有教师误差在该类别上改善超过 margin 才蒸馏；分类 KL 也逐类别加权。正类、负类激活数和 signed advantage 分开记录。这样“质量感知”不再由全类别平均值代替。
+4. **定位 KL 的结论降级。** decoded IoU、逐边误差和支持检查只证明教师终点质量更好，不能证明一次 KL 更新方向安全。v3 将 residual-only 作为可测路径隔离；若要改变定位目标，必须另设期望回归/有界投影候选，并用同预算 GT-only 辅助项对照，不能把 KL 门控写成方向保证。
+5. **residual-only 必须接到 capacity。** `CapacityBPDDOptions`、YAML parser、criterion 和 `quality_gated_capacity_distillation` 全链路传递 `residual_gradient_only`。该公式只作用于定位分布 logits，分类 logits 不套用累计残差表达式。
+6. **非有限值保持可见。** recorder 对 missing、non-finite 和真实 zero 使用独立计数/状态；`NaN` 不得经过 `or 0.0` 写成数值零。分项梯度夹角是固定批次离线诊断，不由三组总梯度范数替代。
+7. **训练和评估缓存分契约。** 训练保留 base 六层 `base_*` 和 expert 独立输出；评估的 `reported_boxes/classes/corners` 三者必须同源、同 query 数。base geometry 与 expert geometry 分开记录，不能用一个 `last_corner_logits` 同时代表两者。
+8. **归因矩阵补同容量无 KD。** 除 Repair-full、no-residual 和 no-quality 外，保留 expert-only 配置作为同容量直接监督对照。`Repair-full - expert-only` 才用于估计修复版蒸馏增量；no-checkpoint 只作资源诊断。
+9. **基准身份写清。** v3 兼容基准为本工作树提交 `c4d31e1a` 的 capacity-v2 行为，历史服务器运行提交仅用于材料对照。关闭 v3 新开关时要求前向数值等价；已有 v2 修补不在关闭开关后撤回。
