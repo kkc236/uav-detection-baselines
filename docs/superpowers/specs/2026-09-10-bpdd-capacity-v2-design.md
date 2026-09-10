@@ -7,7 +7,7 @@
 - Version Label: bpdd_capacity_v2_design
 - Verification Status: APPROVED-CONCEPT / UNIMPLEMENTED / UNMEASURED
 - Parent evidence: workspace `diagnostics/2026-09-10-bpdd-capacity-redesign-proposal.md` and `diagnostics/2026-09-10-bpdd-capacity-design-audit.md`
-- User decision: 采用“独立局部精修头 + 质量门控 BPDD”，保留 LRS-GFDR，修复 v1 工程问题后重新训练。
+- User decision: 采用“独立局部精修头 + 质量门控 BPDD”，保留 LRS-GFDR，修复 v1 工程问题后重新训练；2026-09-10 明确要求跳过独立显存预检，直接启动 Formal100。
 
 ## 1. 目标与边界
 
@@ -140,15 +140,11 @@ A/B/C 共享参数必须来自同一 initial-state 内容；B/C 的 expert tenso
 - direct loss 固定使用原末层 assignment，matcher 调用次数不增加；
 - 参数分组互斥完备，checkpoint roundtrip 与恢复调度通过。
 
-### Gate 1：CUDA 与真实密集批次
+### Gate 1：训练启动证据
 
-在正式 4090、batch 8、640、AMP 下至少覆盖空 GT、普通批次和数据集中高目标数批次；完成 forward/backward/optimizer step，无非有限数或 AMP skip。连续运行足够批次覆盖 optimizer 状态和 allocator 稳态，不能只做一个合成 batch。峰值显存必须低于设备总量并保留至少 1 GiB 余量；否则不启动 Formal100。
+按用户明确决定，不执行独立 CUDA 显存预检；CPU 单元/集成验证通过后直接在正式 4090 上启动 batch 8、640、Formal100。B 臂先启动，确认首个完整 epoch、验证结果、runtime JSONL、optimizer evidence、权重文件与 GPU 进程。B 完成后按相同源代码和协议启动 C。再次出现 OOM、非有限数或 AMP skip 时不自动重试、不降低 batch、不篡改协议；保留日志并报告。跳过预检提高了再次早期 OOM 和算力浪费的风险，不得在交付材料中隐去。
 
-### Gate 2：训练启动证据
-
-B 臂先启动，确认首个完整 epoch、验证结果、runtime JSONL、optimizer evidence、权重文件与 GPU 进程。B 完成后按相同源代码和协议启动 C。异常不自动重试或篡改 batch；保留日志并报告。
-
-### Gate 3：结果解释
+### Gate 2：结果解释
 
 主指标为统一验证器的 best mAP50-95，同时报告 P/R、mAP50、最后十轮均值、参数量、实测显存和推理延迟。单 seed 的小差值只能报告为观察值；若候选达到研发目标，再安排多个配对 seed 验证稳定性。
 
