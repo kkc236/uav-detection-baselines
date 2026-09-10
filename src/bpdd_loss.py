@@ -113,6 +113,8 @@ def decoded_teacher_iou_gate(source_log, teacher_log, reference, targets, active
     Inactive edges retain student distributions, since BPDD does not train them.
     This is a target-quality filter, not a guarantee about optimizer updates.
     """
+    if active_edges.shape != source_log.shape[:-1]:
+        raise ValueError("active_edges must have shape [matches, edges]")
     with torch.autocast(device_type=source_log.device.type, enabled=False):
         source = source_log.detach().float().exp()
         teacher = teacher_log.detach().float().exp()

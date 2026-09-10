@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 import src.bpdd_capacity_loss as capacity_loss
 
@@ -20,12 +21,12 @@ def _matches(query: int = 0, target: int = 0):
     )
 
 
-def _inputs(layers: int = 2):
-    student_corners = torch.zeros(layers, 1, 2, 4, 33, requires_grad=True)
-    student_classes = torch.zeros(layers, 1, 2, 3, requires_grad=True)
-    expert_corners = torch.zeros(1, 2, 4, 33, requires_grad=True)
-    expert_classes = torch.zeros(1, 2, 3, requires_grad=True)
-    reference = torch.tensor([[[0.5, 0.5, 0.2, 0.2], [0.5, 0.5, 0.2, 0.2]]])
+def _inputs(layers: int = 2, queries: int = 2):
+    student_corners = torch.zeros(layers, 1, queries, 4, 33, requires_grad=True)
+    student_classes = torch.zeros(layers, 1, queries, 3, requires_grad=True)
+    expert_corners = torch.zeros(1, queries, 4, 33, requires_grad=True)
+    expert_classes = torch.zeros(1, queries, 3, requires_grad=True)
+    reference = torch.tensor([[[0.5, 0.5, 0.2, 0.2]]]).expand(1, queries, 4)
     gt_boxes = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
     gt_classes = torch.tensor([1], dtype=torch.long)
     return student_corners, student_classes, expert_corners, expert_classes, reference, gt_boxes, gt_classes
@@ -155,3 +156,40 @@ def test_warmup_disables_both_distillation_terms_through_epoch_ten() -> None:
     )
     assert result.loss.item() == 0
     assert result.statistics["warmup"].item() == 0
+
+
+@pytest.mark.parametrize("matches", [0, 1, 2, 4, 5])
+def test_capacity_loss_accepts_multiple_identity_consistent_matches(matches: int) -> None:
+    values = _inputs(queries=max(matches, 1))
+    triple = (
+        torch.zeros(matches, dtype=torch.long),
+        torch.arange(matches, dtype=torch.long),
+        torch.zeros(matches, dtype=torch.long),
+    )
+    result = quality_gated_capacity_distillation(
+        *values, [triple] * values[0].shape[0], triple, CapacityBPDDOptions(), epoch=20
+    )
+    assert torch.isfinite(result.loss)
+
+
+@pytest.mark.parametrize(
+    "options,epoch",
+    [
+        (CapacityBPDDOptions(enabled=False), 20),
+        (CapacityBPDDOptions(), 0),
+        (CapacityBPDDOptions(cls_weight=0), 20),
+    ],
+)
+def test_capacity_loss_short_circuits_after_validating_match_shapes(
+    options: CapacityBPDDOptions, epoch: int
+) -> None:
+    values = _inputs(queries=2)
+    triple = (
+        torch.zeros(2, dtype=torch.long),
+        torch.arange(2, dtype=torch.long),
+        torch.zeros(2, dtype=torch.long),
+    )
+    result = quality_gated_capacity_distillation(
+        *values, [triple] * values[0].shape[0], triple, options, epoch=epoch
+    )
+    assert torch.isfinite(result.loss)

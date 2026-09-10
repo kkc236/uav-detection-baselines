@@ -324,7 +324,7 @@ def quality_gated_capacity_distillation(
             teacher_log,
             matched_reference,
             matched_targets,
-            torch.ones_like(cls_reliability, dtype=torch.bool),
+            torch.ones_like(loc_active, dtype=torch.bool),
             margin=0.0,
         )
         cls_reliability = cls_reliability * cls_quality_keep.to(cls_reliability.dtype)
