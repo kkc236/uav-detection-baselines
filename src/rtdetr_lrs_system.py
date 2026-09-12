@@ -28,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_REVISION = "v2-fp32-extent-logspace-ac-bpdd"
 LRS_GFDR_CONFIG = ROOT / "configs" / "rtdetr-l-lrs-gfdr.yaml"
 LRS_GFDR_FIA_CONFIG = ROOT / "configs" / "rtdetr-l-lrs-gfdr-fia.yaml"
+LRS_GFDR_AC_BPDD_RESIDUAL_CONFIG = (
+    ROOT / "configs" / "rtdetr-l-lrs-gfdr-ac-bpdd-residual.yaml"
+)
 ARM_CONFIGS = {
     "f": ROOT / "configs" / "rtdetr-l-lrs-fdr.yaml",
     "g": ROOT / "configs" / "rtdetr-l-lrs-fdr-bpdd.yaml",
@@ -426,6 +429,33 @@ class LRSFDRBPDDTrainer(FDRBPDDTrainer):
         return model
 
 
+class LRSFDRBPDDResidualTrainer(LRSFDRBPDDTrainer):
+    """Dedicated fresh-start trainer for the frozen AC-BPDD residual arm."""
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> LRSFDRBPDDDetectionModel:
+        del cfg
+        if weights is not None:
+            raise ValueError("current LRS arms are fresh-only and reject checkpoint weights")
+        model = LRSFDRBPDDDetectionModel(
+            LRS_GFDR_AC_BPDD_RESIDUAL_CONFIG,
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            private_seed=10_000 + self.experiment_seed,
+        )
+        _load_initial_state(
+            model,
+            getattr(self, "initial_state_path", None),
+            variant="fdr",
+        )
+        return model
+
+
 class LRSFDRFIATrainer(FDRTrainer):
     """Arm H trainer with independently clipped FDR and FIA parameters."""
 
@@ -492,6 +522,7 @@ __all__ = [
     "ARM_CONFIGS",
     "LRS_GFDR_CONFIG",
     "LRS_GFDR_FIA_CONFIG",
+    "LRS_GFDR_AC_BPDD_RESIDUAL_CONFIG",
     "SYSTEM_REVISION",
     "LRSFDRDetectionModel",
     "LRSFDRTrainer",
@@ -505,6 +536,7 @@ __all__ = [
     "LRSFDRBPDDFIATrainer",
     "LRSFDRBPDDDetectionModel",
     "LRSFDRBPDDTrainer",
+    "LRSFDRBPDDResidualTrainer",
     "LRSFDRFIADetectionModel",
     "LRSFDRFIATrainer",
     "MODEL_TYPES",

@@ -120,11 +120,14 @@ class FixedPairedProtocolMixin:
         scale_before = float(self.scaler.get_scale())
         self.scaler.unscale_(self.optimizer)
         norms: dict[str, float | None] = {}
+        statuses: dict[str, str] = {}
         for name, parameters in self.gradient_parameter_groups().items():
             norm = torch.nn.utils.clip_grad_norm_(parameters, max_norm=10.0)
             value = float(norm.detach().float().cpu())
             norms[name] = value if math.isfinite(value) else None
+            statuses[name] = "finite" if norms[name] is not None else "nonfinite"
         self.last_gradient_norms = dict(norms)
+        self.last_gradient_statuses = dict(statuses)
         gradient_finite = all(value is not None for value in norms.values())
         self.scaler.step(self.optimizer)
         self.scaler.update()

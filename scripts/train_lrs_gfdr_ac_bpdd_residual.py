@@ -29,7 +29,7 @@ from scripts.train_visdrone_lrs_system import (  # noqa: E402
 )
 from src.lpr_protocol import dataset_signature  # noqa: E402
 from src.lrs_runtime_evidence import RuntimeEvidenceRecorder  # noqa: E402
-from src.rtdetr_lrs_system import LRSFDRBPDDTrainer  # noqa: E402
+from src.rtdetr_lrs_system import LRSFDRBPDDResidualTrainer  # noqa: E402
 
 
 def _file_sha256(path: Path) -> str:
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    trainer = LRSFDRBPDDTrainer(
+    trainer = LRSFDRBPDDResidualTrainer(
         overrides=settings,
         initial_state_path=initial_state,
         experiment_seed=0,

@@ -62,9 +62,12 @@ def test_capacity_schedule_can_fade_bpdd_after_epoch_eighty() -> None:
     assert capacity_bpdd_schedule(100, options) == 0.0
 
 
-@pytest.mark.parametrize("decay_start,decay_end", [(80, None), (None, 100), (100, 80)])
+@pytest.mark.parametrize(
+    "decay_start,decay_end",
+    [(80, None), (None, 100), (100, 80), (float("nan"), 100), (80, float("nan")), (80.5, 100)],
+)
 def test_capacity_options_reject_invalid_decay(
-    decay_start: int | None, decay_end: int | None
+    decay_start: int | float | None, decay_end: int | float | None
 ) -> None:
     with pytest.raises(ValueError, match="decay"):
         CapacityBPDDOptions(decay_start=decay_start, decay_end=decay_end)
@@ -136,6 +139,28 @@ def test_classification_teacher_without_box_quality_gain_is_rejected() -> None:
     )
     assert result.classification_loss.item() == 0.0
     assert result.statistics["active_classes"].item() == 0
+
+
+def test_zero_classification_weight_reports_no_active_class_distillation(monkeypatch) -> None:
+    values = list(_inputs())
+    monkeypatch.setattr(
+        capacity_loss,
+        "decoded_teacher_iou_gate",
+        lambda source, teacher, reference, targets, active_edges, margin=0.0:
+        (torch.ones(source.shape[0], dtype=torch.bool), torch.ones(source.shape[0])),
+    )
+    with torch.no_grad():
+        values[1][..., 1] = -3.0
+        values[3][..., 1] = 3.0
+
+    result = quality_gated_capacity_distillation(
+        *values, [_matches(), _matches()], _matches(),
+        CapacityBPDDOptions(loc_weight=0.0, cls_weight=0.0), epoch=20,
+    )
+
+    assert result.classification_loss.item() == 0.0
+    assert result.statistics["active_classes"].item() == 0
+    assert result.statistics["classification_active_layers"].item() == 0
 
 
 def test_only_layers_with_active_class_kd_enter_layer_mean(monkeypatch) -> None:

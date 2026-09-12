@@ -54,12 +54,18 @@ class CapacityBPDDOptions:
             raise ValueError("capacity BPDD warmup must have an increasing non-negative range")
         if (self.decay_start is None) != (self.decay_end is None):
             raise ValueError("capacity BPDD decay start and end must be supplied together")
-        if self.decay_start is not None and (
-            self.decay_start < self.warmup_end or self.decay_end <= self.decay_start
-        ):
-            raise ValueError(
-                "capacity BPDD decay must start after warmup and have an increasing range"
-            )
+        if self.decay_start is not None:
+            if (
+                isinstance(self.decay_start, bool)
+                or isinstance(self.decay_end, bool)
+                or not isinstance(self.decay_start, int)
+                or not isinstance(self.decay_end, int)
+                or self.decay_start < self.warmup_end
+                or self.decay_end <= self.decay_start
+            ):
+                raise ValueError(
+                    "capacity BPDD decay must start after warmup and have an increasing integer range"
+                )
 
 
 @dataclass(frozen=True)
@@ -328,45 +334,46 @@ def quality_gated_capacity_distillation(
             loc_active_layers += 1
             loc_terms.append((loc_reliability * loc_kl).sum() / active_localization_edges)
 
-        source_class = student_classes[layer, batch_index, query_index]
-        teacher_class = teacher_class_all[batch_index, query_index]
-        one_hot = F.one_hot(gt_classes[target_index], num_classes=classes).float()
-        source_bce = F.binary_cross_entropy_with_logits(
-            source_class.float(), one_hot, reduction="none"
-        ).mean(-1)
-        teacher_bce = F.binary_cross_entropy_with_logits(
-            teacher_class, one_hot, reduction="none"
-        ).mean(-1)
-        cls_reliability = bounded_improvement(
-            source_bce,
-            teacher_bce,
-            margin=options.cls_margin,
-            tau=options.cls_tau,
-        )
-        # Classification logits are consumed by VFL, whose positive target is
-        # IoU-weighted.  Require the expert's decoded box to improve the same
-        # matched query before its class confidence can be distilled; this
-        # prevents an overconfident but geometrically inferior teacher from
-        # pushing against the base classification objective.
-        cls_quality_keep, _ = decoded_teacher_iou_gate(
-            source_log,
-            teacher_log,
-            matched_reference,
-            matched_targets,
-            torch.ones_like(loc_active, dtype=torch.bool),
-            margin=0.0,
-        )
-        cls_reliability = cls_reliability * cls_quality_keep.to(cls_reliability.dtype)
-        cls_active = cls_reliability > 0
-        active_classes += int(cls_active.sum())
-        cls_advantages.append((source_bce.detach() - teacher_bce.detach()).clamp_min(0))
-        active_classifications = int(cls_active.sum())
-        if active_classifications:
-            cls_active_layers += 1
-            cls_terms.append(
-                (cls_reliability * _bernoulli_kl(teacher_class, source_class)).sum()
-                / active_classifications
+        if options.cls_weight > 0:
+            source_class = student_classes[layer, batch_index, query_index]
+            teacher_class = teacher_class_all[batch_index, query_index]
+            one_hot = F.one_hot(gt_classes[target_index], num_classes=classes).float()
+            source_bce = F.binary_cross_entropy_with_logits(
+                source_class.float(), one_hot, reduction="none"
+            ).mean(-1)
+            teacher_bce = F.binary_cross_entropy_with_logits(
+                teacher_class, one_hot, reduction="none"
+            ).mean(-1)
+            cls_reliability = bounded_improvement(
+                source_bce,
+                teacher_bce,
+                margin=options.cls_margin,
+                tau=options.cls_tau,
             )
+            # Classification logits are consumed by VFL, whose positive target is
+            # IoU-weighted.  Require the expert's decoded box to improve the same
+            # matched query before its class confidence can be distilled; this
+            # prevents an overconfident but geometrically inferior teacher from
+            # pushing against the base classification objective.
+            cls_quality_keep, _ = decoded_teacher_iou_gate(
+                source_log,
+                teacher_log,
+                matched_reference,
+                matched_targets,
+                torch.ones_like(loc_active, dtype=torch.bool),
+                margin=0.0,
+            )
+            cls_reliability = cls_reliability * cls_quality_keep.to(cls_reliability.dtype)
+            cls_active = cls_reliability > 0
+            active_classes += int(cls_active.sum())
+            cls_advantages.append((source_bce.detach() - teacher_bce.detach()).clamp_min(0))
+            active_classifications = int(cls_active.sum())
+            if active_classifications:
+                cls_active_layers += 1
+                cls_terms.append(
+                    (cls_reliability * _bernoulli_kl(teacher_class, source_class)).sum()
+                    / active_classifications
+                )
 
     loc_mean = torch.stack(loc_terms).mean() if loc_terms else graph_zero
     cls_mean = torch.stack(cls_terms).mean() if cls_terms else graph_zero

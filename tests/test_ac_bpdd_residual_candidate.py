@@ -9,6 +9,7 @@ import yaml
 from scripts import train_lrs_gfdr_ac_bpdd_residual as launcher
 from scripts.train_rtdetr_fdr import FORMAL_EPOCHS, FROZEN_SETTINGS
 from src.rtdetr_fdr_bpdd import FDRBPDDDetectionModel
+from src.rtdetr_lrs_system import LRSFDRBPDDResidualTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +76,19 @@ def test_candidate_changes_no_initialized_model_tensor() -> None:
         torch.testing.assert_close(
             candidate.state_dict()[key], expected, rtol=0, atol=0
         )
+
+
+def test_residual_launcher_trainer_forces_its_residual_yaml() -> None:
+    """The recorded residual config must be the config used to build the model."""
+
+    trainer = object.__new__(LRSFDRBPDDResidualTrainer)
+    trainer.data = {"nc": 10, "channels": 3}
+    trainer.experiment_seed = 0
+    trainer.initial_state_path = None
+
+    model = trainer.get_model(cfg=str(G_CONFIG), verbose=False)
+
+    assert model.bpdd_options.residual_gradient_only is True
 
 
 def test_launcher_freezes_formal100_and_candidate_identity(tmp_path: Path) -> None:

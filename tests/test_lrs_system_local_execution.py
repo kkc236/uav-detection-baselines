@@ -182,3 +182,69 @@ def test_runtime_recorder_does_not_turn_nonfinite_capacity_values_into_zero(tmp_
     assert record["gradient_norm"] == 0.0
     assert record["gradient_missing_values"] == 0
     assert record["gradient_nonfinite_values"] == 0
+
+
+def test_runtime_recorder_flags_missing_capacity_payload_and_fia_gradient(tmp_path):
+    from src.lrs_runtime_evidence import RuntimeEvidenceRecorder
+
+    model = SimpleNamespace(
+        capacity_options=object(),
+        last_capacity_statistics={},
+        fdr=SimpleNamespace(
+            last_geometry_statistics={}, last_expert_geometry_statistics={}
+        ),
+    )
+    trainer = SimpleNamespace(
+        model=model,
+        epoch=0,
+        save_dir=tmp_path,
+        last_gradient_norms={
+            "gradient_norm": 1.0,
+            "fdr_gradient_norm": 2.0,
+            "expert_gradient_norm": 3.0,
+        },
+        gradient_parameter_groups=lambda: {
+            "gradient_norm": [],
+            "fdr_gradient_norm": [],
+            "expert_gradient_norm": [],
+            "fia_gradient_norm": [],
+        },
+    )
+
+    recorder = RuntimeEvidenceRecorder()
+    recorder.reset(trainer)
+    recorder.capture(trainer)
+    record = recorder.write(trainer)
+
+    assert record["capacity_invalid_observations"] == 1
+    assert record["capacity_missing_observations"] == 1
+    assert record["capacity_missing_values"] > 0
+    assert record["gradient_missing_values"] == 1
+    assert record["gradient_nonfinite_values"] == 0
+    assert record["gradients_finite"] is False
+
+
+def test_runtime_recorder_keeps_explicit_nonfinite_gradient_distinct(tmp_path):
+    from src.lrs_runtime_evidence import RuntimeEvidenceRecorder
+
+    model = SimpleNamespace(
+        fdr=SimpleNamespace(
+            last_geometry_statistics={}, last_expert_geometry_statistics={}
+        ),
+    )
+    trainer = SimpleNamespace(
+        model=model,
+        epoch=0,
+        save_dir=tmp_path,
+        last_gradient_norms={"gradient_norm": None},
+        last_gradient_statuses={"gradient_norm": "nonfinite"},
+        gradient_parameter_groups=lambda: {"gradient_norm": []},
+    )
+
+    recorder = RuntimeEvidenceRecorder()
+    recorder.reset(trainer)
+    record = recorder.write(trainer)
+
+    assert record["gradient_missing_values"] == 0
+    assert record["gradient_nonfinite_values"] == 1
+    assert record["gradients_finite"] is False

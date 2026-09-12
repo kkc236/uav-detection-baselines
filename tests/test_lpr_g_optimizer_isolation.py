@@ -66,3 +66,7 @@ def test_optimizer_step_records_separate_norms(tmp_path: Path) -> None:
         "gradient_norm": record["gradient_norm"],
         "lpr_g_gradient_norm": record["lpr_g_gradient_norm"],
     }
+    assert trainer.last_gradient_statuses == {
+        "gradient_norm": "finite",
+        "lpr_g_gradient_norm": "finite",
+    }

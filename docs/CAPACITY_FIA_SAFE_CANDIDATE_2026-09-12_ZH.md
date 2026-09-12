@@ -31,9 +31,12 @@
 
 ## 同时修复的技术口径
 
+- AC-BPDD residual-v1 启动器现在使用专属 trainer，并强制加载其 residual YAML；authority 中声明的配置与实际构图不再可能分离。
 - 评估态报告的 `boxes`、`classes`、`last_corner_logits` 现在均来自 expert，同源且 query 数一致；训练态仍保存 base 六层分布供 FGL/BPDD 使用。
-- runtime recorder 对 capacity 字段先做完整性与有限性检查。真实 0 会进入均值，缺失值和 NaN/Inf 分别计数，坏观测不再伪装成 0。
+- runtime recorder 对 capacity 字段先做完整性与有限性检查。容量模型若整批未产出统计会作为缺失观测记录；真实 0 会进入均值，缺失值和 NaN/Inf 分别计数，坏观测不再伪装成 0。
 - runtime 记录新增 `capacity_schedule_scale_mean`、`fia_gradient_norm`、capacity 缺失/非有限/拒绝观测数以及梯度缺失/非有限计数。
+- 优化器为每个梯度分组显式标记 `finite`/`nonfinite`；缺少预期 FIA 分组与已报告的非有限值不再混为同一种情况。
+- 衰减区间只接受有限整数轮次；当 `cls_weight=0` 时不再计算分类 KD，也不会把未实际施加的分类门控标成有效。
 - Safe 模型会校验冻结的 BPDD 参数；若误传旧 YAML，会明确失败，避免旧配置被错误标记为 v3-Safe。
 
 ## 文件入口
@@ -69,4 +72,3 @@ python scripts/train_lrs_gfdr_capacity_v3_safe_fia.py \
 - 同时报告：best 轮次、mAP50、P、R、最后十轮均值及波动；
 - 机理证据：BPDD schedule、有效边比例、定位优势、expert/FIA/FDR/common 梯度范数与非有限计数；
 - 若只改善末期稳定性而 best 不升，应如实描述为优化稳定性候选，不能包装成精度提升。
-

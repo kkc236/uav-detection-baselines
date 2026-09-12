@@ -9,7 +9,7 @@ from typing import Any
 from src.rtdetr_lrs_system import SYSTEM_REVISION
 
 
-_CAPACITY_FLOAT_FIELDS = (
+_CAPACITY_BASE_FLOAT_FIELDS = (
     "active_edge_ratio",
     "active_class_ratio",
     "localization_loss",
@@ -18,8 +18,8 @@ _CAPACITY_FLOAT_FIELDS = (
     "classification_active_layers",
     "mean_localization_advantage",
     "mean_classification_advantage",
-    "schedule_scale",
 )
+_CAPACITY_SCHEDULE_FIELD = "schedule_scale"
 _CAPACITY_COUNT_FIELDS = (
     "candidate_source_matches",
     "identity_consistent_matches",
@@ -73,7 +73,21 @@ class RuntimeEvidenceRecorder:
         self.reset(None)
 
     def reset(self, trainer: Any) -> None:
-        del trainer
+        model = _unwrap_model(getattr(trainer, "model", None)) if trainer is not None else None
+        options = getattr(model, "capacity_options", None)
+        self.expects_capacity_statistics = options is not None
+        self.capacity_fields = _CAPACITY_BASE_FLOAT_FIELDS + _CAPACITY_COUNT_FIELDS
+        self.capacity_requires_schedule = bool(
+            options is not None and getattr(options, "decay_start", None) is not None
+        )
+        if self.capacity_requires_schedule or options is None:
+            self.capacity_fields += (_CAPACITY_SCHEDULE_FIELD,)
+        groups = getattr(trainer, "gradient_parameter_groups", None)
+        self.expected_gradient_fields: tuple[str, ...] = ()
+        if callable(groups):
+            declared = groups()
+            if isinstance(declared, dict):
+                self.expected_gradient_fields = tuple(declared)
         self.batches = 0
         self.bpdd_stable_sum = 0.0
         self.bpdd_active_sum = 0.0
@@ -84,6 +98,7 @@ class RuntimeEvidenceRecorder:
         self.stable_source_matches = 0
         self.capacity_observations = 0
         self.capacity_invalid_observations = 0
+        self.capacity_missing_observations = 0
         self.capacity_missing_values = 0
         self.capacity_nonfinite_values = 0
         self.capacity_active_sum = 0.0
@@ -95,6 +110,7 @@ class RuntimeEvidenceRecorder:
         self.capacity_loc_advantage_sum = 0.0
         self.capacity_cls_advantage_sum = 0.0
         self.capacity_schedule_scale_sum = 0.0
+        self.capacity_schedule_scale_observations = 0
         self.capacity_candidate_matches = 0
         self.capacity_consistent_matches = 0
         self.capacity_active_edges = 0
@@ -134,28 +150,34 @@ class RuntimeEvidenceRecorder:
         )
 
         capacity = getattr(model, "last_capacity_statistics", {})
-        if capacity:
-            fields = _CAPACITY_FLOAT_FIELDS + _CAPACITY_COUNT_FIELDS
-            values, missing, nonfinite = _finite_payload(capacity, fields)
-            self.capacity_missing_values += missing
-            self.capacity_nonfinite_values += nonfinite
-            if missing or nonfinite:
+        if capacity or self.expects_capacity_statistics:
+            if not capacity:
                 self.capacity_invalid_observations += 1
+                self.capacity_missing_observations += 1
+                self.capacity_missing_values += len(self.capacity_fields)
             else:
-                self.capacity_observations += 1
-                self.capacity_active_sum += values["active_edge_ratio"]
-                self.capacity_class_active_sum += values["active_class_ratio"]
-                self.capacity_loc_loss_sum += values["localization_loss"]
-                self.capacity_cls_loss_sum += values["classification_loss"]
-                self.capacity_loc_layers_sum += values["localization_active_layers"]
-                self.capacity_cls_layers_sum += values["classification_active_layers"]
-                self.capacity_loc_advantage_sum += values["mean_localization_advantage"]
-                self.capacity_cls_advantage_sum += values["mean_classification_advantage"]
-                self.capacity_schedule_scale_sum += values["schedule_scale"]
-                self.capacity_candidate_matches += int(values["candidate_source_matches"])
-                self.capacity_consistent_matches += int(values["identity_consistent_matches"])
-                self.capacity_active_edges += int(values["active_edges"])
-                self.capacity_active_classes += int(values["active_classes"])
+                values, missing, nonfinite = _finite_payload(capacity, self.capacity_fields)
+                self.capacity_missing_values += missing
+                self.capacity_nonfinite_values += nonfinite
+                if missing or nonfinite:
+                    self.capacity_invalid_observations += 1
+                else:
+                    self.capacity_observations += 1
+                    self.capacity_active_sum += values["active_edge_ratio"]
+                    self.capacity_class_active_sum += values["active_class_ratio"]
+                    self.capacity_loc_loss_sum += values["localization_loss"]
+                    self.capacity_cls_loss_sum += values["classification_loss"]
+                    self.capacity_loc_layers_sum += values["localization_active_layers"]
+                    self.capacity_cls_layers_sum += values["classification_active_layers"]
+                    self.capacity_loc_advantage_sum += values["mean_localization_advantage"]
+                    self.capacity_cls_advantage_sum += values["mean_classification_advantage"]
+                    if _CAPACITY_SCHEDULE_FIELD in values:
+                        self.capacity_schedule_scale_sum += values[_CAPACITY_SCHEDULE_FIELD]
+                        self.capacity_schedule_scale_observations += 1
+                    self.capacity_candidate_matches += int(values["candidate_source_matches"])
+                    self.capacity_consistent_matches += int(values["identity_consistent_matches"])
+                    self.capacity_active_edges += int(values["active_edges"])
+                    self.capacity_active_classes += int(values["active_classes"])
 
         fdr = getattr(model, "fdr", None)
         geometry = getattr(fdr, "last_geometry_statistics", {})
@@ -209,13 +231,23 @@ class RuntimeEvidenceRecorder:
     def write(self, trainer: Any) -> dict[str, Any]:
         observations = max(self.bpdd_observations, 1)
         capacity_observations = max(self.capacity_observations, 1)
-        norms = getattr(trainer, "last_gradient_norms", {})
-        _, gradient_missing, gradient_nonfinite = _finite_payload(
-            dict(norms), tuple(norms)
-        )
+        norms = dict(getattr(trainer, "last_gradient_norms", {}))
+        statuses = dict(getattr(trainer, "last_gradient_statuses", {}))
+        gradient_fields = self.expected_gradient_fields or tuple(norms)
+        gradient_missing = 0
+        gradient_nonfinite = 0
+        for field in gradient_fields:
+            if field not in norms:
+                gradient_missing += 1
+            elif statuses.get(field) == "nonfinite":
+                gradient_nonfinite += 1
+            elif norms[field] is None:
+                gradient_missing += 1
+            elif _number(norms[field]) is None:
+                gradient_nonfinite += 1
         gradients_finite = (
             gradient_missing == 0 and gradient_nonfinite == 0
-            if norms
+            if gradient_fields
             else None
         )
         model = _unwrap_model(trainer.model)
@@ -247,6 +279,7 @@ class RuntimeEvidenceRecorder:
             "gradient_nonfinite_values": gradient_nonfinite,
             "capacity_observations": self.capacity_observations,
             "capacity_invalid_observations": self.capacity_invalid_observations,
+            "capacity_missing_observations": self.capacity_missing_observations,
             "capacity_missing_values": self.capacity_missing_values,
             "capacity_nonfinite_values": self.capacity_nonfinite_values,
             "capacity_active_edge_ratio_mean": (
@@ -282,8 +315,8 @@ class RuntimeEvidenceRecorder:
                 if self.capacity_observations else None
             ),
             "capacity_schedule_scale_mean": (
-                self.capacity_schedule_scale_sum / capacity_observations
-                if self.capacity_observations else None
+                self.capacity_schedule_scale_sum / self.capacity_schedule_scale_observations
+                if self.capacity_schedule_scale_observations else None
             ),
             "capacity_candidate_source_matches": self.capacity_candidate_matches,
             "capacity_identity_consistent_matches": self.capacity_consistent_matches,
