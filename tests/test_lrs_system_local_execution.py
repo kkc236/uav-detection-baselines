@@ -96,6 +96,7 @@ def test_shared_runtime_recorder_captures_capacity_v2_fields(tmp_path):
             "identity_consistent_matches": torch.tensor(9),
             "active_edges": torch.tensor(8),
             "active_classes": torch.tensor(2),
+            "schedule_scale": torch.tensor(0.75),
         },
         fdr=SimpleNamespace(
             last_geometry_statistics={},
@@ -116,6 +117,7 @@ def test_shared_runtime_recorder_captures_capacity_v2_fields(tmp_path):
             "gradient_norm": 11.0,
             "fdr_gradient_norm": 2.0,
             "expert_gradient_norm": 3.0,
+            "fia_gradient_norm": 4.0,
         },
     )
     recorder = RuntimeEvidenceRecorder()
@@ -125,7 +127,58 @@ def test_shared_runtime_recorder_captures_capacity_v2_fields(tmp_path):
     assert record["capacity_observations"] == 1
     assert record["capacity_active_edge_ratio_mean"] == pytest.approx(0.25)
     assert record["capacity_classification_active_layers_mean"] == pytest.approx(1.0)
+    assert record["capacity_schedule_scale_mean"] == pytest.approx(0.75)
     assert record["expert_geometry_total"] == 20
     assert record["gradient_norm"] == pytest.approx(11.0)
     assert record["expert_gradient_norm"] == pytest.approx(3.0)
+    assert record["fia_gradient_norm"] == pytest.approx(4.0)
     assert record["gradients_finite"] is True
+
+
+def test_runtime_recorder_does_not_turn_nonfinite_capacity_values_into_zero(tmp_path):
+    from src.lrs_runtime_evidence import RuntimeEvidenceRecorder
+
+    complete_zero = {
+        "active_edge_ratio": torch.tensor(0.0),
+        "active_class_ratio": torch.tensor(0.0),
+        "localization_loss": torch.tensor(0.0),
+        "classification_loss": torch.tensor(0.0),
+        "localization_active_layers": torch.tensor(0.0),
+        "classification_active_layers": torch.tensor(0.0),
+        "mean_localization_advantage": torch.tensor(0.0),
+        "mean_classification_advantage": torch.tensor(0.0),
+        "candidate_source_matches": torch.tensor(0),
+        "identity_consistent_matches": torch.tensor(0),
+        "active_edges": torch.tensor(0),
+        "active_classes": torch.tensor(0),
+        "schedule_scale": torch.tensor(0.0),
+    }
+    model = SimpleNamespace(
+        last_capacity_statistics=complete_zero,
+        fdr=SimpleNamespace(
+            last_geometry_statistics={}, last_expert_geometry_statistics={}
+        ),
+    )
+    trainer = SimpleNamespace(
+        model=model,
+        epoch=0,
+        save_dir=tmp_path,
+        last_gradient_norms={"gradient_norm": 0.0},
+    )
+    recorder = RuntimeEvidenceRecorder()
+    recorder.capture(trainer)
+    model.last_capacity_statistics = {
+        **complete_zero,
+        "active_edge_ratio": torch.tensor(float("nan")),
+    }
+    recorder.capture(trainer)
+    record = recorder.write(trainer)
+
+    assert record["capacity_observations"] == 1
+    assert record["capacity_invalid_observations"] == 1
+    assert record["capacity_missing_values"] == 0
+    assert record["capacity_nonfinite_values"] == 1
+    assert record["capacity_active_edge_ratio_mean"] == 0.0
+    assert record["gradient_norm"] == 0.0
+    assert record["gradient_missing_values"] == 0
+    assert record["gradient_nonfinite_values"] == 0

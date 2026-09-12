@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
 from src.rtdetr_lrs_system import SYSTEM_REVISION
+
+
+_CAPACITY_FLOAT_FIELDS = (
+    "active_edge_ratio",
+    "active_class_ratio",
+    "localization_loss",
+    "classification_loss",
+    "localization_active_layers",
+    "classification_active_layers",
+    "mean_localization_advantage",
+    "mean_classification_advantage",
+    "schedule_scale",
+)
+_CAPACITY_COUNT_FIELDS = (
+    "candidate_source_matches",
+    "identity_consistent_matches",
+    "active_edges",
+    "active_classes",
+)
 
 
 def _number(value: Any) -> float | None:
@@ -28,6 +46,26 @@ def _unwrap_model(model: Any) -> Any:
     return getattr(model, "module", model)
 
 
+def _finite_payload(
+    payload: dict[str, Any], fields: tuple[str, ...]
+) -> tuple[dict[str, float], int, int]:
+    """Return finite values while distinguishing absent and invalid entries."""
+
+    values: dict[str, float] = {}
+    missing = 0
+    nonfinite = 0
+    for field in fields:
+        if field not in payload or payload[field] is None:
+            missing += 1
+            continue
+        number = _number(payload[field])
+        if number is None:
+            nonfinite += 1
+            continue
+        values[field] = number
+    return values, missing, nonfinite
+
+
 class RuntimeEvidenceRecorder:
     """Aggregate detached training diagnostics without entering model state."""
 
@@ -45,6 +83,9 @@ class RuntimeEvidenceRecorder:
         self.candidate_source_matches = 0
         self.stable_source_matches = 0
         self.capacity_observations = 0
+        self.capacity_invalid_observations = 0
+        self.capacity_missing_values = 0
+        self.capacity_nonfinite_values = 0
         self.capacity_active_sum = 0.0
         self.capacity_class_active_sum = 0.0
         self.capacity_loc_loss_sum = 0.0
@@ -53,6 +94,7 @@ class RuntimeEvidenceRecorder:
         self.capacity_cls_layers_sum = 0.0
         self.capacity_loc_advantage_sum = 0.0
         self.capacity_cls_advantage_sum = 0.0
+        self.capacity_schedule_scale_sum = 0.0
         self.capacity_candidate_matches = 0
         self.capacity_consistent_matches = 0
         self.capacity_active_edges = 0
@@ -93,43 +135,27 @@ class RuntimeEvidenceRecorder:
 
         capacity = getattr(model, "last_capacity_statistics", {})
         if capacity:
-            self.capacity_observations += 1
-            self.capacity_active_sum += float(
-                _number(capacity.get("active_edge_ratio")) or 0.0
-            )
-            self.capacity_class_active_sum += float(
-                _number(capacity.get("active_class_ratio")) or 0.0
-            )
-            self.capacity_loc_loss_sum += float(
-                _number(capacity.get("localization_loss")) or 0.0
-            )
-            self.capacity_cls_loss_sum += float(
-                _number(capacity.get("classification_loss")) or 0.0
-            )
-            self.capacity_loc_layers_sum += float(
-                _number(capacity.get("localization_active_layers")) or 0.0
-            )
-            self.capacity_cls_layers_sum += float(
-                _number(capacity.get("classification_active_layers")) or 0.0
-            )
-            self.capacity_loc_advantage_sum += float(
-                _number(capacity.get("mean_localization_advantage")) or 0.0
-            )
-            self.capacity_cls_advantage_sum += float(
-                _number(capacity.get("mean_classification_advantage")) or 0.0
-            )
-            self.capacity_candidate_matches += int(
-                _number(capacity.get("candidate_source_matches")) or 0
-            )
-            self.capacity_consistent_matches += int(
-                _number(capacity.get("identity_consistent_matches")) or 0
-            )
-            self.capacity_active_edges += int(
-                _number(capacity.get("active_edges")) or 0
-            )
-            self.capacity_active_classes += int(
-                _number(capacity.get("active_classes")) or 0
-            )
+            fields = _CAPACITY_FLOAT_FIELDS + _CAPACITY_COUNT_FIELDS
+            values, missing, nonfinite = _finite_payload(capacity, fields)
+            self.capacity_missing_values += missing
+            self.capacity_nonfinite_values += nonfinite
+            if missing or nonfinite:
+                self.capacity_invalid_observations += 1
+            else:
+                self.capacity_observations += 1
+                self.capacity_active_sum += values["active_edge_ratio"]
+                self.capacity_class_active_sum += values["active_class_ratio"]
+                self.capacity_loc_loss_sum += values["localization_loss"]
+                self.capacity_cls_loss_sum += values["classification_loss"]
+                self.capacity_loc_layers_sum += values["localization_active_layers"]
+                self.capacity_cls_layers_sum += values["classification_active_layers"]
+                self.capacity_loc_advantage_sum += values["mean_localization_advantage"]
+                self.capacity_cls_advantage_sum += values["mean_classification_advantage"]
+                self.capacity_schedule_scale_sum += values["schedule_scale"]
+                self.capacity_candidate_matches += int(values["candidate_source_matches"])
+                self.capacity_consistent_matches += int(values["identity_consistent_matches"])
+                self.capacity_active_edges += int(values["active_edges"])
+                self.capacity_active_classes += int(values["active_classes"])
 
         fdr = getattr(model, "fdr", None)
         geometry = getattr(fdr, "last_geometry_statistics", {})
@@ -184,10 +210,12 @@ class RuntimeEvidenceRecorder:
         observations = max(self.bpdd_observations, 1)
         capacity_observations = max(self.capacity_observations, 1)
         norms = getattr(trainer, "last_gradient_norms", {})
-        norm_values = [_number(value) for value in norms.values()]
+        _, gradient_missing, gradient_nonfinite = _finite_payload(
+            dict(norms), tuple(norms)
+        )
         gradients_finite = (
-            all(value is not None and math.isfinite(value) for value in norm_values)
-            if norm_values
+            gradient_missing == 0 and gradient_nonfinite == 0
+            if norms
             else None
         )
         model = _unwrap_model(trainer.model)
@@ -214,7 +242,13 @@ class RuntimeEvidenceRecorder:
             "gradient_norm": _number(norms.get("gradient_norm")),
             "fdr_gradient_norm": _number(norms.get("fdr_gradient_norm")),
             "expert_gradient_norm": _number(norms.get("expert_gradient_norm")),
+            "fia_gradient_norm": _number(norms.get("fia_gradient_norm")),
+            "gradient_missing_values": gradient_missing,
+            "gradient_nonfinite_values": gradient_nonfinite,
             "capacity_observations": self.capacity_observations,
+            "capacity_invalid_observations": self.capacity_invalid_observations,
+            "capacity_missing_values": self.capacity_missing_values,
+            "capacity_nonfinite_values": self.capacity_nonfinite_values,
             "capacity_active_edge_ratio_mean": (
                 self.capacity_active_sum / capacity_observations
                 if self.capacity_observations else None
@@ -245,6 +279,10 @@ class RuntimeEvidenceRecorder:
             ),
             "capacity_mean_classification_advantage": (
                 self.capacity_cls_advantage_sum / capacity_observations
+                if self.capacity_observations else None
+            ),
+            "capacity_schedule_scale_mean": (
+                self.capacity_schedule_scale_sum / capacity_observations
                 if self.capacity_observations else None
             ),
             "capacity_candidate_source_matches": self.capacity_candidate_matches,

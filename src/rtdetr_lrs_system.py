@@ -408,11 +408,11 @@ class LRSFDRBPDDTrainer(FDRBPDDTrainer):
         weights: str | None = None,
         verbose: bool = True,
     ) -> LRSFDRBPDDDetectionModel:
-        model_cfg = cfg if cfg is not None else ARM_CONFIGS["g"]
+        del cfg
         if weights is not None:
             raise ValueError("current LRS arms are fresh-only and reject checkpoint weights")
         model = LRSFDRBPDDDetectionModel(
-            model_cfg,
+            ARM_CONFIGS["g"],
             nc=self.data["nc"],
             ch=self.data["channels"],
             verbose=verbose and RANK == -1,

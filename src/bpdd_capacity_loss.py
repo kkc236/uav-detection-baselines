@@ -30,6 +30,8 @@ class CapacityBPDDOptions:
     cls_tau: float = 0.10
     warmup_start: int = 10
     warmup_end: int = 20
+    decay_start: int | None = None
+    decay_end: int | None = None
 
     def __post_init__(self) -> None:
         numeric = (
@@ -50,6 +52,14 @@ class CapacityBPDDOptions:
             raise ValueError("capacity BPDD taus must be positive")
         if self.warmup_start < 0 or self.warmup_end <= self.warmup_start:
             raise ValueError("capacity BPDD warmup must have an increasing non-negative range")
+        if (self.decay_start is None) != (self.decay_end is None):
+            raise ValueError("capacity BPDD decay start and end must be supplied together")
+        if self.decay_start is not None and (
+            self.decay_start < self.warmup_end or self.decay_end <= self.decay_start
+        ):
+            raise ValueError(
+                "capacity BPDD decay must start after warmup and have an increasing range"
+            )
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,24 @@ def capacity_bpdd_warmup(completed_epoch: int, start: int = 10, end: int = 20) -
     if epoch >= end:
         return 1.0
     return float(epoch - start) / float(end - start)
+
+
+def capacity_bpdd_schedule(
+    completed_epoch: int, options: CapacityBPDDOptions
+) -> float:
+    """Return warmup followed by an optional linear late decay."""
+
+    epoch = int(completed_epoch)
+    scale = capacity_bpdd_warmup(epoch, options.warmup_start, options.warmup_end)
+    if options.decay_start is None or options.decay_end is None:
+        return scale
+    if epoch <= options.decay_start:
+        return scale
+    if epoch >= options.decay_end:
+        return 0.0
+    remaining = float(options.decay_end - epoch)
+    duration = float(options.decay_end - options.decay_start)
+    return scale * remaining / duration
 
 
 def bounded_improvement(
@@ -227,6 +255,7 @@ def quality_gated_capacity_distillation(
     )
     graph_zero = student_corners.float().sum() * 0 + student_classes.float().sum() * 0
     warmup = capacity_bpdd_warmup(epoch, options.warmup_start, options.warmup_end)
+    schedule_scale = capacity_bpdd_schedule(epoch, options)
 
     loc_terms: list[Tensor] = []
     cls_terms: list[Tensor] = []
@@ -341,14 +370,15 @@ def quality_gated_capacity_distillation(
 
     loc_mean = torch.stack(loc_terms).mean() if loc_terms else graph_zero
     cls_mean = torch.stack(cls_terms).mean() if cls_terms else graph_zero
-    enabled_scale = warmup if options.enabled else 0.0
+    enabled_scale = schedule_scale if options.enabled else 0.0
     localization_loss = loc_mean * options.loc_weight * enabled_scale
     classification_loss = cls_mean * options.cls_weight * enabled_scale
     loss = localization_loss + classification_loss
     scalar_zero = graph_zero.detach()
     candidate_edges = candidate_matches * 4
     statistics = {
-        "warmup": scalar_zero.new_tensor(enabled_scale),
+        "warmup": scalar_zero.new_tensor(warmup if options.enabled else 0.0),
+        "schedule_scale": scalar_zero.new_tensor(enabled_scale),
         "identity_consistent_ratio": scalar_zero.new_tensor(
             consistent_matches / max(candidate_matches, 1)
         ),
@@ -383,6 +413,7 @@ __all__ = [
     "CapacityBPDDOptions",
     "CapacityBPDDResult",
     "bounded_improvement",
+    "capacity_bpdd_schedule",
     "capacity_bpdd_warmup",
     "quality_gated_capacity_distillation",
     "raw_fdr_targets",

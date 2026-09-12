@@ -24,7 +24,7 @@ CAPACITY_EXPERT_CFG = ROOT / "configs" / "rtdetr-l-lrs-gfdr-capacity-v2-expert.y
 CAPACITY_BPDD_CFG = ROOT / "configs" / "rtdetr-l-lrs-gfdr-capacity-v2-bpdd.yaml"
 _OPTION_KEYS = {
     "enabled", "loc_weight", "cls_weight", "loc_margin", "cls_margin",
-    "loc_tau", "cls_tau", "warmup_start", "warmup_end",
+    "loc_tau", "cls_tau", "warmup_start", "warmup_end", "decay_start", "decay_end",
 }
 
 

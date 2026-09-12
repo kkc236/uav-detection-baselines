@@ -17,6 +17,9 @@ from src.rtdetr_bpdd_capacity import CapacityBPDDDetectionModel, CapacityBPDDTra
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPACITY_BPDD_FIA_CFG = ROOT / "configs" / "rtdetr-l-lrs-gfdr-capacity-v2-bpdd-fia.yaml"
+CAPACITY_BPDD_FIA_SAFE_CFG = (
+    ROOT / "configs" / "rtdetr-l-lrs-gfdr-capacity-v3-safe-bpdd-fia.yaml"
+)
 FIA_MODEL_INDEX = 22
 FIA_STATE_PREFIX = f"model.{FIA_MODEL_INDEX}."
 _MODEL_KEY = re.compile(r"^model\.(\d+)\.(.+)$")
@@ -178,9 +181,85 @@ class CapacityBPDDFIATrainer(CapacityBPDDTrainer):
         return model
 
 
+class CapacityBPDDFIASafeDetectionModel(CapacityBPDDFIADetectionModel):
+    """Joint candidate with localization-only BPDD and an opt-in late fade."""
+
+    capacity_method_revision = "v3-safe-loc-kd-decay80-100-no-cls-kd"
+
+    def __init__(
+        self,
+        cfg: str | Path | dict = CAPACITY_BPDD_FIA_SAFE_CFG,
+        ch: int = 3,
+        nc: int | None = None,
+        verbose: bool = True,
+        *,
+        private_seed: int | None = None,
+        fia_private_seed: int = 20_000,
+    ) -> None:
+        super().__init__(
+            cfg=cfg,
+            ch=ch,
+            nc=nc,
+            verbose=verbose,
+            private_seed=private_seed,
+            fia_private_seed=fia_private_seed,
+        )
+        expected = {
+            "enabled": True,
+            "loc_weight": 0.15,
+            "cls_weight": 0.0,
+            "loc_margin": 0.02,
+            "cls_margin": 0.02,
+            "loc_tau": 0.10,
+            "cls_tau": 0.10,
+            "warmup_start": 10,
+            "warmup_end": 20,
+            "decay_start": 80,
+            "decay_end": 100,
+        }
+        actual = {
+            name: getattr(self.capacity_options, name) for name in expected
+        }
+        if actual != expected:
+            raise ValueError(
+                "conflict-safe Capacity-BPDD/FIA model requires its frozen BPDD controls"
+            )
+
+
+class CapacityBPDDFIASafeTrainer(CapacityBPDDFIATrainer):
+    """Fresh-only trainer for the isolated conflict-safe joint candidate."""
+
+    def get_model(
+        self,
+        cfg: dict | str | None = None,
+        weights: str | None = None,
+        verbose: bool = True,
+    ) -> CapacityBPDDFIASafeDetectionModel:
+        del cfg
+        if weights is not None:
+            raise ValueError("capacity-v3 safe FIA arm is fresh-only")
+        model = CapacityBPDDFIASafeDetectionModel(
+            CAPACITY_BPDD_FIA_SAFE_CFG,
+            nc=self.data["nc"],
+            ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+            private_seed=10_000 + self.experiment_seed,
+            fia_private_seed=20_000 + self.experiment_seed,
+        )
+        path = getattr(self, "initial_state_path", None)
+        if path is not None:
+            artifact = torch.load(Path(path), map_location="cpu", weights_only=False)
+            if not isinstance(artifact, Mapping):
+                raise TypeError("initial state must be a checkpoint mapping")
+            load_capacity_fia_initial_state(model, artifact)
+        return model
+
+
 __all__ = [
-    "CAPACITY_BPDD_FIA_CFG", "FIA_MODEL_INDEX", "FIA_STATE_PREFIX",
+    "CAPACITY_BPDD_FIA_CFG", "CAPACITY_BPDD_FIA_SAFE_CFG",
+    "FIA_MODEL_INDEX", "FIA_STATE_PREFIX",
     "CapacityBPDDFIADetectionModel", "CapacityBPDDFIATrainer",
+    "CapacityBPDDFIASafeDetectionModel", "CapacityBPDDFIASafeTrainer",
     "initialize_capacity_fia_graph", "load_capacity_fia_initial_state",
     "remap_capacity_fia_shared_key",
 ]

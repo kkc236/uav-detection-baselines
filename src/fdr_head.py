@@ -600,7 +600,7 @@ class FDRDeformableTransformerDecoder(nn.Module):
             if self.training or index == self.eval_idx:
                 decoded_boxes.append(reported_boxes)
                 class_logits.append(reported_classes)
-                corner_logits.append(cumulative_corners)
+                corner_logits.append(reported_corners)
                 references.append(initial_reference)
                 if not self.training:
                     break

@@ -7,6 +7,7 @@ import src.bpdd_capacity_loss as capacity_loss
 from src.bpdd_capacity_loss import (
     CapacityBPDDOptions,
     bounded_improvement,
+    capacity_bpdd_schedule,
     capacity_bpdd_warmup,
     quality_gated_capacity_distillation,
     raw_fdr_targets,
@@ -49,6 +50,37 @@ def test_bounded_improvement_and_schedule_are_exact() -> None:
     assert capacity_bpdd_warmup(10, 10, 20) == 0.0
     assert capacity_bpdd_warmup(15, 10, 20) == 0.5
     assert capacity_bpdd_warmup(20, 10, 20) == 1.0
+
+
+def test_capacity_schedule_can_fade_bpdd_after_epoch_eighty() -> None:
+    options = CapacityBPDDOptions(decay_start=80, decay_end=100)
+    assert capacity_bpdd_schedule(10, options) == 0.0
+    assert capacity_bpdd_schedule(15, options) == 0.5
+    assert capacity_bpdd_schedule(20, options) == 1.0
+    assert capacity_bpdd_schedule(80, options) == 1.0
+    assert capacity_bpdd_schedule(90, options) == 0.5
+    assert capacity_bpdd_schedule(100, options) == 0.0
+
+
+@pytest.mark.parametrize("decay_start,decay_end", [(80, None), (None, 100), (100, 80)])
+def test_capacity_options_reject_invalid_decay(
+    decay_start: int | None, decay_end: int | None
+) -> None:
+    with pytest.raises(ValueError, match="decay"):
+        CapacityBPDDOptions(decay_start=decay_start, decay_end=decay_end)
+
+
+def test_capacity_result_reports_effective_schedule_scale() -> None:
+    values = _inputs()
+    result = quality_gated_capacity_distillation(
+        *values,
+        [_matches(), _matches()],
+        _matches(),
+        CapacityBPDDOptions(decay_start=80, decay_end=100),
+        epoch=90,
+    )
+    assert result.statistics["warmup"].item() == 1.0
+    assert result.statistics["schedule_scale"].item() == 0.5
 
 
 def test_no_matches_and_identity_mismatch_return_connected_zero() -> None:

@@ -80,7 +80,7 @@ def test_eval_returns_cached_expert_prediction() -> None:
     dec_boxes, dec_scores = raw[:2]
     torch.testing.assert_close(dec_boxes[0], expert.boxes)
     torch.testing.assert_close(dec_scores[0], expert.classes)
-    assert not torch.equal(expert.corners, head.decoder.last_corner_logits[-1])
+    torch.testing.assert_close(head.decoder.last_corner_logits[-1], expert.corners)
 
 
 def test_expert_cache_is_cleared_before_a_failed_forward() -> None:
